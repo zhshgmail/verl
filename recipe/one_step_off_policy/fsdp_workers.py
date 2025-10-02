@@ -291,5 +291,16 @@ class RolloutWorker(ActorRolloutRefWorker):
 
 
 class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError
+    """
+    Async version of ActorRolloutRefWorker for one-step off-policy training.
+
+    In one-step off-policy:
+    - Rollout workers run on separate GPUs (not colocated with training)
+    - Workers are rollout-only (no actor module, no mode switching)
+    - Weight sync happens via NCCL (sync_rollout_weights method)
+    - No async methods needed - workers are accessed via standard RayWorkerGroup interface
+
+    This class exists only to satisfy the type system when rollout.mode=="async".
+    No additional methods are needed beyond what ActorRolloutRefWorker provides.
+    """
+    pass

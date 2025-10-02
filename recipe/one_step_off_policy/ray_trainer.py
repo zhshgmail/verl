@@ -267,12 +267,14 @@ class OneStepOffRayTrainer(RayPPOTrainer):
         # create async rollout manager and request scheduler
         self.async_rollout_mode = False
         if self.config.actor_rollout_ref.rollout.mode == "async" and self._is_rollout:
-            from verl.workers.rollout.async_server import AsyncLLMServerManager
+            from verl.experimental.agent_loop import AgentLoopManager
 
             self.async_rollout_mode = True
-            self.async_rollout_manager = AsyncLLMServerManager(
+            # For one-step off-policy, pass rollout_wg (separate GPU pool) instead of actor_rollout_wg
+            self.async_rollout_manager = AgentLoopManager(
                 config=self.config,
                 worker_group=self.rollout_wg,
+                rm_wg=self.rm_wg if self.use_rm else None,
             )
 
     def create_weight_sync_group(self):

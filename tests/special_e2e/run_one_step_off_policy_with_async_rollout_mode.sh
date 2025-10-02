@@ -48,9 +48,6 @@ val_top_p=0.7
 n_gpus_rollout=2
 n_gpus_training=$((NUM_GPUS - n_gpus_rollout))
 
-# Rollout mode, async or sync
-rollout_mode=${ROLLOUT_MODE:-"sync"}
-
 exp_name="$(basename "${MODEL_ID,,}")-one-step-off-policy-${ACTOR_STRATEGY}-minimal"
 
 echo "Running one_step_off_policy with ${ACTOR_STRATEGY} strategy"
@@ -93,7 +90,7 @@ common_params=(
     actor_rollout_ref.rollout.val_kwargs.n=1
     actor_rollout_ref.rollout.enable_chunked_prefill=True \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.mode=${rollout_mode} \
+    actor_rollout_ref.rollout.mode=async
     reward_model.reward_manager=dapo
     +reward_model.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer}
     +reward_model.reward_kwargs.overlong_buffer_cfg.len=${overlong_buffer_len}
