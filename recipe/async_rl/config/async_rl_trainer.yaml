@@ -1,0 +1,144 @@
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# Async RL specific configuration for separate GPU pools
+# Training pool (actor_pool): Actor, Critic, Reference Policy
+# Rollout pool (rollout_pool): vLLM HTTP Servers for generation
+
+# Rollout pool configuration (separate from training)
+rollout:
+  # Number of nodes for rollout workers
+  nnodes: 1
+  # Number of GPUs per node for rollout
+  n_gpus_per_node: 2
+
+# Actor/Rollout/Reference configuration
+actor_rollout_ref:
+  rollout:
+    # REQUIRED: Must use async mode for HTTP servers
+    mode: async  # 'sync' or 'async'
+    name: vllm
+
+    # Chunked generation configuration
+    new_tokens_per_chunk: 64  # Generate this many tokens before checking for weight updates
+
+    # vLLM configuration
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.85
+    enable_prefix_caching: true  # IMPORTANT: Enable for efficient partial rollout
+    free_cache_engine: false  # Don't free cache (we need it for chunking)
+
+    # Generation parameters
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+
+  actor:
+    # Decoupled PPO loss configuration
+    use_decoupled_loss: true  # Enable staleness-aware training
+    recompute_logprob: true  # Recompute proximal policy logprobs
+    behav_imp_weight_cap: 10.0  # Maximum allowed importance weight (cap staleness impact)
+
+    # PPO clipping parameters
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.2
+    clip_ratio_c: 10.0  # Dual clipping parameter
+
+    # Training strategy
+    strategy: fsdp2  # or 'megatron'
+
+  model:
+    path: Qwen/Qwen2.5-0.5B-Instruct
+    use_shm: false
+
+# Critic configuration
+critic:
+  strategy: fsdp2  # Must match actor strategy
+
+# Algorithm configuration
+algorithm:
+  adv_estimator: gae  # Use GAE for advantage estimation
+  use_kl_in_reward: false
+  kl_ctrl:
+    kl_coef: 0.0
+  discount: 0.99
+  gae_lambda: 0.95
+
+# Trainer configuration
+trainer:
+  # Number of nodes for training workers
+  nnodes: 1
+  # Number of GPUs per node for training (actor, critic, reference)
+  n_gpus_per_node: 6
+
+  # Training loop
+  total_epochs: 1
+  total_training_steps: 1000
+
+  # Logging
+  logger: ['console', 'wandb']
+  project_name: 'async_rl'
+  experiment_name: 'async_rl_test'
+
+  # Validation
+  val_before_train: false
+  test_freq: 100
+  save_freq: 100
+
+# Data configuration
+data:
+  train_files: ${HOME}/data/gsm8k/train.parquet
+  val_files: ${HOME}/data/gsm8k/test.parquet
+  train_batch_size: 8
+  max_prompt_length: 1024
+  max_response_length: 2048
+  truncation: 'left'
+  prompt_key: 'prompt'
+
+# Reward configuration
+reward_model:
+  enable: false
+  reward_manager: 'dapo'  # or other reward types
+
+# Async RL specific configuration
+async_rl:
+  # Sample buffer configuration
+  buffer_size: 10000  # Maximum number of samples in TransferDock
+  max_staleness: 5  # Maximum allowed staleness (current_version - version_end)
+  train_batch_size: 128  # Batch size for training loop
+  rollout_batch_size: 256  # Batch size for rollout loop
+  sync_freq: 10  # Sync weights every N training steps
+
+  # Thread pool configuration for blocking operations
+  # IMPORTANT: Never use default executor (asyncio's shared pool)
+  # Always explicitly manage thread pools for isolation and control
+  rollout_executor_workers: 4  # Thread pool size for blocking rollout operations (ray.get, generate_sequences)
+
+  # TransferQueue configuration (production-grade distributed data management)
+  # Replaces the simple AsyncRLTransferDock with TransferQueue from verl.experimental.transfer_queue
+  # Based on AsyncFlow paper: https://arxiv.org/abs/2507.01663
+  transfer_queue:
+    num_storage_units: 2  # Number of distributed storage units (horizontal scaling)
+    num_controllers: 1  # Number of controllers (usually 1, supports load balancing)
+    num_global_batch: 2  # Number of global batches to buffer (rolling buffer size)
+    storage_cpus_per_unit: 1  # CPU cores per storage unit
+    controller_cpus: 1  # CPU cores for controller
+
+    # Note: Total buffer capacity = train_batch_size * num_global_batch
+    # With train_batch_size=128 and num_global_batch=2, total capacity = 256 samples
+    # Each storage unit stores approximately: (train_batch_size * num_global_batch) / num_storage_units samples
+
+# Ray configuration
+ray_kwargs:
+  ray_init:
+    num_cpus: 32
+    runtime_env:
+      env_vars:
+        TOKENIZERS_PARALLELISM: "false"
+        NCCL_DEBUG: "WARN"
+        VLLM_LOGGING_LEVEL: "INFO"
