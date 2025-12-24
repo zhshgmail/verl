@@ -1949,6 +1949,11 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
     def get_zeromq_address(self):
         return self.rollout.get_zeromq_address()
 
+    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD)
+    def get_captured_routing(self):
+        """Retrieve routing logs captured during generation from the rollout worker."""
+        return self.rollout.get_captured_routing()
+
     # ============================ SGLang related ============================
 
     @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)

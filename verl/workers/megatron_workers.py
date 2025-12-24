@@ -962,6 +962,16 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
     def get_zeromq_address(self):
         return self.rollout.get_zeromq_address()
 
+    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD)
+    def get_captured_routing(self):
+        """Retrieve routing logs captured during generation from the rollout worker."""
+        return self.rollout.get_captured_routing()
+
+    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
+    async def update_noise_injection_step(self, current_step: int):
+        """Update current training step for noise injection schedule in rollout."""
+        return await self.rollout.update_noise_injection_step(current_step)
+
     # ============================ SGLang related ============================
 
     @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)

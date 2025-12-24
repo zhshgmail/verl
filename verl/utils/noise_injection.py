@@ -1,0 +1,208 @@
+# Copyright 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""
+Noise injection for 4-bit quantized model training.
+Adapted from QeRL for veRL with MoE expert-only targeting.
+"""
+
+import torch
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def get_sigma_by_step(step, total_steps, sigma_trend):
+    """
+    Calculate noise standard deviation based on current training step.
+
+    Args:
+        step: Current training step
+        total_steps: Total number of training steps
+        sigma_trend: List of sigma values for each interval
+
+    Returns:
+        Tuple of (sigma_id, sigma value)
+    """
+    step = min(step, total_steps)
+
+    num_intervals = len(sigma_trend) + 1
+    steps_per_interval = total_steps / num_intervals
+
+    interval_id = int(step // steps_per_interval)
+
+    if interval_id == 0:
+        return interval_id, 0
+
+    sigma_id = interval_id - 1
+    sigma_id = min(sigma_id, len(sigma_trend) - 1)
+
+    sigma = sigma_trend[sigma_id]
+    return sigma_id, sigma
+
+
+def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, verbose=True):
+    """
+    Generate and apply Gaussian noise to RMSNorm layers in quantized MoE models.
+
+    For MoE models, we inject noise ONLY to post_attention_layernorm (after router/MLP)
+    to avoid affecting router decisions, which would cause expert selection mismatch
+    between rollout and training.
+
+    Architecture:
+        input_layernorm (NO NOISE) → Attention + Router/Experts
+        post_attention_layernorm (WITH NOISE) → next block
+
+    This design:
+    - Preserves consistent expert selection (router sees clean inputs)
+    - Maintains exploration benefit (noise in residual stream)
+    - Aligns with freezing router/gate during training
+
+    Args:
+        model: The model to inject noise into (typically vLLM inference model)
+        step: Current training step
+        total_step: Total training steps
+        sigma_trend: List of sigma values for exponential decay schedule
+        target_modules: List of module name patterns to target (default: ["post_attention_layernorm"])
+        exclude_patterns: List of patterns to exclude (default: ["input_layernorm"])
+        verbose: Whether to print noise injection info
+
+    Example:
+        >>> # For MoE: only post-attention norms (default)
+        >>> generate_expert_gaussian_noise(vllm_model, step=100, total_step=1000, sigma_trend=sigma_trend)
+        >>>
+        >>> # For dense models: all RMSNorm (backward compatible)
+        >>> generate_expert_gaussian_noise(vllm_model, step=100, total_step=1000, sigma_trend=sigma_trend,
+        ...                                 target_modules=None, exclude_patterns=None)
+    """
+    # Set defaults for MoE models
+    if target_modules is None:
+        target_modules = ["post_attention_layernorm"]  # Only post-attention norms for MoE
+
+    if exclude_patterns is None:
+        exclude_patterns = ["input_layernorm"]  # Exclude input norms (before router)
+
+    sigma_id, sigma = get_sigma_by_step(step, total_step, sigma_trend)
+
+    if verbose and torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            logger.info(
+                f"Noise injection - Step: {step}/{total_step}, "
+                f"Sigma ID: {sigma_id}, Sigma: {sigma}"
+            )
+
+    if sigma == 0:
+        return
+
+    # Import RMSNorm classes based on model type
+    norm_classes = []
+    try:
+        from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
+        norm_classes.append(Qwen2RMSNorm)
+    except ImportError:
+        pass
+
+    try:
+        from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeRMSNorm
+        norm_classes.append(Qwen2MoeRMSNorm)
+    except ImportError:
+        pass
+
+    try:
+        from transformers.models.llama.modeling_llama import LlamaRMSNorm
+        norm_classes.append(LlamaRMSNorm)
+    except ImportError:
+        pass
+
+    if not norm_classes:
+        logger.warning("No RMSNorm classes found, noise injection may not work correctly")
+
+    norm_classes = tuple(norm_classes)
+
+    noise_count = 0
+    skipped_count = 0
+
+    for name, module in model.named_modules():
+        # Skip if not RMSNorm
+        if not isinstance(module, norm_classes):
+            continue
+
+        # Check exclusion patterns first
+        if exclude_patterns and any(pattern in name for pattern in exclude_patterns):
+            skipped_count += 1
+            continue
+
+        # Check target patterns
+        if target_modules and not any(pattern in name for pattern in target_modules):
+            skipped_count += 1
+            continue
+
+        weight_tensor = module.weight
+
+        # Generate noise
+        noise = torch.normal(
+            mean=0,
+            std=sigma,
+            size=weight_tensor.shape,
+            dtype=torch.float32
+        ).to(weight_tensor.device)
+
+        # Convert to module dtype
+        noise = noise.to(weight_tensor.dtype)
+
+        # Apply noise in-place
+        with torch.no_grad():
+            module.weight.add_(noise)
+
+        noise_count += 1
+
+        if verbose and noise_count <= 3:  # Log first few for debugging
+            logger.debug(f"Applied noise to: {name}")
+
+    if verbose and torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            logger.info(f"Applied noise to {noise_count} RMSNorm layers (skipped {skipped_count} input_layernorm)")
+
+
+def get_sigma_schedule(sigma_start=0.01, sigma_end=0.001, num_stages=10):
+    """
+    Generate exponential decay schedule for noise standard deviation.
+
+    Args:
+        sigma_start: Starting sigma value
+        sigma_end: Ending sigma value
+        num_stages: Number of stages (intervals + 1)
+
+    Returns:
+        List of sigma values
+
+    Example:
+        >>> schedule = get_sigma_schedule(0.01, 0.001, 10)
+        >>> # Returns [0.01, 0.0075, 0.0056, ..., 0.001] (9 values for 10 stages)
+    """
+    import numpy as np
+
+    if num_stages <= 1:
+        return []
+
+    sigma_decay_schedule_np = sigma_start * (sigma_end / sigma_start) ** (
+        np.arange(num_stages - 1) / (num_stages - 2)
+    )
+    return sigma_decay_schedule_np.tolist()
+
+
+__all__ = [
+    "generate_expert_gaussian_noise",
+    "get_sigma_by_step",
+    "get_sigma_schedule",
+]
