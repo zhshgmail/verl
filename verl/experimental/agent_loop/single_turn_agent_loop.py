@@ -68,14 +68,16 @@ class SingleTurnAgentLoop(AgentLoopBase):
             )
         response_mask = [1] * len(output.token_ids)
 
+        # Use getattr to avoid AttributeError on vLLM 0.11.0+
+        output_routed_experts = getattr(output, 'routed_experts', None)
         output = AgentLoopOutput(
             prompt_ids=prompt_ids,
             response_ids=output.token_ids[: self.response_length],
             response_mask=response_mask[: self.response_length],
             response_logprobs=output.log_probs[: self.response_length] if output.log_probs else None,
             routed_experts=(
-                output.routed_experts[: len(prompt_ids) + self.response_length]
-                if output.routed_experts is not None
+                output_routed_experts[: len(prompt_ids) + self.response_length]
+                if output_routed_experts is not None
                 else None
             ),
             multi_modal_data={"image": image_data} if image_data is not None else {},

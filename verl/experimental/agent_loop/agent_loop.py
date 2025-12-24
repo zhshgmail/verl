@@ -481,10 +481,12 @@ class AgentLoopWorkerBase:
         input_ids = torch.cat([prompt_output["input_ids"], response_output["input_ids"]], dim=1)
 
         routed_experts = None
-        if output.routed_experts is not None:
+        # Use getattr to avoid AttributeError on vLLM 0.11.0+ where output may not have routed_experts
+        output_routed_experts = getattr(output, 'routed_experts', None)
+        if output_routed_experts is not None:
             total_length = input_ids.shape[1]
-            length, layer_num, topk_num = output.routed_experts.shape
-            experts_tensor = torch.from_numpy(output.routed_experts)
+            length, layer_num, topk_num = output_routed_experts.shape
+            experts_tensor = torch.from_numpy(output_routed_experts)
             routed_experts = torch.zeros(1, total_length, layer_num, topk_num, dtype=experts_tensor.dtype)
 
             # Calculate start position: left padding means original prompt starts at the end
@@ -591,10 +593,25 @@ class AgentLoopWorkerBase:
         input_ids = torch.cat([input.input_ids for input in inputs], dim=0)
         position_ids = torch.cat([input.position_ids for input in inputs], dim=0)
         optional_outputs = {}
-        if inputs[0].response_logprobs is not None:
+        # Check if ALL inputs have the optional field to avoid key mismatch during concat
+        if all(input.response_logprobs is not None for input in inputs):
             optional_outputs["rollout_log_probs"] = torch.cat([input.response_logprobs for input in inputs], dim=0)
-        if inputs[0].routed_experts is not None:
-            optional_outputs["routed_experts"] = torch.cat([input.routed_experts for input in inputs], dim=0)
+        # For routed_experts, if ANY input has it, include for ALL (pad with zeros where missing)
+        # This is important for R3 mode which requires routed_experts
+        if any(input.routed_experts is not None for input in inputs):
+            # Find a reference input with routed_experts to get shape info
+            ref_input = next(inp for inp in inputs if inp.routed_experts is not None)
+            _, total_len, layer_num, topk_num = ref_input.routed_experts.shape
+            routed_experts_list = []
+            for inp in inputs:
+                if inp.routed_experts is not None:
+                    routed_experts_list.append(inp.routed_experts)
+                else:
+                    # Create zero padding with same shape as reference
+                    zeros = torch.zeros(1, inp.input_ids.shape[1], layer_num, topk_num,
+                                       dtype=ref_input.routed_experts.dtype)
+                    routed_experts_list.append(zeros)
+            optional_outputs["routed_experts"] = torch.cat(routed_experts_list, dim=0)
 
         batch = TensorDict(
             {

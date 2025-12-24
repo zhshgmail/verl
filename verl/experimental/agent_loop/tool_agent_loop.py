@@ -247,8 +247,10 @@ class ToolAgentLoop(AgentLoopBase):
         if output.log_probs:
             agent_data.response_logprobs += output.log_probs
 
-        if output.routed_experts is not None:
-            agent_data.routed_experts = output.routed_experts
+        # Use getattr to avoid AttributeError on vLLM 0.11.0+
+        output_routed_experts = getattr(output, 'routed_experts', None)
+        if output_routed_experts is not None:
+            agent_data.routed_experts = output_routed_experts
 
         # Check termination conditions
         if not ignore_termination and len(agent_data.response_mask) >= self.response_length:
