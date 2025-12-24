@@ -215,6 +215,12 @@ class RolloutConfig(BaseConfig):
 
     enable_sleep_mode: bool = True
 
+    # Noise injection (AQN) configuration for QeRL-style training
+    noise_injection_enabled: bool = False
+    noise_injection_sigma_trend: Optional[list] = None
+    noise_injection_total_steps: Optional[int] = None
+    noise_injection_target_modules: Optional[list] = None
+
     def __post_init__(self):
         """Validate the rollout config"""
         if self.expert_parallel_size > 1:

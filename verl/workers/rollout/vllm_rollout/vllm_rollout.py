@@ -134,6 +134,18 @@ class vLLMAsyncRollout(BaseRollout):
         else:
             self.sleep_level = VLLM_SLEEP_LEVEL
 
+        # Initialize noise injection config
+        self.noise_injection_config = {
+            'enabled': config.get('noise_injection_enabled', False),
+            'sigma_trend': config.get('noise_injection_sigma_trend', []),
+            'total_steps': config.get('noise_injection_total_steps', 1000),
+            'current_step': 0,  # Will be updated from trainer
+            'target_modules': config.get('noise_injection_target_modules', ['experts', 'mlp']),
+        }
+        if self.noise_injection_config['enabled']:
+            logger.info(f"Noise injection enabled with {len(self.noise_injection_config['sigma_trend'])} stages")
+
+
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
 
@@ -204,6 +216,15 @@ class vLLMAsyncRollout(BaseRollout):
         self.inference_engine.load_model(*args, **kwargs)
         _monkey_patch_compute_logits(self.inference_engine.worker.model_runner.model, len(self.tokenizer))
 
+        # Enable routing capture for MoE models if requested
+        if self.config.enable_rollout_routing_replay:
+            from verl.utils.vllm.patch import patch_vllm_for_routing_capture
+            logger.info("Enabling routing capture for MoE models")
+            patch_vllm_for_routing_capture(
+                enable_capture=True,
+                capture_router_logits=True  # Capture full logits for router LoRA training
+            )
+
     async def _execute_method(self, method: str | bytes, *args, **kwargs):
         if method == "init_worker":
             return self._init_worker(*args, **kwargs)
@@ -225,6 +246,12 @@ class vLLMAsyncRollout(BaseRollout):
         """Release weights and kv cache in GPU memory."""
         if self.config.free_cache_engine:
             self.inference_engine.sleep(level=self.sleep_level)
+
+
+    async def update_noise_injection_step(self, current_step: int):
+        """Update current training step for noise injection schedule."""
+        if hasattr(self, 'noise_injection_config'):
+            self.noise_injection_config['current_step'] = current_step
 
     async def update_weights(self, weights: Generator[tuple[str, torch.Tensor], None, None], **kwargs):
         """Update the weights of the rollout model.
@@ -264,6 +291,26 @@ class vLLMAsyncRollout(BaseRollout):
                 logger.info("Loading standard weights (non-FP8, async)")
                 model.load_weights(weights)
 
+                # NOISE INJECTION: Apply to expert layers after weight sync
+                if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
+                    from verl.utils.noise_injection import generate_expert_gaussian_noise
+
+                    current_step = self.noise_injection_config.get('current_step', 0)
+                    total_steps = self.noise_injection_config.get('total_steps', 1000)
+                    sigma_trend = self.noise_injection_config.get('sigma_trend', [])
+
+                    if sigma_trend and total_steps > 0:
+                        logger.info(f"Applying noise injection at step {current_step}/{total_steps}")
+                        generate_expert_gaussian_noise(
+                            model=model,
+                            step=current_step,
+                            total_step=total_steps,
+                            sigma_trend=sigma_trend,
+                            target_modules=self.noise_injection_config.get('target_modules', ['experts', 'mlp']),
+                            verbose=True
+                        )
+
+
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         """Batch generate sequences in sync mode."""
         raise NotImplementedError
@@ -272,3 +319,22 @@ class vLLMAsyncRollout(BaseRollout):
 
     def get_zeromq_address(self):
         return self.address
+
+    def get_captured_routing(self):
+        """Retrieve routing logs captured during generation.
+
+        This method is called via Ray remote from the server process to retrieve
+        routing logs from the worker's memory where the model forward pass ran.
+
+        Returns:
+            BatchRoutingLogs or None if no routing was captured
+        """
+        from verl.workers.rollout.vllm_routing_capture import get_routing_logs_from_vllm
+        routing_logs = get_routing_logs_from_vllm(batch_id=0, clear_buffer=True)
+        # Verbose logging for debugging (print works in Ray)
+        if routing_logs is not None:
+            print(f"[vLLMAsyncRollout.get_captured_routing] Retrieved routing logs: "
+                  f"{routing_logs.num_layers} layers, {routing_logs.num_tokens} tokens")
+        else:
+            print("[vLLMAsyncRollout.get_captured_routing] No routing logs captured (None returned)")
+        return routing_logs

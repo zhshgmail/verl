@@ -67,6 +67,61 @@ except ImportError:
     pass
 
 
+def patch_vllm_for_routing_capture(enable_capture: bool = True, capture_router_logits: bool = True):
+    """
+    Patch vLLM to enable MoE routing capture.
+
+    This adds:
+    1. Routing capture in MoE forward pass
+    2. routed_experts field to CompletionOutput
+
+    Args:
+        enable_capture: Whether to enable routing capture
+        capture_router_logits: Whether to capture full router logits (for router LoRA training)
+
+    Returns:
+        Number of MoE layers patched (0 if called before model creation)
+    """
+    if not enable_capture:
+        return 0
+
+    # Import routing capture module
+    from verl.workers.rollout.vllm_routing_capture import patch_vllm_moe_for_routing_capture
+
+    # Patch MoE forward for capture
+    num_layers = patch_vllm_moe_for_routing_capture(
+        capture_router_logits=capture_router_logits,
+        verbose=False  # Set to True for debugging
+    )
+
+    # Patch CompletionOutput to include routed_experts field
+    try:
+        from vllm.outputs import CompletionOutput
+        from dataclasses import dataclass, field
+        from typing import Optional
+        import sys
+
+        # Check if already patched
+        if not hasattr(CompletionOutput, '_verl_patched_for_routing'):
+            # Store original __init__
+            original_init = CompletionOutput.__init__
+
+            def patched_init(self, *args, **kwargs):
+                # Call original init
+                original_init(self, *args, **kwargs)
+                # Add routed_experts field if not present
+                if not hasattr(self, 'routed_experts'):
+                    self.routed_experts = None
+
+            CompletionOutput.__init__ = patched_init
+            CompletionOutput._verl_patched_for_routing = True
+
+    except ImportError:
+        pass
+
+    return num_layers
+
+
 def patch_vllm_moe_model_weight_loader(model):
     # this is a work around to load the weight of vllm fused moe model
     # it is from a bug from vllm 0.8.2

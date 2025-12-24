@@ -24,10 +24,19 @@ from typing import Any, Callable, Optional
 import cloudpickle as pickle
 import numpy as np
 import ray
+
+# Conditionally disable torch.dynamo for routing capture compatibility
+# Only disable if VERL_DISABLE_DYNAMO env var is set (for routing capture with vLLM V1)
+import os
+if os.environ.get("VERL_DISABLE_DYNAMO", "0") == "1":
+    import torch._dynamo
+    torch._dynamo.config.disable = True
+
 import vllm.entrypoints.cli.serve
 import zmq
 from ray.actor import ActorHandle
 from vllm import SamplingParams
+from vllm.config import CompilationConfig, CompilationLevel
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.api_server import (
     build_app,
@@ -340,8 +349,12 @@ class vLLMHttpServerBase:
                 }
             )
 
+        # When routing capture is enabled, disable torch.compile to allow monkey-patching
+        # The routing capture in vllm_routing_capture.py uses list.append() which breaks dynamo
         if self.config.enable_rollout_routing_replay:
-            args.update({"enable_return_routed_experts": True})
+            args.update({
+                "compilation_config": CompilationConfig(level=CompilationLevel.NO_COMPILATION)
+            })
 
         server_args = ["serve", self.model_config.local_path]
         for k, v in args.items():
@@ -497,7 +510,32 @@ class vLLMHttpServerBase:
 
         routed_experts = None
         if self.config.enable_rollout_routing_replay:
-            routed_experts = final_res.outputs[0].routed_experts
+            # Try to get routed_experts from vLLM output (if patched)
+            # Use getattr to avoid AttributeError on vLLM 0.11.0+ where CompletionOutput
+            # may use slots or be frozen, preventing dynamic attribute addition
+            routed_experts = getattr(final_res.outputs[0], 'routed_experts', None)
+
+            # If not available, retrieve from routing capture in worker process
+            # The routing capture runs in worker actors (Ray processes), not in this server process.
+            # We need to call the worker's get_captured_routing method via Ray remote.
+            if routed_experts is None and len(self.workers) > 0:
+                try:
+                    # Call worker method via Ray remote to access worker's memory
+                    batch_routing_logs = ray.get(self.workers[0].get_captured_routing.remote())
+                    if batch_routing_logs is not None:
+                        logger.info(f"Retrieved routing logs from worker: {batch_routing_logs.num_layers} layers, {batch_routing_logs.num_tokens} tokens")
+                        # Convert BatchRoutingLogs to numpy array format expected by agent_loop.py
+                        # Expected shape: (num_tokens, num_layers, top_k)
+                        # BatchRoutingLogs.layers is a list where each RoutingLog.expert_ids has shape (num_tokens, top_k)
+                        import numpy as np
+                        expert_ids_list = [layer.expert_ids.cpu().numpy() for layer in batch_routing_logs.layers]
+                        # Stack along new axis to get shape (num_layers, num_tokens, top_k)
+                        stacked = np.stack(expert_ids_list, axis=0)
+                        # Transpose to get shape (num_tokens, num_layers, top_k)
+                        routed_experts = np.transpose(stacked, (1, 0, 2))
+                        logger.info(f"Converted routing logs to numpy array: shape {routed_experts.shape}")
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve routing logs from worker: {e}")
 
         # Determine stop reason from finish_reason
         finish_reason = final_res.outputs[0].finish_reason

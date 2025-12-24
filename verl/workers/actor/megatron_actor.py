@@ -48,6 +48,8 @@ from verl.utils.megatron.router_replay_utils import (
     reorder_and_merge_vpp_layers,
     set_router_replay_data,
 )
+from verl.utils.routing_playback import BatchRoutingLogs
+from verl.utils.routing_playback_converter import convert_routing_logs_to_tensor
 from verl.utils.megatron.tensor_parallel import vocab_parallel_entropy, vocab_parallel_log_probs_from_logits
 from verl.utils.megatron_utils import get_model_config, unwrap_model
 from verl.utils.profiler import GPUMemoryLogger
@@ -595,7 +597,27 @@ class MegatronPPOActor(BasePPOActor):
                     router.set_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
 
             if RouterReplayHelper.is_replay_forward_action(self.tf_config, vp_rank):
-                layers_topk_idx = batch["routed_experts"]
+                routed_experts = batch["routed_experts"]
+
+                # Convert from vLLM format (List[BatchRoutingLogs]) to Megatron format (Tensor)
+                # if needed. R2 mode already provides tensor format, R3 mode provides BatchRoutingLogs
+                if isinstance(routed_experts, list) and len(routed_experts) > 0:
+                    if isinstance(routed_experts[0], BatchRoutingLogs):
+                        # R3 mode: Convert from vLLM's BatchRoutingLogs to tensor
+                        logger.info(f"Converting {len(routed_experts)} BatchRoutingLogs to tensor for R3 mode")
+                        layers_topk_idx = convert_routing_logs_to_tensor(routed_experts)
+                    else:
+                        # Unexpected format
+                        raise ValueError(
+                            f"routed_experts is a list but first element is {type(routed_experts[0])}, "
+                            f"expected BatchRoutingLogs or Tensor"
+                        )
+                elif isinstance(routed_experts, torch.Tensor):
+                    # R2 mode: Already in tensor format
+                    layers_topk_idx = routed_experts
+                else:
+                    raise ValueError(f"Unexpected routed_experts type: {type(routed_experts)}")
+
                 set_router_replay_data(layers_topk_idx, attention_mask, self.tf_config, vp_rank)
 
             from verl.models.mcore import get_mcore_forward_fn, get_mcore_forward_fused_fn
