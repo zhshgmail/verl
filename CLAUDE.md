@@ -1,5 +1,13 @@
 search internet or local disk as you need. response as accuracy as possible. don't provide me low confident information, or you need to highlight which part of your response is in low condident.
 
+## Agent Workflow
+
+For complex multi-codebase investigations, use the multi-agent workflow:
+1. See `.claude/agents/AGENT_WORKFLOW.md` for protocol
+2. Pattern: Planner → Expert Agents (parallel) → Synthesis → QA Agent → Final Output
+3. Always run QA agent for high-stakes conclusions
+4. Mark confidence levels: VERIFIED / LIKELY / UNCERTAIN / UNVERIFIED
+
 ## Remote Host Best Practices
 
 ### Use tmux for Long-Running Commands
