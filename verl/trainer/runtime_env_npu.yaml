@@ -1,0 +1,13 @@
+working_dir: ./
+excludes: ["/.git/", "/ckpts/", "/data/", "/__pycache__/", "/.venv/", "/wandb/"]
+env_vars:
+  HCCL_BUFFSIZE: "512"
+  HCCL_OP_BASE_FFTS_MODE_ENABLE: "TRUE"
+  HCCL_WHITELIST_DISABLE: "1"
+
+  ASCEND_HOME_PATH: "/usr/local/Ascend/ascend-toolkit/latest"
+  LD_LIBRARY_PATH: "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/ascend-toolkit/latest/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:${LD_LIBRARY_PATH}"
+  # WANDB_API_KEY: set via environment variable, not hardcoded
+  # WANDB_ENTITY: set via environment variable if needed
+  NO_PROXY: "localhost,127.0.0.1"
+  no_proxy: "localhost,127.0.0.1"

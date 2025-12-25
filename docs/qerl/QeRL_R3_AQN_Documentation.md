@@ -330,71 +330,207 @@ NVFP4 quantization follows QeRL methodology for post-training quantization of Mo
 
 **Format**: 4-bit floating-point weights, BF16 activations
 
-### Quantization Script
+### Docker Container Selection (CRITICAL)
 
-Location: `/tmp/quantize_qwen3_30b_nvfp4.py`
+On A100 server (root@90.90.102.18), there are **multiple Docker containers**:
+
+| Container | Purpose | Has llmcompressor |
+|-----------|---------|-------------------|
+| **`verl-fp8-container`** | **Quantization ONLY** | YES |
+| `verl-r3-test` | Latest verl official image, RL training | NO |
+
+**ALWAYS use `verl-fp8-container` for quantization work**:
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-fp8-container bash
+```
+
+### Prerequisites
+
+Inside `verl-fp8-container`:
+```bash
+# llmcompressor and compressed_tensors should be pre-installed
+pip show llmcompressor  # Should be 0.9.0+
+pip show compressed-tensors  # Should be 0.13.0+
+
+# If missing or broken, reinstall:
+pip install llmcompressor>=0.9.0 compressed-tensors>=0.13.0
+```
+
+### Full Quantization Script
+
+**Location**: Create at `/tmp/quantize_moe_nvfp4.py`
 
 ```python
+#!/usr/bin/env python3
+"""
+NVFP4 Quantization Script for MoE Models
+Usage: python quantize_moe_nvfp4.py --model_path /path/to/model --output_path /path/to/output
+"""
+import argparse
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import load_dataset
 from llmcompressor import oneshot
 from llmcompressor.modifiers.quantization import QuantizationModifier
 
-recipe = QuantizationModifier(
-    targets="Linear",
-    scheme="NVFP4",
-    ignore=[
-        "lm_head",           # Output projection - keep BF16
-        "re:.*mlp.gate$"     # MoE router - keep BF16 (CRITICAL)
-    ]
-)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_path", required=True, help="Path to model (local or HF repo)")
+    parser.add_argument("--output_path", required=True, help="Output path for quantized model")
+    parser.add_argument("--num_samples", type=int, default=512, help="Calibration samples")
+    parser.add_argument("--max_seq_len", type=int, default=2048, help="Max sequence length")
+    args = parser.parse_args()
 
-oneshot(
-    model=model,
-    dataset=calibration_ds,
-    recipe=recipe,
-    calibrate_moe_context=True,  # Important for MoE models
-)
+    print(f"Loading model from: {args.model_path}")
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True
+    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+
+    # Calibration dataset
+    print("Loading calibration dataset...")
+    ds = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
+    ds = ds.shuffle(seed=42).select(range(args.num_samples))
+
+    def preprocess(example):
+        return {"text": tokenizer.apply_chat_template(example["messages"], tokenize=False)}
+    ds = ds.map(preprocess)
+
+    # NVFP4 recipe - CRITICAL: exclude router/gate layers
+    recipe = QuantizationModifier(
+        targets="Linear",
+        scheme="NVFP4A16",  # 4-bit weights, 16-bit activations
+        ignore=[
+            "lm_head",                    # Output projection
+            "re:.*mlp\\.gate$",           # MoE router (Qwen3, DeepSeek)
+            "re:.*shared_expert_gate$",   # Shared expert gate (Qwen1.5-MoE)
+        ]
+    )
+
+    print("Starting quantization...")
+    oneshot(
+        model=model,
+        dataset=ds,
+        recipe=recipe,
+        max_seq_length=args.max_seq_len,
+        num_calibration_samples=args.num_samples,
+    )
+
+    print(f"Saving quantized model to: {args.output_path}")
+    model.save_pretrained(args.output_path)
+    tokenizer.save_pretrained(args.output_path)
+    print("Done!")
+
+if __name__ == "__main__":
+    main()
+```
+
+### Running Quantization (MUST use tmux)
+
+**CRITICAL**: Always run in tmux to survive SSH disconnection.
+
+```bash
+# 1. SSH to A100 and enter quantization container
+ssh root@90.90.102.18
+docker exec -it verl-fp8-container bash
+
+# 2. Create/attach tmux session
+tmux new-session -s quant_work  # or: tmux attach -t quant_work
+
+# 3. Run quantization
+python /tmp/quantize_moe_nvfp4.py \
+    --model_path /data/z00637938/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9 \
+    --output_path /data/z00637938/Qwen3-30B-A3B-Base-NVFP4 \
+    --num_samples 512 \
+    2>&1 | tee /tmp/quant.log
+
+# 4. Detach from tmux: Ctrl+B, then D
 ```
 
 ### Layers Kept in BF16
 
-| Layer | Reason |
-|-------|--------|
+| Layer Pattern | Reason |
+|---------------|--------|
 | `lm_head` | Output projection - sensitive to quantization |
-| `mlp.gate` | MoE router - routing decisions must be precise |
-| `shared_expert_gate` | Qwen1.5-MoE only - gate for shared expert |
+| `re:.*mlp\\.gate$` | MoE router - routing decisions must be precise |
+| `re:.*shared_expert_gate$` | Qwen1.5-MoE only - gate for shared expert |
 
-### Current Quantization Status (2025-12-25)
+### Model-Specific Ignore Patterns
 
-#### A100 (root@90.90.102.18) - Qwen3-30B-A3B-Base
-| Field | Value |
-|-------|-------|
-| **Model** | Qwen3-30B-A3B-Base (48 layers, 128 experts) |
-| **Output** | `/data/z00637938/Qwen3-30B-A3B-Base-NVFP4` |
-| **tmux session** | `qwen3_quant` |
-| **Log file** | `/tmp/quant_qwen3_30b.log` |
-| **Progress** | Layer **14/49**, ~1.76 it/s |
-| **ETA** | ~5-6 hours remaining |
+| Model | Ignore Pattern |
+|-------|----------------|
+| **Qwen3-MoE** | `["lm_head", "re:.*mlp\\.gate$"]` |
+| **Qwen1.5-MoE** | `["lm_head", "re:.*mlp\\.gate$", "re:.*shared_expert_gate$"]` |
+| **Mixtral** | `["lm_head", "re:.*block_sparse_moe\\.gate"]` |
+| **DeepSeek-V3** | `["lm_head", "re:.*mlp\\.gate$"]` |
 
-#### H100 (z00637938@90.91.103.36) - Qwen1.5-MoE-A2.7B-Chat
+### Completed Quantization Results
+
+#### H100 - Qwen1.5-MoE-A2.7B-Chat (COMPLETED)
 | Field | Value |
 |-------|-------|
 | **Model** | Qwen1.5-MoE-A2.7B-Chat (24 layers, 60 experts) |
 | **Output** | `/data/z00637938/Qwen1.5-MoE-A2.7B-NVFP4` |
-| **Log file** | `/data/z00637938/logs/quantization_20251225_075604.log` |
-| **Progress** | Step **2/25**, ~8 it/s |
-| **ETA** | ~1.5-2 hours remaining |
+| **Size** | **8.4GB** (down from ~28GB BF16, ~3.3x compression) |
+| **Status** | **COMPLETED** (2025-12-25) |
+
+### In-Progress Quantization
+
+#### A100 - Qwen3-30B-A3B-Base (RUNNING)
+| Field | Value |
+|-------|-------|
+| **Model** | Qwen3-30B-A3B-Base (48 layers, 128 experts) |
+| **Output** | `/data/z00637938/Qwen3-30B-A3B-Base-NVFP4` |
+| **Container** | `verl-fp8-container` |
+| **tmux session** | `qwen3_quant` |
+| **Log file** | `/tmp/quant_qwen3_30b.log` |
+| **ETA** | ~10 hours total |
 
 ### Monitoring Commands
 
 ```bash
-# Check real-time progress
-ssh root@90.90.102.18 "tmux attach -t qwen3_quant"
+# Check real-time progress (attach to tmux)
+ssh root@90.90.102.18 "docker exec verl-fp8-container tmux attach -t qwen3_quant"
 
-# Check log tail
-ssh root@90.90.102.18 "tail -20 /tmp/quant_qwen3_30b.log"
+# Check log tail without attaching
+ssh root@90.90.102.18 "docker exec verl-fp8-container tail -20 /tmp/quant_qwen3_30b.log"
 
-# Check which layer is being processed
-ssh root@90.90.102.18 "grep -E '\([0-9]+/49\)' /tmp/quant_qwen3_30b.log | tail -5"
+# Check GPU memory usage
+ssh root@90.90.102.18 "docker exec verl-fp8-container nvidia-smi --query-gpu=memory.used --format=csv"
+```
+
+### Troubleshooting
+
+#### Container Killed / Process Lost
+If the docker container is killed during quantization:
+1. Quantization has **NO checkpointing** - must restart from 0%
+2. Output directory may have partial/corrupt files - delete and restart
+3. Always use tmux inside container to survive container restarts
+
+#### ImportError: InternalModule / is_fp4
+```bash
+# Upgrade compressed-tensors
+pip install --upgrade compressed-tensors>=0.13.0
+```
+
+#### HFValidationError for local paths
+If transformers validates paths as HuggingFace repo IDs:
+```bash
+# Create symlink with simple name
+ln -s /long/path/to/model/snapshot/hash /tmp/ModelName
+# Then use /tmp/ModelName as model_path
+```
+
+#### Wrong model loading (no MoE modules)
+Ensure using correct snapshot path with full hash:
+```bash
+# Find correct snapshot
+ls /data/z00637938/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/
+# Use the full path with hash
 ```
 
 ---
