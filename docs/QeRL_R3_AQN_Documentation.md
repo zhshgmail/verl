@@ -363,12 +363,26 @@ oneshot(
 | `mlp.gate` | MoE router - routing decisions must be precise |
 | `shared_expert_gate` | Qwen1.5-MoE only - gate for shared expert |
 
-### Current Quantization Status (2025-12-24)
+### Current Quantization Status (2025-12-25)
 
-- **Model**: Qwen3-30B-A3B-Base
-- **Output**: `/data/z00637938/Qwen3-30B-A3B-Base-NVFP4`
-- **Progress**: Layer 9/49 (~7 hours total)
-- **GPU Usage**: 1 GPU, 28% utilization, 14.5GB memory
+#### A100 (root@90.90.102.18) - Qwen3-30B-A3B-Base
+| Field | Value |
+|-------|-------|
+| **Model** | Qwen3-30B-A3B-Base (48 layers, 128 experts) |
+| **Output** | `/data/z00637938/Qwen3-30B-A3B-Base-NVFP4` |
+| **tmux session** | `qwen3_quant` |
+| **Log file** | `/tmp/quant_qwen3_30b.log` |
+| **Progress** | Layer **14/49**, ~1.76 it/s |
+| **ETA** | ~5-6 hours remaining |
+
+#### H100 (z00637938@90.91.103.36) - Qwen1.5-MoE-A2.7B-Chat
+| Field | Value |
+|-------|-------|
+| **Model** | Qwen1.5-MoE-A2.7B-Chat (24 layers, 60 experts) |
+| **Output** | `/data/z00637938/Qwen1.5-MoE-A2.7B-NVFP4` |
+| **Log file** | `/data/z00637938/logs/quantization_20251225_075604.log` |
+| **Progress** | Step **2/25**, ~8 it/s |
+| **ETA** | ~1.5-2 hours remaining |
 
 ### Monitoring Commands
 
