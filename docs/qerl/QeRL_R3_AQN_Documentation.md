@@ -431,24 +431,23 @@ if __name__ == "__main__":
 
 ### Running Quantization (MUST use tmux)
 
-**CRITICAL**: Always run in tmux to survive SSH disconnection.
+**CRITICAL**: tmux runs on HOST, docker runs INSIDE tmux session.
 
 ```bash
-# 1. SSH to A100 and enter quantization container
+# 1. SSH to A100
 ssh root@90.90.102.18
-docker exec -it verl-fp8-container bash
 
-# 2. Create/attach tmux session
-tmux new-session -s quant_work  # or: tmux attach -t quant_work
+# 2. Create tmux session ON HOST
+tmux new-session -s quant_work
 
-# 3. Run quantization
-python /tmp/quantize_moe_nvfp4.py \
+# 3. INSIDE tmux, run docker and quantization
+docker exec -it verl-fp8-container python /tmp/quantize_moe_nvfp4.py \
     --model_path /data/z00637938/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9 \
     --output_path /data/z00637938/Qwen3-30B-A3B-Base-NVFP4 \
-    --num_samples 512 \
-    2>&1 | tee /tmp/quant.log
+    --num_samples 512
 
 # 4. Detach from tmux: Ctrl+B, then D
+# 5. Later, check status: tmux capture-pane -t quant_work -p | tail -20
 ```
 
 ### Layers Kept in BF16
@@ -478,29 +477,30 @@ python /tmp/quantize_moe_nvfp4.py \
 | **Size** | **8.4GB** (down from ~28GB BF16, ~3.3x compression) |
 | **Status** | **COMPLETED** (2025-12-25) |
 
-### In-Progress Quantization
-
-#### A100 - Qwen3-30B-A3B-Base (RUNNING)
+#### A100 - Qwen3-30B-A3B-Base (COMPLETED)
 | Field | Value |
 |-------|-------|
 | **Model** | Qwen3-30B-A3B-Base (48 layers, 128 experts) |
 | **Output** | `/data/z00637938/Qwen3-30B-A3B-Base-NVFP4` |
-| **Container** | `verl-fp8-container` |
-| **tmux session** | `qwen3_quant` |
-| **Log file** | `/tmp/quant_qwen3_30b.log` |
-| **ETA** | ~10 hours total |
+| **Size** | **17GB** (down from ~60GB BF16, ~3.5x compression) |
+| **Status** | **COMPLETED** (2025-12-25) |
 
 ### Monitoring Commands
 
-```bash
-# Check real-time progress (attach to tmux)
-ssh root@90.90.102.18 "docker exec verl-fp8-container tmux attach -t qwen3_quant"
+**CRITICAL**: tmux runs on HOST, docker runs INSIDE tmux session.
 
-# Check log tail without attaching
-ssh root@90.90.102.18 "docker exec verl-fp8-container tail -20 /tmp/quant_qwen3_30b.log"
+```bash
+# List tmux sessions on host
+ssh root@90.90.102.18 "tmux ls"
+
+# Check output (tmux is on HOST, not in docker)
+ssh root@90.90.102.18 "tmux capture-pane -t SESSION_NAME -p | tail -20"
+
+# Attach to session interactively
+ssh -t root@90.90.102.18 "tmux attach -t SESSION_NAME"
 
 # Check GPU memory usage
-ssh root@90.90.102.18 "docker exec verl-fp8-container nvidia-smi --query-gpu=memory.used --format=csv"
+ssh root@90.90.102.18 "nvidia-smi --query-gpu=memory.used --format=csv"
 ```
 
 ### Troubleshooting
