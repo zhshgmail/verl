@@ -1,0 +1,131 @@
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_megatron_trainer
+  - _self_
+
+# Qwen3-30B-A3B + GSM8K Math Training on NPU
+# Configuration: 16 ranks (8 physical NPUs × 2 chips each)
+# TP=4, EP=4 = 16 workers
+# Model: 128 experts, ~30B parameters
+# Heavy offloading enabled for memory efficiency
+
+data:
+  train_files: /data/nfs/data/gsm8k/train_chat.parquet
+  val_files: /data/nfs/data/gsm8k/test_chat.parquet
+  prompt_key: messages
+  answer_key: answer
+  train_batch_size: 16  # Conservative for large model
+  max_prompt_length: 1024
+  max_response_length: 1024
+  truncation: error
+  filter_overlong_prompts: True
+  shuffle: False
+  return_raw_chat: True
+
+  # GSM8K reward function for math verification
+  reward_fn:
+    _target_: verl.utils.reward_score.gsm8k.compute_score
+    method: flexible
+    format_score: 0.0
+    score: 1.0
+
+actor_rollout_ref:
+  model:
+    path: /data/nfs/models/Qwen3-30B-A3B-Instruct-2507
+    use_fused_kernels: False  # Docker image has megatron-core < 0.13.0
+    enable_gradient_checkpointing: True
+
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 1  # Conservative for large model
+    use_dynamic_bsz: True
+    use_kl_loss: True
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+
+    megatron:
+      tensor_model_parallel_size: 4   # 32 heads ÷ 4 = 8 heads per rank
+      pipeline_model_parallel_size: 1
+      expert_model_parallel_size: 4   # 128 experts ÷ 4 = 32 experts per rank
+      # TP × EP = 4 × 4 = 16 workers (uses all 16 ranks)
+      context_parallel_size: 1
+      expert_tensor_parallel_size: 1
+      sequence_parallel: False
+
+      # Heavy offloading for memory efficiency (following A3B example)
+      param_offload: True
+      optimizer_offload: True
+      grad_offload: True
+
+      # MoE optimizations and recomputation
+      override_transformer_config:
+        recompute_method: uniform
+        recompute_granularity: full
+        recompute_num_layers: 1
+
+  rollout:
+    name: vllm
+    tensor_model_parallel_size: 4  # Match actor TP
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_use_dynamic_bsz: True
+    gpu_memory_utilization: 0.65  # Match A3B example
+    enforce_eager: True  # Required for NPU
+    free_cache_engine: True
+    max_model_len: 2048
+    n: 5  # 5 rollouts for GRPO
+
+  ref:
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_use_dynamic_bsz: True
+    megatron:
+      tensor_model_parallel_size: 4
+      pipeline_model_parallel_size: 1
+      expert_model_parallel_size: 4
+      context_parallel_size: 1
+      expert_tensor_parallel_size: 1
+      param_offload: True  # Enable offloading
+
+critic:
+  enable: False  # Disabled for GRPO
+
+algorithm:
+  adv_estimator: grpo  # Group Relative Policy Optimization
+  use_kl_in_reward: False
+
+reward_model:
+  enable: False  # Using rule-based math verification
+
+trainer:
+  critic_warmup: 0
+  logger: ['console']
+  project_name: verl_qwen3_a3b_gsm8k_npu
+  experiment_name: qwen3-30b-a3b-gsm8k-grpo-16ranks
+  n_gpus_per_node: 16  # Use all 16 logical ranks
+  nnodes: 1
+  device: npu
+  save_freq: 10
+  test_freq: 2
+  total_epochs: 20
+  balance_batch: False
+  val_before_train: True
+
+ray_kwargs:
+  ray_init:
+    address: auto
+    runtime_env:
+      env_vars:
+        HCCL_BUFFSIZE: "512"
+        HCCL_OP_BASE_FFTS_MODE_ENABLE: "TRUE"
+        HCCL_WHITELIST_DISABLE: "1"
+        VLLM_USE_V1: "1"
+        VERL_DISABLE_DYNAMO: "1"
+        VLLM_ASCEND_ENABLE_NZ: "0"
+        WANDB_MODE: "offline"
+        HF_HOME: "/data/nfs/.cache/huggingface"
+        CUDA_DEVICE_MAX_CONNECTIONS: "1"

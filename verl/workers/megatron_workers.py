@@ -29,8 +29,14 @@ from omegaconf import DictConfig, OmegaConf
 
 try:
     from mindspeed.megatron_adaptor import repatch
-except ImportError:
-    repatch = None
+except (ImportError, RuntimeError) as e:
+    # RuntimeError: Catch "the patch of compile exist !" when Ray reloads module
+    if isinstance(e, RuntimeError) and "patch" in str(e):
+        repatch = None  # Patching already done, skip explicit repatch calls
+    elif isinstance(e, ImportError):
+        repatch = None  # MindSpeed not available
+    else:
+        raise
 
 from megatron.core import parallel_state as mpu
 
@@ -237,8 +243,9 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
     def __init__(self, config: DictConfig, role: str, **kwargs):
         Worker.__init__(self)
         self.config = config
-        if repatch is not None:
+        if repatch is not None and not torch.distributed.is_initialized():
             # NPU MindSpeed patch, will be refactored with MindSpeedEngine.
+            # Only repatch if we're the first worker in this process (colocated workers share process)
             repatch(self.config.actor.megatron.get("override_transformer_config", {}))
 
         self.role = role
