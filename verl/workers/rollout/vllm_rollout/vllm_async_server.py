@@ -24,11 +24,18 @@ from typing import Any, Callable, Optional
 import cloudpickle as pickle
 import numpy as np
 import ray
-import vllm.entrypoints.cli.serve
 import zmq
 from ray.actor import ActorHandle
-from vllm import SamplingParams
+from vllm.sampling_params import SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.version import __version__ as vllm_version
+
+# Try to import cli.serve - may fail on vllm-ascend due to missing benchmarks module
+try:
+    import vllm.entrypoints.cli.serve
+    _cli_serve_available = True
+except ImportError:
+    _cli_serve_available = False
 from vllm.entrypoints.openai.api_server import (
     build_app,
     init_app_state,
@@ -56,17 +63,17 @@ from verl.workers.rollout.vllm_rollout.utils import (
     get_vllm_max_lora_rank,
 )
 
-if vllm.__version__ > "0.11.0":
+if vllm_version > "0.11.0":
     from vllm.utils.argparse_utils import FlexibleArgumentParser
     from vllm.utils.network_utils import get_tcp_uri
 
-    if vllm.__version__ == "0.12.0":
+    if vllm_version == "0.12.0":
         from vllm.entrypoints.harmony_utils import get_encoding
 
         get_encoding()
 else:
     from vllm.utils import FlexibleArgumentParser, get_tcp_uri
-if vllm.__version__ >= "0.12.0":
+if vllm_version >= "0.12.0":
     from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
     from vllm.v1.outputs import ModelRunnerOutput
 
@@ -105,7 +112,7 @@ class ExternalZeroMQDistributedExecutor(Executor):
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
 
-    if vllm.__version__ >= "0.12.0":
+    if vllm_version >= "0.12.0":
 
         def execute_model(
             self, scheduler_output: "SchedulerOutput", non_block: bool = False
@@ -367,19 +374,37 @@ class vLLMHttpServerBase:
         if self.replica_rank == 0:
             pprint(server_args)
 
-        CMD_MODULES = [vllm.entrypoints.cli.serve]
-        parser = FlexibleArgumentParser(description="vLLM CLI")
-        subparsers = parser.add_subparsers(required=False, dest="subparser")
-        cmds = {}
-        for cmd_module in CMD_MODULES:
-            new_cmds = cmd_module.cmd_init()
-            for cmd in new_cmds:
-                cmd.subparser_init(subparsers).set_defaults(dispatch_function=cmd.cmd)
-                cmds[cmd.name] = cmd
-        server_args = parser.parse_args(args=server_args)
-        server_args.model = server_args.model_tag
-        if server_args.subparser in cmds:
-            cmds[server_args.subparser].validate(server_args)
+        if _cli_serve_available:
+            # Standard path: use vllm CLI parsing
+            CMD_MODULES = [vllm.entrypoints.cli.serve]
+            parser = FlexibleArgumentParser(description="vLLM CLI")
+            subparsers = parser.add_subparsers(required=False, dest="subparser")
+            cmds = {}
+            for cmd_module in CMD_MODULES:
+                new_cmds = cmd_module.cmd_init()
+                for cmd in new_cmds:
+                    cmd.subparser_init(subparsers).set_defaults(dispatch_function=cmd.cmd)
+                    cmds[cmd.name] = cmd
+            server_args = parser.parse_args(args=server_args)
+            server_args.model = server_args.model_tag
+            if server_args.subparser in cmds:
+                cmds[server_args.subparser].validate(server_args)
+        else:
+            # Fallback for vllm-ascend: build argparse.Namespace directly
+            # This bypasses cli.serve which has import issues on NPU
+            logger.info("Using fallback argument parsing (cli.serve not available)")
+            server_args_ns = argparse.Namespace()
+            server_args_ns.model = self.model_config.local_path
+            server_args_ns.model_tag = self.model_config.local_path
+            server_args_ns.subparser = "serve"
+            # Copy all args from the dict
+            for k, v in args.items():
+                setattr(server_args_ns, k.replace("-", "_"), v)
+            # Set commonly needed defaults
+            server_args_ns.disable_frontend_multiprocessing = True
+            server_args_ns.enable_log_requests = False
+            server_args_ns.enable_request_id_headers = False
+            server_args = server_args_ns
 
         # 2. setup distributed executor backend
         distributed_executor_backend = ExternalZeroMQDistributedExecutor if len(self.workers) > 0 else None
@@ -417,7 +442,7 @@ class vLLMHttpServerBase:
         await engine_client.reset_mm_cache()
 
         app = build_app(args)
-        if vllm.__version__ > "0.11.0":
+        if vllm_version > "0.11.0":
             await init_app_state(engine_client, app.state, args)
         else:
             await init_app_state(engine_client, vllm_config, app.state, args)
@@ -429,7 +454,7 @@ class vLLMHttpServerBase:
 
     async def run_headless(self, args: argparse.Namespace):
         # Create the EngineConfig.
-        engine_args = vllm.AsyncEngineArgs.from_cli_args(args)
+        engine_args = AsyncEngineArgs.from_cli_args(args)
         usage_context = UsageContext.OPENAI_API_SERVER
         vllm_config = engine_args.create_engine_config(usage_context=usage_context, headless=True)
 

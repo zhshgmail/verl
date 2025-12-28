@@ -41,7 +41,8 @@ if package_version is None:
 elif is_npu_available:
     # sleep_mode=2 is not supported on vllm-ascend for now, will remove this restriction when this ability is ready.
     VLLM_SLEEP_LEVEL = 1
-    from vllm import LLM
+    # Use direct import to avoid circular import issues with vllm-ascend lazy loading
+    from vllm.entrypoints.llm import LLM
     from vllm.distributed import parallel_state
 elif vs.parse(package_version) >= vs.parse("0.7.0"):
     vllm_version = package_version
