@@ -134,6 +134,18 @@ class vLLMAsyncRollout(BaseRollout):
         else:
             self.sleep_level = VLLM_SLEEP_LEVEL
 
+        # Initialize noise injection config (AQN - Adaptive Quantization Noise)
+        self.noise_injection_config = {
+            'enabled': config.get('noise_injection_enabled', False),
+            'sigma_trend': config.get('noise_injection_sigma_trend', []),
+            'total_steps': config.get('noise_injection_total_steps', 1000),
+            'current_step': 0,  # Will be updated from trainer
+            'target_modules': config.get('noise_injection_target_modules', ['post_attention_layernorm']),
+            'exclude_patterns': config.get('noise_injection_exclude_patterns', ['input_layernorm']),
+        }
+        if self.noise_injection_config['enabled']:
+            logger.info(f"Noise injection enabled with {len(self.noise_injection_config['sigma_trend'])} stages")
+
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
 
@@ -268,6 +280,32 @@ class vLLMAsyncRollout(BaseRollout):
             else:
                 logger.info("Loading standard weights (non-FP8, async)")
                 model.load_weights(weights)
+
+            # NOISE INJECTION (AQN): Apply to RMSNorm layers after weight sync
+            if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
+                from verl.utils.noise_injection import generate_expert_gaussian_noise
+
+                current_step = self.noise_injection_config.get('current_step', 0)
+                total_steps = self.noise_injection_config.get('total_steps', 1000)
+                sigma_trend = self.noise_injection_config.get('sigma_trend', [])
+
+                if sigma_trend and total_steps > 0:
+                    logger.info(f"Applying noise injection at step {current_step}/{total_steps}")
+                    generate_expert_gaussian_noise(
+                        model=model,
+                        step=current_step,
+                        total_step=total_steps,
+                        sigma_trend=sigma_trend,
+                        target_modules=self.noise_injection_config.get('target_modules', ['post_attention_layernorm']),
+                        exclude_patterns=self.noise_injection_config.get('exclude_patterns', ['input_layernorm']),
+                        verbose=True
+                    )
+
+    async def update_noise_injection_step(self, current_step: int):
+        """Update current training step for noise injection schedule."""
+        if hasattr(self, 'noise_injection_config'):
+            self.noise_injection_config['current_step'] = current_step
+            logger.debug(f"Updated noise injection step to {current_step}")
 
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         """Batch generate sequences in sync mode."""

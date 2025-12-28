@@ -585,6 +585,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def get_zeromq_address(self):
         return self.rollout.get_zeromq_address()
 
+    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
+    async def update_noise_injection_step(self, current_step: int):
+        """Update noise injection step for AQN schedule in rollout worker."""
+        if hasattr(self.rollout, 'update_noise_injection_step'):
+            await self.rollout.update_noise_injection_step(current_step)
+        return True
+
     # ============================ SGLang related ============================
 
     @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
