@@ -96,10 +96,8 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
 
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
-            logger.info(
-                f"Noise injection - Step: {step}/{total_step}, "
-                f"Sigma ID: {sigma_id}, Sigma: {sigma}"
-            )
+            # Use print() to ensure visibility regardless of logging level
+            print(f"[AQN] Noise injection - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}")
 
     if sigma == 0:
         return
@@ -171,7 +169,8 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
 
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
-            logger.info(f"Applied noise to {noise_count} RMSNorm layers (skipped {skipped_count} input_layernorm)")
+            # Use print() to ensure visibility regardless of logging level
+            print(f"[AQN] Applied noise to {noise_count} RMSNorm layers (skipped {skipped_count} excluded layers)")
 
 
 def get_sigma_schedule(sigma_start=0.01, sigma_end=0.001, num_stages=10):

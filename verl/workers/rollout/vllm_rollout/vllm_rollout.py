@@ -145,7 +145,10 @@ class vLLMAsyncRollout(BaseRollout):
             'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', ['input_layernorm'])),
         }
         if self.noise_injection_config['enabled']:
-            logger.info(f"Noise injection enabled with {len(self.noise_injection_config['sigma_trend'])} stages")
+            # Use print() to ensure visibility regardless of logging level
+            print(f"[AQN] Noise injection enabled: {len(self.noise_injection_config['sigma_trend'])} stages, "
+                  f"total_steps={self.noise_injection_config['total_steps']}, "
+                  f"targets={self.noise_injection_config['target_modules']}")
 
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
@@ -284,14 +287,16 @@ class vLLMAsyncRollout(BaseRollout):
 
             # NOISE INJECTION (AQN): Apply to RMSNorm layers after weight sync
             if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
-                from verl.utils.noise_injection import generate_expert_gaussian_noise
+                from verl.utils.noise_injection import generate_expert_gaussian_noise, get_sigma_by_step
 
                 current_step = self.noise_injection_config.get('current_step', 0)
                 total_steps = self.noise_injection_config.get('total_steps', 1000)
                 sigma_trend = self.noise_injection_config.get('sigma_trend', [])
 
                 if sigma_trend and total_steps > 0:
-                    logger.info(f"Applying noise injection at step {current_step}/{total_steps}")
+                    # Use print() to ensure visibility regardless of logging level
+                    sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
+                    print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
                     generate_expert_gaussian_noise(
                         model=model,
                         step=current_step,
