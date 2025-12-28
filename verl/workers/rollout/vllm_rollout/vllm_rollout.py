@@ -135,13 +135,14 @@ class vLLMAsyncRollout(BaseRollout):
             self.sleep_level = VLLM_SLEEP_LEVEL
 
         # Initialize noise injection config (AQN - Adaptive Quantization Noise)
+        # Use getattr for OmegaConf compatibility
         self.noise_injection_config = {
-            'enabled': config.get('noise_injection_enabled', False),
-            'sigma_trend': config.get('noise_injection_sigma_trend', []),
-            'total_steps': config.get('noise_injection_total_steps', 1000),
+            'enabled': getattr(config, 'noise_injection_enabled', False),
+            'sigma_trend': list(getattr(config, 'noise_injection_sigma_trend', [])),
+            'total_steps': getattr(config, 'noise_injection_total_steps', 1000),
             'current_step': 0,  # Will be updated from trainer
-            'target_modules': config.get('noise_injection_target_modules', ['post_attention_layernorm']),
-            'exclude_patterns': config.get('noise_injection_exclude_patterns', ['input_layernorm']),
+            'target_modules': list(getattr(config, 'noise_injection_target_modules', ['post_attention_layernorm'])),
+            'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', ['input_layernorm'])),
         }
         if self.noise_injection_config['enabled']:
             logger.info(f"Noise injection enabled with {len(self.noise_injection_config['sigma_trend'])} stages")
