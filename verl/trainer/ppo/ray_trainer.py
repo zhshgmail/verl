@@ -863,6 +863,18 @@ class RayPPOTrainer:
                     rm_resource_pool=resource_pool,
                 )
 
+        # Pass noise injection config to rollout workers BEFORE workers are spawned
+        # (workers read config during __init__, which happens during spawn())
+        if self.noise_injection_enabled:
+            from omegaconf import open_dict
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.rollout.noise_injection_enabled = True
+                self.config.actor_rollout_ref.rollout.noise_injection_sigma_trend = self.sigma_trend
+                self.config.actor_rollout_ref.rollout.noise_injection_total_steps = self.noise_injection_total_steps
+                self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
+                self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
+            print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
+
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,
         # you should not use `create_colocated_worker_cls`.
@@ -923,16 +935,6 @@ class RayPPOTrainer:
         if self.use_rm and not self.use_reward_loop:
             self.rm_wg = all_wg[str(Role.RewardModel)]
             self.rm_wg.init_model()
-
-        # Pass noise injection config to rollout workers before init
-        if self.noise_injection_enabled:
-            from omegaconf import open_dict
-            with open_dict(self.config):
-                self.config.actor_rollout_ref.rollout.noise_injection_enabled = True
-                self.config.actor_rollout_ref.rollout.noise_injection_sigma_trend = self.sigma_trend
-                self.config.actor_rollout_ref.rollout.noise_injection_total_steps = self.noise_injection_total_steps
-                self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
-                self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
 
         # we should create rollout at the end so that vllm can have a better estimation of kv cache memory
         self.actor_rollout_wg = all_wg[str(actor_role)]
