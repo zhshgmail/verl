@@ -217,6 +217,13 @@ class RolloutConfig(BaseConfig):
 
     enable_sleep_mode: bool = True
 
+    # AQN (Adaptive Quantization Noise) configuration
+    noise_injection_enabled: bool = False
+    noise_injection_sigma_trend: list = field(default_factory=list)
+    noise_injection_total_steps: int = 1000
+    noise_injection_target_modules: list = field(default_factory=lambda: ['post_attention_layernorm'])
+    noise_injection_exclude_patterns: list = field(default_factory=lambda: ['input_layernorm'])
+
     def __post_init__(self):
         """Validate the rollout config"""
         if self.expert_parallel_size > 1:
