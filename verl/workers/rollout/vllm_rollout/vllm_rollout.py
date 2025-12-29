@@ -141,14 +141,17 @@ class vLLMAsyncRollout(BaseRollout):
             'sigma_trend': list(getattr(config, 'noise_injection_sigma_trend', [])),
             'total_steps': getattr(config, 'noise_injection_total_steps', 1000),
             'current_step': 0,  # Will be updated from trainer
-            'target_modules': list(getattr(config, 'noise_injection_target_modules', ['post_attention_layernorm'])),
-            'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', ['input_layernorm'])),
+            # Use None for target_modules/exclude_patterns to enable model type auto-detection
+            # (Dense models: ALL RMSNorm, MoE models: post_attention_layernorm only)
+            'target_modules': list(getattr(config, 'noise_injection_target_modules', [])) or None,
+            'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', [])) or None,
         }
         if self.noise_injection_config['enabled']:
             # Use print() to ensure visibility regardless of logging level
+            targets_str = self.noise_injection_config['target_modules'] or 'AUTO (Dense=ALL, MoE=post_attn)'
             print(f"[AQN] Noise injection enabled: {len(self.noise_injection_config['sigma_trend'])} stages, "
                   f"total_steps={self.noise_injection_config['total_steps']}, "
-                  f"targets={self.noise_injection_config['target_modules']}")
+                  f"targets={targets_str}")
 
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
@@ -297,13 +300,15 @@ class vLLMAsyncRollout(BaseRollout):
                     # Use print() to ensure visibility regardless of logging level
                     sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
                     print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
+                    # Pass None for target_modules/exclude_patterns to enable auto-detection
+                    # based on model type (Dense vs MoE)
                     generate_expert_gaussian_noise(
                         model=model,
                         step=current_step,
                         total_step=total_steps,
                         sigma_trend=sigma_trend,
-                        target_modules=self.noise_injection_config.get('target_modules', ['post_attention_layernorm']),
-                        exclude_patterns=self.noise_injection_config.get('exclude_patterns', ['input_layernorm']),
+                        target_modules=self.noise_injection_config.get('target_modules'),  # None = auto-detect
+                        exclude_patterns=self.noise_injection_config.get('exclude_patterns'),  # None = auto-detect
                         verbose=True
                     )
 

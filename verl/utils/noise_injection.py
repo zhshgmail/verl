@@ -51,88 +51,113 @@ def get_sigma_by_step(step, total_steps, sigma_trend):
     return sigma_id, sigma
 
 
-def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, verbose=True):
+def _detect_moe_model(model):
     """
-    Generate and apply Gaussian noise to RMSNorm layers in quantized MoE models.
+    Auto-detect if model is MoE by checking for expert modules.
 
-    For MoE models, we inject noise ONLY to post_attention_layernorm (after router/MLP)
-    to avoid affecting router decisions, which would cause expert selection mismatch
-    between rollout and training.
+    Returns:
+        True if MoE model detected, False for dense models
 
-    Architecture:
-        input_layernorm (NO NOISE) → Attention + Router/Experts
-        post_attention_layernorm (WITH NOISE) → next block
+    Note:
+        We specifically check for 'experts' (plural) to distinguish from
+        dense models that have 'gate_proj' in SwiGLU MLP (not MoE gate).
+        We also check for 'shared_expert' which is specific to MoE.
+    """
+    # More specific MoE indicators (avoid false positives from gate_proj)
+    moe_indicators = ['experts', 'shared_expert', 'num_experts', 'expert_']
+    for name, _ in model.named_modules():
+        name_lower = name.lower()
+        if any(indicator in name_lower for indicator in moe_indicators):
+            return True
+    return False
 
-    This design:
-    - Preserves consistent expert selection (router sees clean inputs)
-    - Maintains exploration benefit (noise in residual stream)
-    - Aligns with freezing router/gate during training
+
+def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, is_moe=None, verbose=True):
+    """
+    Generate and apply Gaussian noise to RMSNorm layers in quantized models.
+
+    Behavior differs based on model type:
+
+    For MoE models (is_moe=True):
+        - Only targets post_attention_layernorm (after router/MLP)
+        - Excludes input_layernorm (before router)
+        - Avoids affecting router decisions (expert selection mismatch)
+
+    For Dense models (is_moe=False):
+        - Targets ALL RMSNorm layers (QeRL original behavior)
+        - No exclusions
+        - Follows QeRL paper's approach for quantized training
 
     Args:
         model: The model to inject noise into (typically vLLM inference model)
         step: Current training step
         total_step: Total training steps
         sigma_trend: List of sigma values for exponential decay schedule
-        target_modules: List of module name patterns to target (default: ["post_attention_layernorm"])
-        exclude_patterns: List of patterns to exclude (default: ["input_layernorm"])
+        target_modules: List of module name patterns to target (None = auto based on is_moe)
+        exclude_patterns: List of patterns to exclude (None = auto based on is_moe)
+        is_moe: Whether model is MoE (None = auto-detect)
         verbose: Whether to print noise injection info
 
     Example:
-        >>> # For MoE: only post-attention norms (default)
-        >>> generate_expert_gaussian_noise(vllm_model, step=100, total_step=1000, sigma_trend=sigma_trend)
+        >>> # Auto-detect model type (recommended)
+        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend)
         >>>
-        >>> # For dense models: all RMSNorm (backward compatible)
-        >>> generate_expert_gaussian_noise(vllm_model, step=100, total_step=1000, sigma_trend=sigma_trend,
-        ...                                 target_modules=None, exclude_patterns=None)
+        >>> # Force dense model behavior (QeRL original)
+        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, is_moe=False)
+        >>>
+        >>> # Force MoE model behavior
+        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, is_moe=True)
     """
-    # Set defaults for MoE models
+    # Auto-detect model type if not specified
+    if is_moe is None:
+        is_moe = _detect_moe_model(model)
+
+    # Set defaults based on model type
     if target_modules is None:
-        target_modules = ["post_attention_layernorm"]  # Only post-attention norms for MoE
+        if is_moe:
+            target_modules = ["post_attention_layernorm"]  # MoE: only post-attention norms
+        else:
+            target_modules = []  # Dense: all RMSNorm (QeRL original)
 
     if exclude_patterns is None:
-        exclude_patterns = ["input_layernorm"]  # Exclude input norms (before router)
+        if is_moe:
+            exclude_patterns = ["input_layernorm"]  # MoE: exclude input norms (before router)
+        else:
+            exclude_patterns = []  # Dense: no exclusions (QeRL original)
 
     sigma_id, sigma = get_sigma_by_step(step, total_step, sigma_trend)
 
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
+            model_type = "MoE" if is_moe else "Dense"
+            target_desc = target_modules if target_modules else "ALL RMSNorm"
             # Use print() to ensure visibility regardless of logging level
-            print(f"[AQN] Noise injection - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}")
+            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, Target: {target_desc}")
 
     if sigma == 0:
         return
 
-    # Import RMSNorm classes based on model type
-    norm_classes = []
-    try:
-        from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
-        norm_classes.append(Qwen2RMSNorm)
-    except ImportError:
-        pass
-
-    try:
-        from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeRMSNorm
-        norm_classes.append(Qwen2MoeRMSNorm)
-    except ImportError:
-        pass
-
-    try:
-        from transformers.models.llama.modeling_llama import LlamaRMSNorm
-        norm_classes.append(LlamaRMSNorm)
-    except ImportError:
-        pass
-
-    if not norm_classes:
-        logger.warning("No RMSNorm classes found, noise injection may not work correctly")
-
-    norm_classes = tuple(norm_classes)
+    # Detect RMSNorm by class name (works with vLLM's model implementations)
+    # vLLM uses its own model classes, not transformers', so we check class name
+    def _is_rmsnorm(module):
+        """Check if module is an RMSNorm layer by class name and structure."""
+        class_name = module.__class__.__name__.lower()
+        # Check for RMSNorm in class name (handles Qwen2RMSNorm, LlamaRMSNorm, etc.)
+        if 'rmsnorm' not in class_name:
+            return False
+        # Verify it has a weight parameter (all RMSNorm layers have this)
+        if not hasattr(module, 'weight'):
+            return False
+        if not isinstance(module.weight, torch.Tensor):
+            return False
+        return True
 
     noise_count = 0
     skipped_count = 0
 
     for name, module in model.named_modules():
-        # Skip if not RMSNorm
-        if not isinstance(module, norm_classes):
+        # Skip if not RMSNorm (use class name detection for vLLM compatibility)
+        if not _is_rmsnorm(module):
             continue
 
         # Check exclusion patterns first

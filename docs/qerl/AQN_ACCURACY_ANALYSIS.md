@@ -1,11 +1,23 @@
 # AQN (Adaptive Quantization Noise) Accuracy Impact Analysis
 
-**Date**: 2025-12-28
+**Date**: 2025-12-28 (UPDATED 2025-12-29)
 **Branch**: `feature/npu-aqn-test`
+
+> ⚠️ **CRITICAL BUG DISCOVERED (2025-12-29)**
+>
+> All test results in this document are **INVALID**. A critical bug was discovered where no noise was actually being applied during "AQN" tests.
+>
+> **Root Cause**: The code used `isinstance(module, Qwen2RMSNorm)` with transformers classes, but vLLM uses its own model implementations with different class names. The isinstance check always failed, resulting in 0 layers receiving noise.
+>
+> **Impact**: All "AQN" tests (Test 1, Test 2, Test 3 first run) were effectively running as baseline (no noise applied).
+>
+> **Fix Applied**: Changed to class name detection: `'rmsnorm' in module.__class__.__name__.lower()`
+>
+> **Retesting**: Test 3 v2 is now running with the fix applied (2025-12-29 14:18 CST). Results will be updated once available.
 
 ## Executive Summary
 
-AQN (Adaptive Quantization Noise) **negatively impacts accuracy** when applied to non-quantized (BF16) models. The technique was designed specifically for **quantized models (nvfp4)** to compensate for quantization errors, not for regular precision training.
+~~AQN (Adaptive Quantization Noise) **negatively impacts accuracy** when applied to non-quantized (BF16) models.~~ **CONCLUSIONS PENDING** - Previous tests did not actually apply noise. Re-testing with fixed code in progress.
 
 ## Experimental Results
 

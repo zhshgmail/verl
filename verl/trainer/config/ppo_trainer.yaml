@@ -211,6 +211,29 @@ trainer:
   #  mode: "auto", "enable", or "disable"
   use_legacy_worker_impl: auto
 
+  # Noise injection config for AQN (Adaptive Quantization Noise)
+  noise_injection:
+
+    # Whether to enable noise injection (only for quantized models)
+    enabled: false
+
+    # Initial sigma value for noise
+    sigma_start: 0.05
+
+    # Final sigma value for noise
+    sigma_end: 0.0005
+
+    # Number of decay stages
+    num_stages: 10
+
+    # Target modules for noise injection (empty = auto-detect based on model type)
+    # Dense models: ALL RMSNorm layers (QeRL original)
+    # MoE models: post_attention_layernorm only
+    target_modules: []
+
+    # Patterns to exclude from noise injection (empty = auto-detect)
+    exclude_patterns: []
+
 # profiler configs
 global_profiler:
 
