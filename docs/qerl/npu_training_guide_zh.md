@@ -144,6 +144,57 @@ trainer:
 
 ---
 
+## HBM 利用率优化
+
+### 1. 问题背景
+
+默认配置下，NPU HBM 利用率较低（~45%），导致训练效率不佳。参考 AReaL 框架的配置，可以显著提高资源利用率。
+
+### 2. AReaL 配置对比
+
+| 参数 | AReaL 配置 | VERL 默认 | 优化后 |
+|------|-----------|----------|--------|
+| `train_batch_size` | 256 | 64 | **128** |
+| `gpu_memory_utilization` | 0.9 | 0.4 | **0.8** |
+| `ppo_micro_batch_size_per_gpu` | - | 2 | **16** |
+| `ppo_mini_batch_size` | - | 16 | **32** |
+| `max_response_length` | 1024 | 2048 | **1024** |
+
+### 3. 优化后性能提升
+
+在 8x Ascend 910C NPU (64GB HBM) 上测试 Qwen2.5-1.5B-Instruct 模型：
+
+| 指标 | 优化前 | 优化后 | 提升幅度 |
+|------|--------|--------|---------|
+| **HBM 利用率** | 45% (30GB) | **84% (55GB)** | +86% |
+| **吞吐量** | ~420 tok/s | **~600 tok/s** | +43% |
+| **总步数** | 232 | **116** | 减半 |
+| **预计时间** | ~2.5 小时 | **~1.4 小时** | -44% |
+| **MFU** | 0.21-0.24 | **0.31-0.34** | +45% |
+
+### 4. 优化配置示例
+
+```bash
+RAY_DEDUP_LOGS=0 python3 -m verl.trainer.main_ppo \
+  algorithm.adv_estimator=grpo \
+  data.train_batch_size=128 \
+  data.max_response_length=1024 \
+  actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+  actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+  actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 \
+  actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 \
+  # ... 其他参数
+```
+
+### 5. 注意事项
+
+- **内存监控**: 使用 `npu-smi info` 监控 HBM 使用情况
+- **渐进调优**: 如果出现 OOM，逐步降低 batch size
+- **模型大小**: 更大的模型（如 7B+）需要更保守的设置
+
+---
+
 ## AQN 噪声注入配置
 
 AQN (Adaptive Quantization Noise) 是一种在训练过程中向模型权重注入噪声的正则化技术，特别适用于量化模型的训练。
