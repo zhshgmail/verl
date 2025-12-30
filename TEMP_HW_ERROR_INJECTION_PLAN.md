@@ -343,6 +343,40 @@ bash scripts/test_hw_error_injection_a100.sh both     # Parallel tests
 - `[HW Error] First injection on <module_name>: input_shape=..., mean_error=..., rel_error=...`
 - Statistics tracking: count, mean_error, max_error per module
 
+### 2025-12-30 - A100 Verification Test PASSED ✓
+
+#### Test Configuration
+- **Model**: Qwen2.5-1.5B-Instruct
+- **Dataset**: GSM8K (7473 train, 1319 test)
+- **GPUs**: 4x A100-SXM4-80GB
+- **Error Scale**: 1e-5 (relative_gaussian)
+- **Target Modules**: RMSNorm only (57 hooks)
+
+#### Results
+**HW Error Injection Working**:
+```
+[HW Error] Registered 57 input hooks (scale=1e-05, type=relative_gaussian, targets=['rmsnorm'])
+[HW Error] First injection on model.layers.0.input_layernorm: input_shape=(100, 1536), mean_error=1.56e-07, rel_error=7.96e-06
+[HW Error] First injection on model.layers.0.post_attention_layernorm: input_shape=(100, 1536), mean_error=1.35e-06, rel_error=8.03e-06
+...
+[HW Error] First injection on model.norm: input_shape=(104, 1536), mean_error=1.52e-05, rel_error=8.01e-06
+```
+
+**Training Metrics**:
+- Step 1: val-acc=10.8%, throughput=150.9 tokens/s
+- Step 2: val-acc=19.5%, throughput=165.4 tokens/s
+- Hooks re-registered on each weight sync (as expected)
+
+#### Key Observations
+1. **57 hooks** = 28 layers × 2 RMSNorm (input + post_attention) + 1 final norm
+2. **Relative error ~8e-6** matches error_scale=1e-5 (expected for relative_gaussian)
+3. **No training instability** observed with 1e-5 error scale
+4. **Hooks survive weight sync** - re-registered on each sync
+
+#### Next Steps
+- Ready for parallel tests (minimal + MLP with down_proj)
+- Can increase error_scale to 1e-4 for more aggressive testing
+
 ---
 
 ## References
