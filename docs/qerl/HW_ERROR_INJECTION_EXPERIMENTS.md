@@ -268,6 +268,14 @@ The current approach using PyTorch module hooks has critical limitations:
 3. Training gradients should also be "noisy" - this affects convergence
 4. No artificial phase distinction - errors happen everywhere
 
+### Finding 5: Ray workers require environment variable approach
+Monkey-patching `torch.matmul` in the main process doesn't propagate to Ray workers because they are separate processes. The solution is to use environment variables that are inherited by child processes:
+
+1. Set `VERL_NOISY_OPS_ENABLED=1` before launching training
+2. `verl/__init__.py` imports `noisy_ops` module
+3. `noisy_ops._auto_enable_from_env()` is called at import time
+4. Each Ray worker will auto-enable noisy ops when it imports verl
+
 ## Next Steps: Operator-Level Error Injection
 
 ### Problem with Current Approach
@@ -319,11 +327,20 @@ class NoisyMatMul(torch.autograd.Function):
 | 2 | Add global enable/disable | Context manager for activating noisy ops | **DONE** |
 | 3 | Monkey-patch torch ops | Replace `F.linear`, `torch.matmul` globally | **DONE** |
 | 4 | Integrate into trainer | Add config, phase tracking, summary | **DONE** |
-| 5 | Test E4b | Operator-level 1e-4 scale test | Pending |
-| 6 | Compare with module-level | Does operator-level show more degradation? | Pending |
+| 5 | Fix Ray worker isolation | Enable via env vars for all processes | **DONE** |
+| 6 | Test E4b | Operator-level 1e-4 scale test | **In Progress** |
+| 7 | Compare with module-level | Does operator-level show more degradation? | Pending |
 
 ### Configuration
 
+**Environment Variables (Recommended for Ray workers):**
+```bash
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=1e-4
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+```
+
+**Hydra config (main process only):**
 ```yaml
 # In trainer config or command line:
 trainer:
@@ -333,12 +350,16 @@ trainer:
     error_type: relative_gaussian
 ```
 
+**Important:** Use environment variables to ensure noisy ops is enabled in ALL processes (including Ray workers). The env vars are read at `import verl` time via `_auto_enable_from_env()`.
+
 ### Test Script
 
 ```bash
 # Run operator-level noisy ops test on A100
 bash scripts/test_noisy_ops_a100.sh 1e-4 8
 ```
+
+**Expected Output:** You should see `[NoisyOps] Auto-enabled from environment:` messages from Ray workers, confirming noisy ops is active in all processes.
 
 ### Expected Behavior Differences
 
