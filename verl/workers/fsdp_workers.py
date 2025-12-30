@@ -199,34 +199,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # Enable operator-level noisy ops for actor workers (training forward + backward)
         # This is enabled here rather than via env var auto-enable to avoid torch.compile
         # conflicts in vLLM workers which also import verl.
+        # NOTE: Worker receives actor_rollout_ref config, not full config, so we use env vars
         self._noisy_ops_enabled = False
+        noisy_ops_enabled_env = os.environ.get('VERL_NOISY_OPS_ENABLED', '').lower()
         training_only_env = os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower()
-        if self._is_actor and training_only_env in ('1', 'true', 'yes'):
-            # Get noisy_ops config - try different config paths for robustness
-            noisy_ops_config = None
-            has_trainer = hasattr(self.config, 'trainer')
-            has_noisy_ops = has_trainer and hasattr(self.config.trainer, 'noisy_ops')
-            print(f"[ActorRolloutRefWorker] Checking noisy ops config: has_trainer={has_trainer}, "
-                  f"has_noisy_ops={has_noisy_ops}, env={training_only_env}")
 
-            if has_noisy_ops:
-                noisy_ops_config = self.config.trainer.noisy_ops
-            elif 'trainer' in self.config:
-                trainer_cfg = self.config.get('trainer', {})
-                if 'noisy_ops' in trainer_cfg:
-                    noisy_ops_config = trainer_cfg.get('noisy_ops', {})
-
-            if noisy_ops_config:
-                enabled = noisy_ops_config.get('enabled', False)
-                print(f"[ActorRolloutRefWorker] noisy_ops_config found: enabled={enabled}")
-                if enabled:
-                    from verl.utils.noisy_ops import enable_noisy_ops
-                    error_scale = noisy_ops_config.get('error_scale', 1e-4)
-                    error_type = noisy_ops_config.get('error_type', 'relative_gaussian')
-                    enable_noisy_ops(error_scale=error_scale, error_type=error_type)
-                    self._noisy_ops_enabled = True
-                    print(f"[ActorRolloutRefWorker] Noisy ops enabled for actor training: "
-                          f"scale={error_scale}, type={error_type}")
+        if (self._is_actor and
+            noisy_ops_enabled_env in ('1', 'true', 'yes') and
+            training_only_env in ('1', 'true', 'yes')):
+            from verl.utils.noisy_ops import enable_noisy_ops
+            error_scale = float(os.environ.get('VERL_NOISY_OPS_SCALE', '1e-4'))
+            error_type = os.environ.get('VERL_NOISY_OPS_TYPE', 'relative_gaussian')
+            enable_noisy_ops(error_scale=error_scale, error_type=error_type)
+            self._noisy_ops_enabled = True
+            print(f"[ActorRolloutRefWorker] Noisy ops enabled for actor training: "
+                  f"scale={error_scale}, type={error_type}")
 
         # TODO(haibin.lin):
         # As of now the type of config is DictConfig, if we assign config.profiler with ProfilerConfig,
