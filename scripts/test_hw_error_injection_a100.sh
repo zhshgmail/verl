@@ -1,17 +1,26 @@
 #!/bin/bash
 # Test HW Error Injection on A100 with Qwen2.5-1.5B + GSM8K
-# Usage: bash scripts/test_hw_error_injection_a100.sh [minimal|mlp|both]
+# Usage: bash scripts/test_hw_error_injection_a100.sh [MODE] [N_GPUS] [ERROR_SCALE]
 #
-# Test configurations:
-# - minimal: Only RMSNorm layers
-# - mlp: RMSNorm + down_proj
-# - both: Run both in parallel (4 GPUs each)
+# Test configurations (by operator scope):
+# - minimal: Only RMSNorm layers (57 hooks, <1% FLOPs)
+# - mlp: RMSNorm + down_proj (85 hooks, ~15% FLOPs)
+# - linear: All Linear layers (197 hooks, ~95% FLOPs) [RECOMMENDED]
+# - all: RMSNorm + all Linear (254 hooks, ~96% FLOPs)
+#
+# Error scale recommendations:
+# - 1e-5: Conservative, may not show measurable impact
+# - 1e-4: Aggressive, should show observable accuracy differences
+#
+# Examples:
+#   bash scripts/test_hw_error_injection_a100.sh linear 8 1e-5   # Linear layers, 8 GPUs, 1e-5 scale
+#   bash scripts/test_hw_error_injection_a100.sh linear 8 1e-4   # Linear layers, 8 GPUs, 1e-4 scale (aggressive)
 
 set -x
 
 # Configuration
-MODE=${1:-minimal}  # minimal, mlp, or both
-N_GPUS=${2:-4}
+MODE=${1:-linear}  # minimal, mlp, linear, all
+N_GPUS=${2:-8}
 ERROR_SCALE=${3:-1e-5}
 
 # Model and data paths (adjust for your setup)
@@ -72,35 +81,64 @@ run_mlp() {
         2>&1 | tee /tmp/hw_error_mlp.log
 }
 
-run_both() {
-    echo "=== Running Both Tests in Parallel (4 GPUs each) ==="
+run_linear() {
+    echo "=== Running Linear Layer HW Error Injection (197 hooks, ~95% FLOPs) ==="
+    python3 -m verl.trainer.main_ppo \
+        --config-name=ppo_trainer \
+        ${COMMON_ARGS} \
+        ${HW_ERROR_BASE} \
+        "trainer.hw_error_injection.target_modules=['linear']" \
+        trainer.experiment_name=hw_error_linear_${ERROR_SCALE} \
+        2>&1 | tee /tmp/hw_error_linear.log
+}
 
-    # Minimal on GPUs 0-3
+run_all() {
+    echo "=== Running All Operators HW Error Injection (RMSNorm + Linear, ~96% FLOPs) ==="
+    python3 -m verl.trainer.main_ppo \
+        --config-name=ppo_trainer \
+        ${COMMON_ARGS} \
+        ${HW_ERROR_BASE} \
+        "trainer.hw_error_injection.target_modules=['rmsnorm','linear']" \
+        trainer.experiment_name=hw_error_all_${ERROR_SCALE} \
+        2>&1 | tee /tmp/hw_error_all.log
+}
+
+run_comparison() {
+    echo "=== Running Comparison: Linear 1e-5 vs Linear 1e-4 (4 GPUs each) ==="
+
+    # Linear 1e-5 on GPUs 0-3
     CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main_ppo \
         --config-name=ppo_trainer \
         ${COMMON_ARGS} \
-        ${HW_ERROR_BASE} \
-        "trainer.hw_error_injection.target_modules=['rmsnorm']" \
-        trainer.experiment_name=hw_error_minimal_${ERROR_SCALE} \
+        trainer.hw_error_injection.enabled=True \
+        trainer.hw_error_injection.error_scale=1e-5 \
+        trainer.hw_error_injection.error_type=relative_gaussian \
+        trainer.hw_error_injection.injection_point=input \
+        trainer.hw_error_injection.apply_during=rollout \
+        "trainer.hw_error_injection.target_modules=['linear']" \
+        trainer.experiment_name=hw_error_linear_1e-5 \
         trainer.n_gpus_per_node=4 \
-        2>&1 | tee /tmp/hw_error_minimal.log &
+        2>&1 | tee /tmp/hw_error_linear_1e-5.log &
     PID1=$!
 
-    # MLP on GPUs 4-7
+    # Linear 1e-4 on GPUs 4-7
     CUDA_VISIBLE_DEVICES=4,5,6,7 python3 -m verl.trainer.main_ppo \
         --config-name=ppo_trainer \
         ${COMMON_ARGS} \
-        ${HW_ERROR_BASE} \
-        "trainer.hw_error_injection.target_modules=['rmsnorm','down_proj']" \
-        trainer.experiment_name=hw_error_mlp_${ERROR_SCALE} \
+        trainer.hw_error_injection.enabled=True \
+        trainer.hw_error_injection.error_scale=1e-4 \
+        trainer.hw_error_injection.error_type=relative_gaussian \
+        trainer.hw_error_injection.injection_point=input \
+        trainer.hw_error_injection.apply_during=rollout \
+        "trainer.hw_error_injection.target_modules=['linear']" \
+        trainer.experiment_name=hw_error_linear_1e-4 \
         trainer.n_gpus_per_node=4 \
-        2>&1 | tee /tmp/hw_error_mlp.log &
+        2>&1 | tee /tmp/hw_error_linear_1e-4.log &
     PID2=$!
 
-    echo "Started minimal test (PID: $PID1) and MLP test (PID: $PID2)"
-    echo "Logs: /tmp/hw_error_minimal.log, /tmp/hw_error_mlp.log"
+    echo "Started Linear 1e-5 (PID: $PID1) and Linear 1e-4 (PID: $PID2)"
+    echo "Logs: /tmp/hw_error_linear_1e-5.log, /tmp/hw_error_linear_1e-4.log"
 
-    # Wait for both
     wait $PID1 $PID2
     echo "Both tests completed."
 }
@@ -112,12 +150,25 @@ case $MODE in
     mlp)
         run_mlp
         ;;
-    both)
-        run_both
+    linear)
+        run_linear
+        ;;
+    all)
+        run_all
+        ;;
+    comparison)
+        run_comparison
         ;;
     *)
         echo "Unknown mode: $MODE"
-        echo "Usage: $0 [minimal|mlp|both] [n_gpus] [error_scale]"
+        echo "Usage: $0 [minimal|mlp|linear|all|comparison] [n_gpus] [error_scale]"
+        echo ""
+        echo "Modes:"
+        echo "  minimal    - RMSNorm only (57 hooks, <1% FLOPs)"
+        echo "  mlp        - RMSNorm + down_proj (85 hooks, ~15% FLOPs)"
+        echo "  linear     - All Linear layers (197 hooks, ~95% FLOPs) [RECOMMENDED]"
+        echo "  all        - RMSNorm + Linear (254 hooks, ~96% FLOPs)"
+        echo "  comparison - Run Linear 1e-5 vs 1e-4 in parallel (4 GPUs each)"
         exit 1
         ;;
 esac
