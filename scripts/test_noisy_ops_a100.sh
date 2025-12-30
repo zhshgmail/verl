@@ -85,9 +85,9 @@ echo ""
 python3 -m verl.trainer.main_ppo \
     --config-name=ppo_trainer \
     ${COMMON_ARGS} \
-    trainer.noisy_ops.enabled=True \
-    trainer.noisy_ops.error_scale=${ERROR_SCALE} \
-    trainer.noisy_ops.error_type=relative_gaussian \
+    +trainer.noisy_ops.enabled=True \
+    +trainer.noisy_ops.error_scale=${ERROR_SCALE} \
+    +trainer.noisy_ops.error_type=relative_gaussian \
     trainer.experiment_name=noisy_ops_${ERROR_SCALE}
 
 echo "=== Test Complete ==="
