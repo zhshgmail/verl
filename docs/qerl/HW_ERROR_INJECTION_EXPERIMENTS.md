@@ -313,13 +313,32 @@ class NoisyMatMul(torch.autograd.Function):
 
 ### Implementation Plan
 
-| Step | Task | Description |
-|------|------|-------------|
-| 1 | Create `verl/utils/noisy_ops.py` | Noisy autograd functions for MatMul |
-| 2 | Add global enable/disable | Context manager for activating noisy ops |
-| 3 | Monkey-patch torch ops | Replace `F.linear`, `torch.matmul` globally |
-| 4 | Test E4b | Operator-level 1e-4 scale test |
-| 5 | Compare with module-level | Does operator-level show more degradation? |
+| Step | Task | Description | Status |
+|------|------|-------------|--------|
+| 1 | Create `verl/utils/noisy_ops.py` | Noisy autograd functions for MatMul | **DONE** |
+| 2 | Add global enable/disable | Context manager for activating noisy ops | **DONE** |
+| 3 | Monkey-patch torch ops | Replace `F.linear`, `torch.matmul` globally | **DONE** |
+| 4 | Integrate into trainer | Add config, phase tracking, summary | **DONE** |
+| 5 | Test E4b | Operator-level 1e-4 scale test | Pending |
+| 6 | Compare with module-level | Does operator-level show more degradation? | Pending |
+
+### Configuration
+
+```yaml
+# In trainer config or command line:
+trainer:
+  noisy_ops:
+    enabled: true
+    error_scale: 1e-4        # 10x larger than module-level test
+    error_type: relative_gaussian
+```
+
+### Test Script
+
+```bash
+# Run operator-level noisy ops test on A100
+bash scripts/test_noisy_ops_a100.sh 1e-4 8
+```
 
 ### Expected Behavior Differences
 
