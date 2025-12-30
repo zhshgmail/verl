@@ -137,13 +137,42 @@ python3 -m verl.trainer.main_ppo \
   1. Error scale too small
   2. Operator scope too narrow (RMSNorm = <1% of FLOPs)
 
-### E3: Linear Layers, Error Scale 1e-5 (Pending)
+### E3: Linear Layers, Error Scale 1e-5 (Completed)
 
 **Configuration:**
-- Target Modules: All Linear layers (197 hooks, ~95% FLOPs)
-- Error Scale: 1e-5
+- Model: Qwen2.5-1.5B-Instruct
+- Dataset: GSM8K (7473 train, 1319 test)
+- GPUs: 8x A100-SXM4-80GB
+- Error Scale: 1e-5 (relative_gaussian)
+- Target Modules: Linear layers (112 vLLM Linear hooks, ~95% FLOPs)
+- Total Steps: 116 (2 epochs)
+- Config: Matches `run_gpu_baseline.sh` exactly (batch=128, lr=5e-7, n=5)
 
-**Hypothesis:** With 95% FLOPs coverage, accumulated error should be more significant.
+**Results:**
+| Step | OOD Accuracy |
+|------|--------------|
+| 0 | 8.19% |
+| 20 | 73.54% |
+| 40 | 74.37% |
+| 60 | 76.27% |
+| 80 | 76.27% |
+| 100 | 76.65% |
+| 116 | **76.35%** |
+
+**Comparison with GPU Baseline:**
+| Metric | GPU Baseline | HW Error (Linear 1e-5) | Delta |
+|--------|--------------|------------------------|-------|
+| Final OOD accuracy | **76.88%** | **76.35%** | **-0.53%** |
+| Total Steps | 116 | 116 | Same |
+
+**Conclusion:**
+- **1e-5 error scale with Linear layers (112 hooks, ~95% FLOPs) still shows minimal impact** (-0.53%)
+- Training converges normally with similar trajectory to baseline
+- Error injection is working (verified hook registration and injection messages)
+- The 1e-5 relative error is too small to cause observable degradation even with high FLOPs coverage
+
+**Key Insight:**
+The error scale matters more than operator coverage. Need to test with larger scales (1e-4, 1e-3).
 
 ### E4: Linear Layers, Error Scale 1e-4 (Pending)
 
@@ -157,11 +186,11 @@ python3 -m verl.trainer.main_ppo \
 
 ### Phase 1: Operator Scope Impact (Current)
 
-| Test | Target | Scale | Purpose |
-|------|--------|-------|---------|
-| E2 | RMSNorm | 1e-5 | Baseline narrow scope (DONE) |
-| **E3** | **Linear** | **1e-5** | **Broad scope, same scale** |
-| E3b | All | 1e-5 | Maximum coverage |
+| Test | Target | Scale | Purpose | Status |
+|------|--------|-------|---------|--------|
+| E2 | RMSNorm | 1e-5 | Baseline narrow scope | **DONE** |
+| E3 | Linear | 1e-5 | Broad scope, same scale | **DONE** (-0.53% vs baseline) |
+| E3b | All | 1e-5 | Maximum coverage | Pending |
 
 ### Phase 2: Error Scale Impact
 
