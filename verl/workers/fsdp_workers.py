@@ -203,7 +203,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_actor:
             noisy_ops_config = self.config.get('trainer', {}).get('noisy_ops', {})
             if noisy_ops_config.get('enabled', False):
-                import os
+                # Note: 'os' is already imported at module level
                 if os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower() in ('1', 'true', 'yes'):
                     from verl.utils.noisy_ops import enable_noisy_ops
                     error_scale = noisy_ops_config.get('error_scale', 1e-4)
