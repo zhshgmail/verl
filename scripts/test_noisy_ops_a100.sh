@@ -21,21 +21,16 @@ set -x
 # Disable WandB online logging (avoids API key requirement)
 export WANDB_MODE=offline
 
-# Use vLLM V0 to avoid torch.compile conflicts with noisy_ops
-# vLLM V1 uses torch.compile by default, which is incompatible with our custom autograd functions
-export VLLM_USE_V1=0
-
 # Configuration
 ERROR_SCALE=${1:-1e-4}
 N_GPUS=${2:-8}
 
 # Enable operator-level noisy ops via environment variables
-# TRAINING_ONLY=1 prevents auto-enable at import time, avoiding torch.compile conflicts
-# The trainer will enable noisy ops during actor training (forward + backward)
+# This injects noise into ALL torch.matmul/F.linear operations in ALL phases
+# Requires enforce_eager=True in rollout config to disable torch.compile in vLLM
 export VERL_NOISY_OPS_ENABLED=1
 export VERL_NOISY_OPS_SCALE=${ERROR_SCALE}
 export VERL_NOISY_OPS_TYPE=relative_gaussian
-export VERL_NOISY_OPS_TRAINING_ONLY=1
 
 # Model and data paths (adjust for your setup)
 MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}
@@ -66,6 +61,7 @@ COMMON_ARGS="
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4
     actor_rollout_ref.rollout.tensor_model_parallel_size=1
     actor_rollout_ref.rollout.name=vllm
+    actor_rollout_ref.rollout.enforce_eager=True
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8
     actor_rollout_ref.rollout.n=5
     actor_rollout_ref.rollout.enable_chunked_prefill=False
