@@ -153,6 +153,16 @@ class vLLMAsyncRollout(BaseRollout):
                   f"total_steps={self.noise_injection_config['total_steps']}, "
                   f"targets={targets_str}")
 
+        # Initialize HW error injection config (simulate GPU/NPU heterogeneous errors)
+        self.hw_error_injection_enabled = getattr(config, 'hw_error_injection_enabled', False)
+        self.hw_error_injector = None
+        if self.hw_error_injection_enabled:
+            hw_config = getattr(config, 'hw_error_injection_config', {})
+            # Convert OmegaConf to dict if needed
+            if hasattr(hw_config, 'items'):
+                hw_config = dict(hw_config)
+            print(f"[HW Error] HW error injection enabled: {hw_config}")
+
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
 
@@ -311,6 +321,33 @@ class vLLMAsyncRollout(BaseRollout):
                         exclude_patterns=self.noise_injection_config.get('exclude_patterns'),  # None = auto-detect
                         verbose=True
                     )
+
+            # HW ERROR INJECTION: Register hooks on model for simulating GPU/NPU errors
+            if hasattr(self, 'hw_error_injection_enabled') and self.hw_error_injection_enabled:
+                from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
+
+                # Remove old hooks if they exist
+                if self.hw_error_injector is not None:
+                    self.hw_error_injector.remove_hooks()
+
+                # Get config from rollout config
+                hw_config_dict = getattr(self.config, 'hw_error_injection_config', {})
+                if hasattr(hw_config_dict, 'items'):
+                    hw_config_dict = dict(hw_config_dict)
+
+                # Create injector and register hooks
+                hw_config = HWErrorConfig(
+                    enabled=True,
+                    error_scale=hw_config_dict.get('error_scale', 1e-5),
+                    error_type=hw_config_dict.get('error_type', 'relative_gaussian'),
+                    injection_point=hw_config_dict.get('injection_point', 'input'),
+                    target_modules=list(hw_config_dict.get('target_modules', ['rmsnorm'])),
+                    apply_during=hw_config_dict.get('apply_during', 'rollout'),
+                )
+                self.hw_error_injector = HWErrorInjector(hw_config)
+                self.hw_error_injector.set_phase('rollout')
+                num_hooks = self.hw_error_injector.register_hooks(model, verbose=True)
+                print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync")
 
     async def update_noise_injection_step(self, current_step: int):
         """Update current training step for noise injection schedule."""

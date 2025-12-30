@@ -365,6 +365,24 @@ class RayPPOTrainer:
             self.noise_injection_target_modules = noise_config.get('target_modules', ['post_attention_layernorm'])
             self.noise_injection_exclude_patterns = noise_config.get('exclude_patterns', ['input_layernorm'])
 
+        # Initialize HW error injection config (for simulating GPU/NPU heterogeneous errors)
+        self.hw_error_injection_enabled = self.config.trainer.get('hw_error_injection', {}).get('enabled', False)
+        if self.hw_error_injection_enabled:
+            hw_config = self.config.trainer.get('hw_error_injection', {})
+            self.hw_error_injection_config = {
+                'enabled': True,
+                'error_scale': hw_config.get('error_scale', 1e-5),
+                'error_type': hw_config.get('error_type', 'relative_gaussian'),
+                'injection_point': hw_config.get('injection_point', 'input'),
+                'target_modules': list(hw_config.get('target_modules', ['rmsnorm'])),
+                'apply_during': hw_config.get('apply_during', 'rollout'),
+            }
+            print(f"[RayPPOTrainer] HW error injection initialized: "
+                  f"scale={self.hw_error_injection_config['error_scale']}, "
+                  f"type={self.hw_error_injection_config['error_type']}, "
+                  f"point={self.hw_error_injection_config['injection_point']}, "
+                  f"targets={self.hw_error_injection_config['target_modules']}")
+
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
         # Compute noise injection total steps after dataloader is created
@@ -874,6 +892,14 @@ class RayPPOTrainer:
                 self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
                 self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
             print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
+
+        # Pass HW error injection config to rollout workers
+        if self.hw_error_injection_enabled:
+            from omegaconf import open_dict
+            with open_dict(self.config):
+                self.config.actor_rollout_ref.rollout.hw_error_injection_enabled = True
+                self.config.actor_rollout_ref.rollout.hw_error_injection_config = self.hw_error_injection_config
+            print(f"[RayPPOTrainer] HW error injection config passed to rollout: {self.hw_error_injection_config}")
 
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,

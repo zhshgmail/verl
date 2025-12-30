@@ -234,6 +234,31 @@ trainer:
     # Patterns to exclude from noise injection (empty = auto-detect)
     exclude_patterns: []
 
+  # HW Error Injection config (simulate GPU/NPU heterogeneous errors)
+  hw_error_injection:
+
+    # Whether to enable HW error injection
+    enabled: false
+
+    # Error scale (relative to tensor magnitude)
+    # 1e-6: ~BF16 precision level
+    # 1e-5: Moderate (recommended starting point)
+    # 1e-4: Aggressive
+    error_scale: 1e-5
+
+    # Error type: 'relative_gaussian', 'absolute_gaussian', 'systematic_bias'
+    error_type: relative_gaussian
+
+    # Injection point: 'input' (like fake quant) or 'output'
+    injection_point: input
+
+    # Target modules for error injection
+    # Options: 'rmsnorm', 'down_proj', 'o_proj', 'linear', etc.
+    target_modules: ['rmsnorm']
+
+    # Apply during: 'rollout', 'training', 'both'
+    apply_during: rollout
+
 # profiler configs
 global_profiler:
 
