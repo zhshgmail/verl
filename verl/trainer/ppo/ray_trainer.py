@@ -366,6 +366,7 @@ class RayPPOTrainer:
             self.noise_injection_exclude_patterns = noise_config.get('exclude_patterns', ['input_layernorm'])
 
         # Initialize HW error injection config (for simulating GPU/NPU heterogeneous errors)
+        # NOTE: This is module-level injection (forward hooks only, rollout phase only)
         self.hw_error_injection_enabled = self.config.trainer.get('hw_error_injection', {}).get('enabled', False)
         if self.hw_error_injection_enabled:
             hw_config = self.config.trainer.get('hw_error_injection', {})
@@ -382,6 +383,19 @@ class RayPPOTrainer:
                   f"type={self.hw_error_injection_config['error_type']}, "
                   f"point={self.hw_error_injection_config['injection_point']}, "
                   f"targets={self.hw_error_injection_config['target_modules']}")
+
+        # Initialize operator-level noisy ops (affects ALL matmul in forward AND backward)
+        # NOTE: This is more realistic than hw_error_injection - errors in all phases
+        self.noisy_ops_enabled = self.config.trainer.get('noisy_ops', {}).get('enabled', False)
+        if self.noisy_ops_enabled:
+            from verl.utils.noisy_ops import enable_noisy_ops
+            noisy_config = self.config.trainer.get('noisy_ops', {})
+            error_scale = noisy_config.get('error_scale', 1e-5)
+            error_type = noisy_config.get('error_type', 'relative_gaussian')
+            enable_noisy_ops(error_scale=error_scale, error_type=error_type)
+            print(f"[RayPPOTrainer] Operator-level noisy ops enabled: "
+                  f"scale={error_scale}, type={error_type}, "
+                  f"affects ALL matmul ops in forward AND backward passes")
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
@@ -1393,6 +1407,11 @@ class RayPPOTrainer:
                 with marked_timer("step", timing_raw):
                     # generate a batch
                     with marked_timer("gen", timing_raw, color="red"):
+                        # Set phase for noisy ops logging
+                        if self.noisy_ops_enabled:
+                            from verl.utils.noisy_ops import set_phase
+                            set_phase('rollout')
+
                         if not self.async_rollout_mode:
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
                         else:
@@ -1585,6 +1604,10 @@ class RayPPOTrainer:
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):
+                            # Set phase for noisy ops logging (includes forward AND backward)
+                            if self.noisy_ops_enabled:
+                                from verl.utils.noisy_ops import set_phase
+                                set_phase('actor_forward')  # backward happens inside _update_actor
                             actor_output = self._update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
@@ -1687,6 +1710,13 @@ class RayPPOTrainer:
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=True)
                     pprint(f"Final validation metrics: {last_val_metrics}")
+
+                    # Print noisy ops summary if enabled
+                    if self.noisy_ops_enabled:
+                        from verl.utils.noisy_ops import print_injection_summary, disable_noisy_ops
+                        print_injection_summary()
+                        disable_noisy_ops()
+
                     progress_bar.close()
                     return
 
