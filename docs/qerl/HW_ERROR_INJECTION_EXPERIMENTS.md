@@ -241,8 +241,9 @@ Look for output like:
 - Error injection at this scope doesn't produce measurable impact
 - **Action**: Expand to Linear layers (197 hooks, 95% FLOPs)
 
-### Finding 2: 1e-5 error scale may be too conservative
+### Finding 2: 1e-5 error scale is too conservative
 - Relative error of ~8e-6 is within normal floating point variance
+- Even with 95% FLOPs coverage (Linear layers), only -0.53% accuracy drop
 - Real GPU/NPU differences may be larger in specific operations
 - **Action**: Test with 1e-4 scale
 
@@ -250,6 +251,85 @@ Look for output like:
 - Hooks register and fire as expected
 - Error injection statistics confirm expected magnitudes
 - Hooks survive weight sync cycles
+
+### Finding 4: Module-level injection has fundamental limitations
+The current approach using PyTorch module hooks has critical limitations:
+
+| Limitation | Current Approach | Real HW Errors |
+|------------|------------------|----------------|
+| **Scope** | Module forward only | All operators |
+| **Backward pass** | Not affected | Gradients also have errors |
+| **Phase control** | Rollout vs training | Always present |
+| **Granularity** | Layer boundaries | Operator level (MatMul, etc.) |
+
+**Why this matters:**
+1. Real HW errors occur at **operator level** (MatMul kernel), not layer level
+2. Errors affect **both forward AND backward** passes
+3. Training gradients should also be "noisy" - this affects convergence
+4. No artificial phase distinction - errors happen everywhere
+
+## Next Steps: Operator-Level Error Injection
+
+### Problem with Current Approach
+
+```
+Current (Module-level):
+┌─────────────┐     ┌─────────────┐
+│ Linear Layer│ ──► │ Forward Hook│ ──► Error injected
+└─────────────┘     └─────────────┘
+                    (only forward, only rollout)
+
+Desired (Operator-level):
+┌─────────────┐     ┌─────────────┐
+│ torch.matmul│ ──► │  Wrapper    │ ──► Error in forward + backward
+└─────────────┘     └─────────────┘
+                    (all phases, all operations)
+```
+
+### Proposed Implementation: Custom Autograd Function
+
+Replace `torch.matmul` / `F.linear` with a noisy version:
+
+```python
+class NoisyMatMul(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, a, b):
+        result = torch.matmul(a, b)
+        # Inject error in forward
+        error = torch.randn_like(result) * result.abs() * ERROR_SCALE
+        ctx.save_for_backward(a, b)
+        return result + error
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        a, b = ctx.saved_tensors
+        grad_a = torch.matmul(grad_output, b.transpose(-1, -2))
+        grad_b = torch.matmul(a.transpose(-1, -2), grad_output)
+        # Inject error in backward too
+        grad_a += torch.randn_like(grad_a) * grad_a.abs() * ERROR_SCALE
+        grad_b += torch.randn_like(grad_b) * grad_b.abs() * ERROR_SCALE
+        return grad_a, grad_b
+```
+
+### Implementation Plan
+
+| Step | Task | Description |
+|------|------|-------------|
+| 1 | Create `verl/utils/noisy_ops.py` | Noisy autograd functions for MatMul |
+| 2 | Add global enable/disable | Context manager for activating noisy ops |
+| 3 | Monkey-patch torch ops | Replace `F.linear`, `torch.matmul` globally |
+| 4 | Test E4b | Operator-level 1e-4 scale test |
+| 5 | Compare with module-level | Does operator-level show more degradation? |
+
+### Expected Behavior Differences
+
+| Aspect | Module-level (current) | Operator-level (planned) |
+|--------|------------------------|--------------------------|
+| Forward errors | Yes | Yes |
+| Backward errors | No | **Yes** |
+| Gradient noise | None | **Present** |
+| Training stability | Normal | May be affected |
+| Error accumulation | Per-layer | **Per-operation** |
 
 ## References
 
