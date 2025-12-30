@@ -28,22 +28,22 @@ MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}
 TRAIN_DATA=${TRAIN_DATA:-"/data/datasets/gsm8k/train.parquet"}
 VAL_DATA=${VAL_DATA:-"/data/datasets/gsm8k/test.parquet"}
 
-# Common training args
+# Common training args (matching baseline config)
 COMMON_ARGS="
     data.train_files=${TRAIN_DATA}
     data.val_files=${VAL_DATA}
-    data.train_batch_size=32
+    data.train_batch_size=128
     actor_rollout_ref.model.path=${MODEL_PATH}
     actor_rollout_ref.actor.optim.lr=1e-6
-    actor_rollout_ref.actor.ppo_mini_batch_size=4
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2
+    actor_rollout_ref.actor.ppo_mini_batch_size=32
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4
     actor_rollout_ref.rollout.tensor_model_parallel_size=1
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4
     actor_rollout_ref.rollout.enforce_eager=True
     algorithm.adv_estimator=grpo
-    trainer.total_epochs=3
+    trainer.total_epochs=1
     trainer.test_freq=1
     trainer.project_name=hw_error_test
     trainer.n_gpus_per_node=${N_GPUS}
