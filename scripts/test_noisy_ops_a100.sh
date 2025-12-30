@@ -26,10 +26,12 @@ ERROR_SCALE=${1:-1e-4}
 N_GPUS=${2:-8}
 
 # Enable operator-level noisy ops via environment variables
-# This ensures noisy ops is enabled in ALL processes (including Ray workers)
+# TRAINING_ONLY=1 prevents auto-enable at import time, avoiding torch.compile conflicts
+# The trainer will enable noisy ops during actor training (forward + backward)
 export VERL_NOISY_OPS_ENABLED=1
 export VERL_NOISY_OPS_SCALE=${ERROR_SCALE}
 export VERL_NOISY_OPS_TYPE=relative_gaussian
+export VERL_NOISY_OPS_TRAINING_ONLY=1
 
 # Model and data paths (adjust for your setup)
 MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}

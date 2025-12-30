@@ -77,26 +77,42 @@ _AUTO_ENABLED = False  # Track if we've done auto-enable from env var
 def _auto_enable_from_env():
     """Auto-enable noisy ops if environment variables are set.
 
-    This is called at import time and ensures noisy ops is enabled
-    in all processes (including Ray workers) when the env var is set.
+    IMPORTANT: Due to incompatibility with torch.compile (used by vLLM),
+    auto-enable only works when VERL_NOISY_OPS_SKIP_VLLM is NOT set to "0".
+    By default, we skip enabling in processes that might use vLLM.
+
+    For training-only error injection, use enable_noisy_ops() explicitly
+    in the trainer code, or set VERL_NOISY_OPS_TRAINING_ONLY=1.
 
     Environment variables:
         VERL_NOISY_OPS_ENABLED: Set to "1" or "true" to enable
         VERL_NOISY_OPS_SCALE: Error scale (default: 1e-4)
         VERL_NOISY_OPS_TYPE: Error type (default: relative_gaussian)
+        VERL_NOISY_OPS_TRAINING_ONLY: Set to "1" to only enable during training
     """
     global _AUTO_ENABLED
     if _AUTO_ENABLED:
         return
 
     import os
+
     enabled = os.environ.get('VERL_NOISY_OPS_ENABLED', '').lower()
-    if enabled in ('1', 'true', 'yes'):
-        scale = float(os.environ.get('VERL_NOISY_OPS_SCALE', '1e-4'))
-        error_type = os.environ.get('VERL_NOISY_OPS_TYPE', 'relative_gaussian')
-        enable_noisy_ops(error_scale=scale, error_type=error_type)
+    if enabled not in ('1', 'true', 'yes'):
+        return
+
+    # If TRAINING_ONLY is set, don't auto-enable at import time
+    # The trainer will enable/disable noisy ops around training steps
+    training_only = os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower()
+    if training_only in ('1', 'true', 'yes'):
+        print("[NoisyOps] TRAINING_ONLY mode: will be enabled by trainer during actor training")
         _AUTO_ENABLED = True
-        print(f"[NoisyOps] Auto-enabled from environment: scale={scale}, type={error_type}")
+        return
+
+    scale = float(os.environ.get('VERL_NOISY_OPS_SCALE', '1e-4'))
+    error_type = os.environ.get('VERL_NOISY_OPS_TYPE', 'relative_gaussian')
+    enable_noisy_ops(error_scale=scale, error_type=error_type)
+    _AUTO_ENABLED = True
+    print(f"[NoisyOps] Auto-enabled from environment: scale={scale}, type={error_type}")
 
 
 def set_phase(phase: str) -> None:
@@ -244,35 +260,56 @@ class NoisyBMM(torch.autograd.Function):
         return grad_a, grad_b
 
 
-def _dynamo_disable(fn):
-    """Decorator to disable TorchDynamo tracing for a function.
+# Note: We use a simple flag check without torch.compile detection.
+# vLLM and other torch.compile users will skip these noisy ops entirely
+# because they run in separate processes where noisy ops isn't enabled,
+# or they use torch.compile which forces fallback to original ops via graph break.
 
-    This is needed because custom autograd functions (like NoisyMatMul.apply)
-    are not supported inside compiled graphs. Using this decorator causes
-    TorchDynamo to call the original function without tracing it.
-    """
+
+def _noisy_matmul_impl(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Implementation of noisy matmul - called only when noisy ops is enabled."""
+    return NoisyMatMul.apply(a, b)
+
+
+def _noisy_bmm_impl(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Implementation of noisy bmm - called only when noisy ops is enabled."""
+    return NoisyBMM.apply(a, b)
+
+
+def _noisy_linear_impl(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Implementation of noisy linear - called only when noisy ops is enabled."""
+    output = NoisyMatMul.apply(input, weight.t())
+    if bias is not None:
+        output = output + bias
+    return output
+
+
+# Mark implementations as incompatible with torch.compile
+# This forces torch.compile to use the original ops when it encounters these
+try:
     if hasattr(torch, '_dynamo') and hasattr(torch._dynamo, 'disable'):
-        return torch._dynamo.disable(fn)
-    return fn
+        _noisy_matmul_impl = torch._dynamo.disable(_noisy_matmul_impl, recursive=False)
+        _noisy_bmm_impl = torch._dynamo.disable(_noisy_bmm_impl, recursive=False)
+        _noisy_linear_impl = torch._dynamo.disable(_noisy_linear_impl, recursive=False)
+except Exception:
+    pass
 
 
-@_dynamo_disable
 def noisy_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Drop-in replacement for torch.matmul with error injection."""
     if not _NOISY_OPS_ENABLED:
         return _ORIGINAL_MATMUL(a, b)
-    return NoisyMatMul.apply(a, b)
+    # Call implementation which handles torch.compile via @dynamo.disable
+    return _noisy_matmul_impl(a, b)
 
 
-@_dynamo_disable
 def noisy_bmm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Drop-in replacement for torch.bmm with error injection."""
     if not _NOISY_OPS_ENABLED:
         return _ORIGINAL_BMM(a, b)
-    return NoisyBMM.apply(a, b)
+    return _noisy_bmm_impl(a, b)
 
 
-@_dynamo_disable
 def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Drop-in replacement for F.linear with error injection.
@@ -282,14 +319,7 @@ def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch
     """
     if not _NOISY_OPS_ENABLED:
         return _ORIGINAL_LINEAR(input, weight, bias)
-
-    # Compute matmul with noise
-    output = NoisyMatMul.apply(input, weight.t())
-
-    if bias is not None:
-        output = output + bias
-
-    return output
+    return _noisy_linear_impl(input, weight, bias)
 
 
 def enable_noisy_ops(

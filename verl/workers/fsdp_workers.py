@@ -196,6 +196,23 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self._is_ref = self.role in ["ref", "actor_rollout_ref"]
         self.use_orig_params = self.config.actor.fsdp_config.get("use_orig_params", False)
 
+        # Enable operator-level noisy ops for actor workers (training forward + backward)
+        # This is enabled here rather than via env var auto-enable to avoid torch.compile
+        # conflicts in vLLM workers which also import verl.
+        self._noisy_ops_enabled = False
+        if self._is_actor:
+            noisy_ops_config = self.config.get('trainer', {}).get('noisy_ops', {})
+            if noisy_ops_config.get('enabled', False):
+                import os
+                if os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower() in ('1', 'true', 'yes'):
+                    from verl.utils.noisy_ops import enable_noisy_ops
+                    error_scale = noisy_ops_config.get('error_scale', 1e-4)
+                    error_type = noisy_ops_config.get('error_type', 'relative_gaussian')
+                    enable_noisy_ops(error_scale=error_scale, error_type=error_type)
+                    self._noisy_ops_enabled = True
+                    print(f"[ActorRolloutRefWorker] Noisy ops enabled for actor training: "
+                          f"scale={error_scale}, type={error_type}")
+
         # TODO(haibin.lin):
         # As of now the type of config is DictConfig, if we assign config.profiler with ProfilerConfig,
         # it will actually convert the ProfilerConfig dataclass back to a DictConfig.

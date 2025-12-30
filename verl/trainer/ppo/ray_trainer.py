@@ -384,18 +384,26 @@ class RayPPOTrainer:
                   f"point={self.hw_error_injection_config['injection_point']}, "
                   f"targets={self.hw_error_injection_config['target_modules']}")
 
-        # Initialize operator-level noisy ops (affects ALL matmul in forward AND backward)
-        # NOTE: This is more realistic than hw_error_injection - errors in all phases
+        # Initialize operator-level noisy ops config (actual enabling happens in worker)
+        # NOTE: With VERL_NOISY_OPS_TRAINING_ONLY=1, noisy ops is enabled in actor workers
+        # to avoid torch.compile conflicts in vLLM workers
         self.noisy_ops_enabled = self.config.trainer.get('noisy_ops', {}).get('enabled', False)
         if self.noisy_ops_enabled:
-            from verl.utils.noisy_ops import enable_noisy_ops
+            import os
             noisy_config = self.config.trainer.get('noisy_ops', {})
             error_scale = noisy_config.get('error_scale', 1e-5)
             error_type = noisy_config.get('error_type', 'relative_gaussian')
-            enable_noisy_ops(error_scale=error_scale, error_type=error_type)
-            print(f"[RayPPOTrainer] Operator-level noisy ops enabled: "
-                  f"scale={error_scale}, type={error_type}, "
-                  f"affects ALL matmul ops in forward AND backward passes")
+            training_only = os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower() in ('1', 'true', 'yes')
+            if training_only:
+                print(f"[RayPPOTrainer] Noisy ops config: scale={error_scale}, type={error_type}, "
+                      f"TRAINING_ONLY mode (enabled in actor workers)")
+            else:
+                # Legacy mode: enable globally (may cause torch.compile issues with vLLM)
+                from verl.utils.noisy_ops import enable_noisy_ops
+                enable_noisy_ops(error_scale=error_scale, error_type=error_type)
+                print(f"[RayPPOTrainer] Operator-level noisy ops enabled: "
+                      f"scale={error_scale}, type={error_type}, "
+                      f"affects ALL matmul ops in forward AND backward passes")
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
