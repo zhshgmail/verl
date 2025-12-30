@@ -224,6 +224,10 @@ class RolloutConfig(BaseConfig):
     noise_injection_target_modules: list = field(default_factory=lambda: ['post_attention_layernorm'])
     noise_injection_exclude_patterns: list = field(default_factory=lambda: ['input_layernorm'])
 
+    # HW Error Injection configuration (simulate GPU/NPU heterogeneous errors)
+    hw_error_injection_enabled: bool = False
+    hw_error_injection_config: dict = field(default_factory=dict)
+
     def __post_init__(self):
         """Validate the rollout config"""
         if self.expert_parallel_size > 1:
