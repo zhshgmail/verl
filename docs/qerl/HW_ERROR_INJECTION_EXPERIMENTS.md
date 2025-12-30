@@ -328,53 +328,121 @@ class NoisyMatMul(torch.autograd.Function):
 | 3 | Monkey-patch torch ops | Replace `F.linear`, `torch.matmul` globally | **DONE** |
 | 4 | Integrate into trainer | Add config, phase tracking, summary | **DONE** |
 | 5 | Fix Ray worker isolation | Enable via env vars for all processes | **DONE** |
-| 6 | Test E4b | Operator-level 1e-4 scale test | **In Progress** |
-| 7 | Compare with module-level | Does operator-level show more degradation? | Pending |
+| 6 | Fix torch.compile conflict | Use `enforce_eager=True` for vLLM | **DONE** |
+| 7 | Test E4b | Operator-level 1e-4 scale test | **In Progress** |
+| 8 | Compare with module-level | Does operator-level show more degradation? | Pending |
+
+### Finding 6: torch.compile Conflict and Solution
+
+**Problem:** vLLM V1 uses `torch.compile` by default, which is incompatible with custom `autograd.Function` classes that use `@torch.compiler.disable`.
+
+```
+torch._dynamo.exc.Unsupported: Skip inlining `torch.compiler.disable()`d function
+```
+
+**Root Cause:**
+- Our `NoisyMatMul` autograd function uses `@torch.compiler.disable` to prevent tracing
+- torch.compile cannot trace through disabled functions
+- vLLM's model compilation fails when it encounters our patched `F.linear`
+
+**Solution:** Set `enforce_eager=True` in vLLM config to disable torch.compile:
+
+```yaml
+actor_rollout_ref:
+  rollout:
+    enforce_eager: True  # Disables torch.compile in vLLM
+```
+
+**Comparison of Approaches:**
+
+| Approach | How it works | torch.compile compatible |
+|----------|--------------|--------------------------|
+| Module-level hooks (`hw_error_injection.py`) | `register_forward_pre_hook` | ✅ Yes - hooks don't interfere |
+| Operator-level patching (`noisy_ops.py`) | Monkey-patch `F.linear` with custom autograd | ❌ No - needs `enforce_eager=True` |
 
 ### Configuration
 
-**Environment Variables (Recommended for Ray workers):**
+**Environment Variables (Required for Ray workers):**
 ```bash
 export VERL_NOISY_OPS_ENABLED=1
 export VERL_NOISY_OPS_SCALE=1e-4
 export VERL_NOISY_OPS_TYPE=relative_gaussian
 ```
 
-**Hydra config (main process only):**
+**Hydra config:**
 ```yaml
-# In trainer config or command line:
+# Rollout config - MUST have enforce_eager=True for noisy_ops compatibility
+actor_rollout_ref:
+  rollout:
+    enforce_eager: True  # Critical: disables torch.compile in vLLM
+
+# Trainer config
 trainer:
   noisy_ops:
     enabled: true
-    error_scale: 1e-4        # 10x larger than module-level test
+    error_scale: 1e-4
     error_type: relative_gaussian
 ```
 
-**Important:** Use environment variables to ensure noisy ops is enabled in ALL processes (including Ray workers). The env vars are read at `import verl` time via `_auto_enable_from_env()`.
+**Important:**
+- Use environment variables to ensure noisy ops is enabled in ALL processes (including Ray workers)
+- The env vars are read at `import verl` time via `_auto_enable_from_env()`
+- `enforce_eager=True` is required to disable torch.compile in vLLM
 
 ### Test Script
 
 ```bash
 # Run operator-level noisy ops test on A100
+# This script sets env vars and enforce_eager=True automatically
 bash scripts/test_noisy_ops_a100.sh 1e-4 8
 ```
 
-**Expected Output:** You should see `[NoisyOps] Auto-enabled from environment:` messages from Ray workers, confirming noisy ops is active in all processes.
+**Expected Output:**
+```
+[NoisyOps] Auto-enabled from environment: scale=0.0001, type=relative_gaussian
+[NoisyOps] Enabled: scale=0.0001, type=relative_gaussian, affects forward+backward passes globally
+```
 
-### Expected Behavior Differences
+You should see these messages from ALL Ray workers (including vLLM workers), confirming noisy ops is active everywhere.
 
-| Aspect | Module-level (current) | Operator-level (planned) |
-|--------|------------------------|--------------------------|
-| Forward errors | Yes | Yes |
-| Backward errors | No | **Yes** |
-| Gradient noise | None | **Present** |
-| Training stability | Normal | May be affected |
-| Error accumulation | Per-layer | **Per-operation** |
+### Behavior Summary
+
+| Phase | Module-level (hw_error_injection.py) | Operator-level (noisy_ops.py) |
+|-------|--------------------------------------|-------------------------------|
+| **Rollout Forward** | ✅ Yes (hook on Linear) | ✅ Yes (patched F.linear) |
+| **Rollout Backward** | ❌ No | ✅ **Yes** |
+| **Training Forward** | ✅ Yes | ✅ Yes |
+| **Training Backward** | ❌ No | ✅ **Yes** |
+| **Gradient noise** | ❌ None | ✅ **Present** |
+| **vLLM compatibility** | ✅ Works with torch.compile | ⚠️ Needs enforce_eager=True |
+
+### E4b: Operator-Level, Error Scale 1e-4 (In Progress)
+
+**Configuration:**
+- Model: Qwen2.5-1.5B-Instruct
+- Dataset: GSM8K (7473 train, 1319 test)
+- GPUs: 8x A100-SXM4-80GB
+- Error Scale: 1e-4 (relative_gaussian)
+- Implementation: `verl/utils/noisy_ops.py` (operator-level)
+- Noise in: **ALL phases** (rollout + training, forward + backward)
+- Total Steps: 116 (2 epochs)
+- Config: `enforce_eager=True` to disable torch.compile
+
+**Initial Results:**
+| Metric | Value |
+|--------|-------|
+| Initial OOD accuracy (step 0) | 7.88% |
+
+**Note:** Initial accuracy is slightly lower than module-level test (8.42%) because noise is now also injected during inference.
+
+**Status:** Running, will compare final accuracy with GPU baseline (76.88%)
 
 ## References
 
 - Related doc: [HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md](HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md)
 - Related doc: [AQN_ACCURACY_ANALYSIS.md](AQN_ACCURACY_ANALYSIS.md)
-- Implementation: `verl/utils/hw_error_injection.py`
-- Test script: `scripts/test_hw_error_injection_a100.sh`
+- Module-level implementation: `verl/utils/hw_error_injection.py`
+- Operator-level implementation: `verl/utils/noisy_ops.py`
+- Module-level test script: `scripts/test_hw_error_injection_a100.sh`
+- Operator-level test script: `scripts/test_noisy_ops_a100.sh`
 - quant_compute library: Fake quantization reference implementation
