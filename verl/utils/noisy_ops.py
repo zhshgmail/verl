@@ -71,6 +71,32 @@ _LOGGED_COUNT = {
     'actor_forward': 0,
     'actor_backward': 0,
 }
+_AUTO_ENABLED = False  # Track if we've done auto-enable from env var
+
+
+def _auto_enable_from_env():
+    """Auto-enable noisy ops if environment variables are set.
+
+    This is called at import time and ensures noisy ops is enabled
+    in all processes (including Ray workers) when the env var is set.
+
+    Environment variables:
+        VERL_NOISY_OPS_ENABLED: Set to "1" or "true" to enable
+        VERL_NOISY_OPS_SCALE: Error scale (default: 1e-4)
+        VERL_NOISY_OPS_TYPE: Error type (default: relative_gaussian)
+    """
+    global _AUTO_ENABLED
+    if _AUTO_ENABLED:
+        return
+
+    import os
+    enabled = os.environ.get('VERL_NOISY_OPS_ENABLED', '').lower()
+    if enabled in ('1', 'true', 'yes'):
+        scale = float(os.environ.get('VERL_NOISY_OPS_SCALE', '1e-4'))
+        error_type = os.environ.get('VERL_NOISY_OPS_TYPE', 'relative_gaussian')
+        enable_noisy_ops(error_scale=scale, error_type=error_type)
+        _AUTO_ENABLED = True
+        print(f"[NoisyOps] Auto-enabled from environment: scale={scale}, type={error_type}")
 
 
 def set_phase(phase: str) -> None:
@@ -406,4 +432,9 @@ __all__ = [
     'noisy_matmul',
     'noisy_bmm',
     'noisy_linear',
+    '_auto_enable_from_env',
 ]
+
+# Auto-enable from environment at import time
+# This ensures noisy ops is enabled in Ray workers when env vars are set
+_auto_enable_from_env()

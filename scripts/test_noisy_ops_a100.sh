@@ -25,6 +25,12 @@ export WANDB_MODE=offline
 ERROR_SCALE=${1:-1e-4}
 N_GPUS=${2:-8}
 
+# Enable operator-level noisy ops via environment variables
+# This ensures noisy ops is enabled in ALL processes (including Ray workers)
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=${ERROR_SCALE}
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+
 # Model and data paths (adjust for your setup)
 MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}
 TRAIN_DATA=${TRAIN_DATA:-"/data/datasets/gsm8k/train.parquet"}
@@ -75,6 +81,11 @@ COMMON_ARGS="
 echo "=== Running Operator-Level Noisy Ops Test ==="
 echo "Error scale: ${ERROR_SCALE}"
 echo "N GPUs: ${N_GPUS}"
+echo ""
+echo "Environment variables set:"
+echo "  VERL_NOISY_OPS_ENABLED=${VERL_NOISY_OPS_ENABLED}"
+echo "  VERL_NOISY_OPS_SCALE=${VERL_NOISY_OPS_SCALE}"
+echo "  VERL_NOISY_OPS_TYPE=${VERL_NOISY_OPS_TYPE}"
 echo ""
 echo "This test injects errors into:"
 echo "  - ALL torch.matmul / F.linear operations"

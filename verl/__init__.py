@@ -23,6 +23,10 @@ from .utils.device import is_npu_available
 from .utils.import_utils import import_external_libs
 from .utils.logging_utils import set_basic_config
 
+# Import noisy_ops to trigger auto-enable from environment variables
+# This ensures noisy ops is enabled in all processes (including Ray workers)
+from .utils import noisy_ops as _noisy_ops  # noqa: F401
+
 version_folder = os.path.dirname(os.path.join(os.path.abspath(__file__)))
 
 with open(os.path.join(version_folder, "version/version")) as f:
