@@ -21,6 +21,10 @@ set -x
 # Disable WandB online logging (avoids API key requirement)
 export WANDB_MODE=offline
 
+# Use vLLM V0 to avoid torch.compile conflicts with noisy_ops
+# vLLM V1 uses torch.compile by default, which is incompatible with our custom autograd functions
+export VLLM_USE_V1=0
+
 # Configuration
 ERROR_SCALE=${1:-1e-4}
 N_GPUS=${2:-8}
