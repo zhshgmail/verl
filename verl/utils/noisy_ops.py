@@ -244,6 +244,19 @@ class NoisyBMM(torch.autograd.Function):
         return grad_a, grad_b
 
 
+def _dynamo_disable(fn):
+    """Decorator to disable TorchDynamo tracing for a function.
+
+    This is needed because custom autograd functions (like NoisyMatMul.apply)
+    are not supported inside compiled graphs. Using this decorator causes
+    TorchDynamo to call the original function without tracing it.
+    """
+    if hasattr(torch, '_dynamo') and hasattr(torch._dynamo, 'disable'):
+        return torch._dynamo.disable(fn)
+    return fn
+
+
+@_dynamo_disable
 def noisy_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Drop-in replacement for torch.matmul with error injection."""
     if not _NOISY_OPS_ENABLED:
@@ -251,6 +264,7 @@ def noisy_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return NoisyMatMul.apply(a, b)
 
 
+@_dynamo_disable
 def noisy_bmm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Drop-in replacement for torch.bmm with error injection."""
     if not _NOISY_OPS_ENABLED:
@@ -258,6 +272,7 @@ def noisy_bmm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return NoisyBMM.apply(a, b)
 
 
+@_dynamo_disable
 def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Drop-in replacement for F.linear with error injection.
