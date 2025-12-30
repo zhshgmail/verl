@@ -200,11 +200,26 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # This is enabled here rather than via env var auto-enable to avoid torch.compile
         # conflicts in vLLM workers which also import verl.
         self._noisy_ops_enabled = False
-        if self._is_actor:
-            noisy_ops_config = self.config.get('trainer', {}).get('noisy_ops', {})
-            if noisy_ops_config.get('enabled', False):
-                # Note: 'os' is already imported at module level
-                if os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower() in ('1', 'true', 'yes'):
+        training_only_env = os.environ.get('VERL_NOISY_OPS_TRAINING_ONLY', '').lower()
+        if self._is_actor and training_only_env in ('1', 'true', 'yes'):
+            # Get noisy_ops config - try different config paths for robustness
+            noisy_ops_config = None
+            has_trainer = hasattr(self.config, 'trainer')
+            has_noisy_ops = has_trainer and hasattr(self.config.trainer, 'noisy_ops')
+            print(f"[ActorRolloutRefWorker] Checking noisy ops config: has_trainer={has_trainer}, "
+                  f"has_noisy_ops={has_noisy_ops}, env={training_only_env}")
+
+            if has_noisy_ops:
+                noisy_ops_config = self.config.trainer.noisy_ops
+            elif 'trainer' in self.config:
+                trainer_cfg = self.config.get('trainer', {})
+                if 'noisy_ops' in trainer_cfg:
+                    noisy_ops_config = trainer_cfg.get('noisy_ops', {})
+
+            if noisy_ops_config:
+                enabled = noisy_ops_config.get('enabled', False)
+                print(f"[ActorRolloutRefWorker] noisy_ops_config found: enabled={enabled}")
+                if enabled:
                     from verl.utils.noisy_ops import enable_noisy_ops
                     error_scale = noisy_ops_config.get('error_scale', 1e-4)
                     error_type = noisy_ops_config.get('error_type', 'relative_gaussian')
