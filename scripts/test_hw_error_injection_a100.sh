@@ -18,6 +18,9 @@
 
 set -x
 
+# Disable WandB online logging (avoids API key requirement)
+export WANDB_MODE=offline
+
 # Configuration
 MODE=${1:-linear}  # minimal, mlp, linear, all
 N_GPUS=${2:-8}
