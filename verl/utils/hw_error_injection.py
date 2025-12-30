@@ -180,8 +180,13 @@ class HWErrorInjector:
             # Check by class name
             if target_lower == 'rmsnorm' and 'rmsnorm' in class_name:
                 return True
-            if target_lower == 'linear' and isinstance(module, nn.Linear):
-                return True
+            if target_lower == 'linear':
+                # Standard PyTorch Linear
+                if isinstance(module, nn.Linear):
+                    return True
+                # vLLM's custom Linear layers (ColumnParallelLinear, RowParallelLinear, etc.)
+                if 'linear' in class_name:
+                    return True
             if target_lower == 'layernorm' and 'layernorm' in class_name:
                 return True
 
