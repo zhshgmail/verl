@@ -4,6 +4,73 @@
 **Branch**: `feature/npu-aqn-test`
 **Status**: In Progress
 
+---
+
+## Quick Reference: Environment & Reproduction
+
+### A100 Remote Machine Access
+```bash
+# SSH to A100 machine
+ssh root@90.90.102.18
+
+# Enter verl container
+docker exec -it verl-r3-test bash
+
+# Working directory inside container
+cd /home/z00637938/workspace/verl
+```
+
+### Model & Data Paths (Inside Container)
+| Resource | Path |
+|----------|------|
+| **Model** | `/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306` |
+| **Train Data** | `/data/z00637938/gsm8k/train.parquet` |
+| **Val Data** | `/data/z00637938/gsm8k/test.parquet` |
+
+### Training Scripts
+| Script | Purpose | Location |
+|--------|---------|----------|
+| `test_noisy_ops_a100.sh` | Operator-level noisy ops test | `scripts/test_noisy_ops_a100.sh` |
+| `test_hw_error_injection_a100.sh` | Module-level error injection test | `scripts/test_hw_error_injection_a100.sh` |
+
+### Log Locations (Inside Container)
+| Experiment | Log File |
+|------------|----------|
+| E4b (1e-4) | `/tmp/noisy_ops_1e-4.log` |
+| E4c (1e-3) | `/tmp/noisy_ops_1e-3.log` |
+| E4d (1e-2) | `/tmp/noisy_ops_1e-2.log` (pending) |
+
+### Monitoring Commands
+```bash
+# Check if training is running
+ssh root@90.90.102.18 "docker exec verl-r3-test pgrep -a python | grep trainer"
+
+# Check training progress
+ssh root@90.90.102.18 "docker exec verl-r3-test grep 'Training Progress' /tmp/noisy_ops_1e-4.log | tail -3"
+
+# Check validation results
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-4.log"
+
+# Full log tail
+ssh root@90.90.102.18 "docker exec verl-r3-test tail -100 /tmp/noisy_ops_1e-4.log"
+```
+
+### Running a New Test
+```bash
+# SSH and enter container
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+# Run with custom model/data paths
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_a100.sh 1e-3 8 > /tmp/noisy_ops_1e-3.log 2>&1 &
+```
+
+---
+
 ## Executive Summary
 
 This document tracks experiments using **synthetic HW heterogeneous error injection** on GPU to simulate GPU/NPU numerical differences. The goal is to test whether AQN (Adaptive Quantization Noise) can improve model robustness to hardware heterogeneous errors.
@@ -416,7 +483,7 @@ You should see these messages from ALL Ray workers (including vLLM workers), con
 | **Gradient noise** | ❌ None | ✅ **Present** |
 | **vLLM compatibility** | ✅ Works with torch.compile | ⚠️ Needs enforce_eager=True |
 
-### E4b: Operator-Level, Error Scale 1e-4 (In Progress)
+### E4b: Operator-Level, Error Scale 1e-4 (Completed)
 
 **Configuration:**
 - Model: Qwen2.5-1.5B-Instruct
@@ -428,14 +495,193 @@ You should see these messages from ALL Ray workers (including vLLM workers), con
 - Total Steps: 116 (2 epochs)
 - Config: `enforce_eager=True` to disable torch.compile
 
-**Initial Results:**
-| Metric | Value |
-|--------|-------|
-| Initial OOD accuracy (step 0) | 7.88% |
+**Results:**
+| Step | OOD Accuracy | ID Reward |
+|------|--------------|-----------|
+| 0 | 7.88% | - |
+| 20 | 73.01% | 75.0% |
+| 40 | 75.82% | 78.6% |
+| 60 | 77.41% | 81.9% |
+| 80 | 77.33% | 79.4% |
+| 100 | 77.18% | 81.7% |
+| 116 | **77.33%** | **82.5%** |
 
-**Note:** Initial accuracy is slightly lower than module-level test (8.42%) because noise is now also injected during inference.
+**Comparison with GPU Baseline:**
+| Metric | GPU Baseline | E4b (Noisy ops 1e-4) | Delta |
+|--------|--------------|---------------------|-------|
+| Final OOD accuracy | **76.88%** | **77.33%** | **+0.45%** |
 
-**Status:** Running, will compare final accuracy with GPU baseline (76.88%)
+**Conclusion:**
+- **1e-4 error scale with operator-level injection (ALL phases) does NOT degrade performance**
+- Final accuracy is actually slightly better than baseline (+0.45%)
+- This suggests:
+  1. Run-to-run variance may be larger than the noise effect
+  2. The noise may act as regularization (similar to dropout)
+  3. 1e-4 scale is still too small to cause observable degradation
+- **Action**: Test with 1e-3 scale to see if degradation appears
+
+### E4c: Operator-Level, Error Scale 1e-3 (Completed)
+
+**Configuration:**
+- Same as E4b, but with 10x larger error scale (1e-3)
+- All other settings identical
+
+**Results:**
+| Step | OOD Accuracy | ID Reward |
+|------|--------------|-----------|
+| 0 | 8.49% | - |
+| 20 | 73.84% | 74.8% |
+| 40 | 74.22% | 77.2% |
+| 60 | 75.74% | 79.8% |
+| 80 | 75.06% | 80.3% |
+| 100 | 76.42% | 83.0% |
+| 116 | **77.18%** | **84.5%** |
+
+**Comparison with E4b (1e-4) and GPU Baseline:**
+| Metric | GPU Baseline | E4b (1e-4) | E4c (1e-3) |
+|--------|--------------|------------|------------|
+| Final OOD | 76.88% | 77.33% | **77.18%** |
+| Delta vs baseline | - | +0.45% | **+0.30%** |
+
+**Progressive Degradation Analysis:**
+| Step | E4b (1e-4) | E4c (1e-3) | Delta |
+|------|------------|------------|-------|
+| 40 | 75.82% | 74.22% | **-1.60%** |
+| 60 | 77.41% | 75.74% | **-1.67%** |
+| 80 | 77.33% | 75.06% | **-2.27%** (max) |
+| 100 | 77.18% | 76.42% | -0.76% |
+| 116 | 77.33% | 77.18% | **-0.15%** |
+
+**Key Observations:**
+1. **Mid-training degradation**: E4c shows ~2% lower accuracy than E4b during steps 40-80
+2. **Recovery by end**: The gap narrows to only 0.15% by step 116
+3. **Above baseline**: Both E4b and E4c end above the GPU baseline (76.88%)
+4. **Regularization effect**: The noise may act as regularization (similar to dropout)
+
+**Conclusion:**
+- **1e-3 noise scale (10x larger) still does NOT cause significant final degradation**
+- Shows temporary mid-training impact (~2%) but recovers
+- Suggests models are robust to this level of computational noise
+- **Action**: Consider 1e-2 scale or adding noise to more operators (bmm, softmax, activations)
+
+### Finding 7: Training Robustness to Computational Noise
+
+The experiments reveal that transformer models are surprisingly robust to relative computational noise:
+
+| Noise Scale | Coverage | Final OOD Accuracy | vs Baseline |
+|-------------|----------|-------------------|-------------|
+| 1e-5 | Module-level Linear | 76.35% | -0.53% |
+| 1e-4 | Operator-level (all matmul, fwd+bwd) | 77.33% | **+0.45%** |
+| 1e-3 | Operator-level (all matmul, fwd+bwd) | 77.18% | **+0.30%** |
+
+**Implications:**
+1. Relative noise up to 0.1% (1e-3) in all matmul ops doesn't significantly harm convergence
+2. The noise may provide regularization benefits (like dropout/noise injection)
+3. To simulate HW errors that DO cause degradation, may need:
+   - Even higher noise scales (1e-2 or higher)
+   - Noise in additional operators (softmax, activations)
+   - Systematic bias rather than Gaussian noise
+
+---
+
+## Planned Experiments
+
+### E4d: Operator-Level, Error Scale 1e-2 (Pending)
+
+**Configuration:**
+- Same as E4b/E4c, but with 100x larger error scale (1e-2 = 1% relative error)
+- May destabilize training
+
+**Purpose:** Determine if 1% relative error causes significant degradation.
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_a100.sh 1e-2 8 > /tmp/noisy_ops_1e-2.log 2>&1 &
+```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-2.log"
+```
+
+### E5: ALL Operators (Like quant_compute Simulation) (Pending)
+
+**Rationale:**
+To properly simulate quantization error (like `quant_compute` for NVFP4 simulation), we need to inject noise into ALL operators affected by HW/quantization differences, not just matmul. This is analogous to how `quant_compute` applies fake quantization to all relevant operators during RL training.
+
+**Target Operators:**
+| Category | Operators | Current Coverage | E5 Coverage |
+|----------|-----------|------------------|-------------|
+| **Matrix Multiply** | `torch.matmul`, `torch.bmm`, `F.linear` | ✅ Yes | ✅ Yes |
+| **Element-wise** | `torch.add`, `torch.mul`, `torch.div` | ❌ No | ✅ Yes |
+| **Softmax** | `F.softmax` | ❌ No | ✅ Yes |
+| **Activations** | `F.silu`, `F.gelu`, `F.relu` | ❌ No | ✅ Yes |
+| **Normalization** | `F.layer_norm`, RMSNorm | ❌ No | ✅ Yes |
+
+**Implementation Required:**
+1. Extend `verl/utils/noisy_ops.py` to add noisy versions of:
+   - `F.softmax`
+   - `F.silu`, `F.gelu`
+   - `F.layer_norm`
+   - Element-wise ops (or use forward hooks on modules)
+
+2. Create new test script or add env var to enable ALL ops mode
+
+**Purpose:** Simulate full quantization-like error injection to observe degradation.
+
+### E6: Systematic Bias Instead of Gaussian (Pending)
+
+**Rationale:**
+Real HW differences often have systematic patterns (e.g., consistent rounding direction) rather than random Gaussian noise.
+
+**Error Types to Test:**
+| Type | Formula | Simulates |
+|------|---------|-----------|
+| `relative_gaussian` | `randn() * |x| * scale` | Random HW variance |
+| `systematic_bias` | `sign(x) * |x| * scale` | Consistent rounding bias |
+| `truncation` | `floor(x / scale) * scale` | Truncation error |
+
+### E7: AQN + Noisy Ops (Pending)
+
+**Prerequisites:**
+- E4d or E5 shows significant degradation (>2-3%)
+
+**Purpose:**
+Test if AQN (Adaptive Quantization Noise) during training can improve robustness to HW errors during inference.
+
+**Configuration:**
+```yaml
+trainer:
+  aqn:
+    enabled: true
+    sigma: 0.05
+  noisy_ops:
+    enabled: true
+    error_scale: <scale that showed degradation>
+```
+
+---
+
+## Experiment Summary Table
+
+| Test | Error Scale | Operator Coverage | Status | Final OOD | vs Baseline |
+|------|-------------|-------------------|--------|-----------|-------------|
+| Baseline | - | - | Done | 76.88% | - |
+| E2 | 1e-5 | Module-level RMSNorm | Done | 74.75% | -2.13% |
+| E3 | 1e-5 | Module-level Linear | Done | 76.35% | -0.53% |
+| E4b | 1e-4 | All matmul (fwd+bwd) | **Done** | 77.33% | +0.45% |
+| E4c | 1e-3 | All matmul (fwd+bwd) | **Done** | 77.18% | +0.30% |
+| E4d | 1e-2 | All matmul (fwd+bwd) | Pending | - | - |
+| E5 | TBD | ALL ops (like quant_compute) | Pending | - | - |
+| E6 | TBD | Systematic bias | Pending | - | - |
+| E7 | TBD | AQN + noisy ops | Pending | - | -
 
 ## References
 
