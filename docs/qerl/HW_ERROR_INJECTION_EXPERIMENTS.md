@@ -614,7 +614,7 @@ nohup bash scripts/test_noisy_ops_a100.sh 1e-2 8 > /tmp/noisy_ops_1e-2.log 2>&1 
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-2.log"
 ```
 
-### E5: FP4-Realistic Error Scale (5e-2) - Matmul Only (Running)
+### E5: FP4-Realistic Error Scale (5e-2) - Noise Only Baseline (Running)
 
 **Rationale:**
 Analysis of `QeRL/llm-compressor` and `quant_compute` revealed:
@@ -634,6 +634,7 @@ export VERL_NOISY_OPS_ENABLED=1
 export VERL_NOISY_OPS_SCALE=5e-2  # 5% - matches FP4 error level
 export VERL_NOISY_OPS_TYPE=relative_gaussian
 # DO NOT set VERL_NOISY_OPS_ALL_OPS=1 (only matmul/linear)
+# NO AQN - this is baseline under noise
 ```
 
 **Command:**
@@ -653,11 +654,62 @@ nohup bash scripts/test_noisy_ops_a100.sh 5e-2 8 > /tmp/noisy_ops_5e-2.log 2>&1 
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_5e-2.log"
 ```
 
-**Purpose:** Simulate FP4-level quantization error to observe realistic degradation.
+**Purpose:** Establish baseline for "training on noisy HW without mitigation". Shows how much FP4-level noise degrades accuracy.
 
 **Status:** Running.
 
+**Early Results (Step 20):**
+- OOD Accuracy: **61.64%** (vs baseline 73.01% = **-11.37%**)
+- First significant degradation observed!
+
 **Note:** ALL_OPS mode implementation is available (`VERL_NOISY_OPS_ALL_OPS=1`) but NOT used for E5 since QeRL only quantizes Linear layers.
+
+### E5a: FP4-Realistic Error Scale (5e-2) + AQN (Pending)
+
+**Purpose:** Test if AQN can mitigate noise degradation. This is the key experiment to validate the HW heterogeneous robustness hypothesis.
+
+**Configuration:**
+```bash
+# Same noise as E5
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=5e-2
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+
+# PLUS AQN (QeRL original parameters)
+# trainer.noise_injection.enabled=true
+# trainer.noise_injection.sigma_start=0.05
+# trainer.noise_injection.sigma_end=0.0005
+```
+
+**Hypothesis:**
+- E5a OOD accuracy > E5 OOD accuracy (AQN helps model learn despite noise)
+- E5a checkpoint passes robustness eval (clean ≈ noisy accuracy)
+
+**Expected Experimental Flow:**
+```
+GPU Baseline: 76.88%
+       │
+       ▼
+E5 (Noise only): ~65-70%? ◄── Degradation from 5% noise
+       │
+       ▼
+E5a (Noise + AQN): > E5 ◄── AQN mitigates degradation
+       │
+       ▼
+Robustness eval on E5a:
+  Clean ≈ Noisy = Model is ROBUST ✓
+```
+
+**Success Criteria:**
+1. E5a final OOD > E5 final OOD (AQN provides benefit under noise)
+2. E5a robustness eval: |Clean - Noisy| < 1% (model is robust)
+
+**If Successful:** This proves AQN works for **HW heterogeneous errors**, not just quantization - a novel finding beyond QeRL's original scope.
+
+**Command (after E5 completes):**
+```bash
+# TBD - will create test_noisy_ops_aqn.sh script
+```
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -760,17 +812,113 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 
 ## Experiment Summary Table
 
-| Test | Error Scale | Operator Coverage | Status | Final OOD | vs Baseline |
-|------|-------------|-------------------|--------|-----------|-------------|
-| Baseline | - | - | Done | 76.88% | - |
-| E2 | 1e-5 | Module-level RMSNorm | Done | 74.75% | -2.13% |
-| E3 | 1e-5 | Module-level Linear | Done | 76.35% | -0.53% |
-| E4b | 1e-4 | All matmul (fwd+bwd) | **Done** | 77.33% | +0.45% |
-| E4c | 1e-3 | All matmul (fwd+bwd) | **Done** | 77.18% | +0.30% |
-| E4d | 1e-2 | All matmul (fwd+bwd) | Pending | - | - |
-| **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **Running** | - | - |
-| E6 | TBD | Systematic bias | Pending | - | - |
-| E7 | TBD | AQN + noisy ops | Pending | - | -
+| Test | Error Scale | Operator Coverage | AQN | Status | Final OOD | vs Baseline |
+|------|-------------|-------------------|-----|--------|-----------|-------------|
+| Baseline | - | - | No | Done | 76.88% | - |
+| E2 | 1e-5 | Module-level RMSNorm | No | Done | 74.75% | -2.13% |
+| E3 | 1e-5 | Module-level Linear | No | Done | 76.35% | -0.53% |
+| E4b | 1e-4 | All matmul (fwd+bwd) | No | Done | 77.33% | +0.45% |
+| E4c | 1e-3 | All matmul (fwd+bwd) | No | Done | 77.18% | +0.30% |
+| E4d | 1e-2 | All matmul (fwd+bwd) | No | Pending | - | - |
+| **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Running** | ~61%@s20 | -11.37%@s20 |
+| **E5a** | **5e-2** | **matmul-only (FP4-realistic)** | **Yes** | **Pending** | - | - |
+| E6 | TBD | Systematic bias | No | Pending | - | - |
+
+## Robustness Evaluation Methodology
+
+### The Robustness Question
+
+When training with noisy ops, there are two different measurements:
+
+| Measurement | Training | Evaluation | What it Shows |
+|-------------|----------|------------|---------------|
+| **Performance under noise** | Noisy | Noisy | Accuracy when deployed on noisy HW |
+| **Robustness** | Noisy | **Clean** | Model's learned noise tolerance |
+
+### Why This Matters
+
+A **robust** model should:
+1. Learn from noisy training data
+2. **Maintain accuracy when noise is removed**
+
+This is the true test of robustness - if a model trained with noise maintains performance on clean hardware, it has learned to generalize despite the noise.
+
+### Clean Evaluation Scripts
+
+Two scripts are provided for robustness evaluation:
+
+**1. Python script for single evaluation:**
+```bash
+# Clean evaluation (no noise)
+VERL_NOISY_OPS_ENABLED=0 python scripts/clean_eval_checkpoint.py \
+    --model_path /path/to/checkpoint \
+    --data_path /data/gsm8k/test.parquet \
+    --n_samples 5
+
+# Noisy evaluation (for comparison)
+VERL_NOISY_OPS_ENABLED=1 VERL_NOISY_OPS_SCALE=5e-2 python scripts/clean_eval_checkpoint.py ...
+```
+
+**2. Bash script for robustness comparison:**
+```bash
+# Runs BOTH clean and noisy evaluation, computes robustness delta
+bash scripts/eval_robustness.sh \
+    /path/to/checkpoint \
+    /data/gsm8k/test.parquet \
+    5e-2  # error scale for noisy eval
+```
+
+### Interpreting Results
+
+| Clean - Noisy Delta | Interpretation |
+|---------------------|----------------|
+| < 1% | ✓ Model is **ROBUST** |
+| 1-3% | ⚠ Model is **MODERATELY ROBUST** |
+| > 3% | ✗ Model is **NOT ROBUST** |
+
+### Expected Outcomes by Training Type
+
+| Training Method | Expected Clean Accuracy | Expected Robustness |
+|-----------------|------------------------|---------------------|
+| Baseline (no noise) | High | Low (sensitive to noise) |
+| Noisy training | Lower | **High** (tolerant to noise) |
+| AQN + Noisy training | Medium | **Very High** (best robustness) |
+
+### How to Use in Experiments
+
+**Important:** Robustness evaluation is most meaningful for **E5a** (trained with AQN), not E5.
+
+- **E5 checkpoint**: Trained with noise, no AQN → expected to be NOT robust
+- **E5a checkpoint**: Trained with noise + AQN → expected to BE robust
+
+```bash
+# After E5a completes, evaluate the checkpoint for robustness
+CHECKPOINT=/data/checkpoints/noisy_ops_aqn_5e-2/global_step_116/actor
+DATA=/data/gsm8k/test.parquet
+
+bash scripts/eval_robustness.sh ${CHECKPOINT} ${DATA} 5e-2
+```
+
+This will produce:
+- `results_clean.json` - accuracy without noise (simulates clean HW deployment)
+- `results_noisy.json` - accuracy with noise (simulates noisy HW deployment)
+- Robustness summary printed to console
+
+### Full Experimental Validation
+
+To fully validate the HW heterogeneous robustness hypothesis:
+
+```bash
+# 1. E5 (no AQN) - expect degradation, NOT robust
+bash scripts/eval_robustness.sh /path/to/E5/checkpoint /data/gsm8k/test.parquet 5e-2
+# Expected: Clean >> Noisy (NOT robust)
+
+# 2. E5a (with AQN) - expect better accuracy, IS robust
+bash scripts/eval_robustness.sh /path/to/E5a/checkpoint /data/gsm8k/test.parquet 5e-2
+# Expected: Clean ≈ Noisy (ROBUST) AND Clean > E5's noisy accuracy
+```
+
+---
 
 ## References
 
@@ -782,4 +930,6 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 - Module-level test script: `scripts/test_hw_error_injection_a100.sh`
 - Operator-level test script (matmul only): `scripts/test_noisy_ops_a100.sh`
 - Operator-level test script (ALL ops): `scripts/test_noisy_ops_all_ops.sh`
+- Robustness evaluation script: `scripts/eval_robustness.sh`
+- Clean evaluation Python script: `scripts/clean_eval_checkpoint.py`
 - quant_compute library: Fake quantization reference implementation
