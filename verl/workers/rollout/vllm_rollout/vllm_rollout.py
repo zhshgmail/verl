@@ -136,6 +136,10 @@ class vLLMAsyncRollout(BaseRollout):
 
         # Initialize noise injection config (AQN - Adaptive Quantization Noise)
         # Use getattr for OmegaConf compatibility
+        epoch_ranges_raw = getattr(config, 'noise_injection_epoch_ranges', [])
+        # Convert epoch_ranges from list of lists to list of tuples
+        epoch_ranges = [tuple(r) for r in epoch_ranges_raw] if epoch_ranges_raw else []
+
         self.noise_injection_config = {
             'enabled': getattr(config, 'noise_injection_enabled', False),
             'sigma_trend': list(getattr(config, 'noise_injection_sigma_trend', [])),
@@ -145,13 +149,24 @@ class vLLMAsyncRollout(BaseRollout):
             # (Dense models: ALL RMSNorm, MoE models: post_attention_layernorm only)
             'target_modules': list(getattr(config, 'noise_injection_target_modules', [])) or None,
             'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', [])) or None,
+            # Epoch-aware config (Option C)
+            'epoch_aware': getattr(config, 'noise_injection_epoch_aware', False),
+            'epoch_ranges': epoch_ranges,
+            'stages_per_epoch': getattr(config, 'noise_injection_stages_per_epoch', 5),
+            'steps_per_epoch': getattr(config, 'noise_injection_steps_per_epoch', 0),
         }
         if self.noise_injection_config['enabled']:
             # Use print() to ensure visibility regardless of logging level
             targets_str = self.noise_injection_config['target_modules'] or 'AUTO (Dense=ALL, MoE=post_attn)'
-            print(f"[AQN] Noise injection enabled: {len(self.noise_injection_config['sigma_trend'])} stages, "
-                  f"total_steps={self.noise_injection_config['total_steps']}, "
-                  f"targets={targets_str}")
+            if self.noise_injection_config['epoch_aware']:
+                print(f"[AQN] Epoch-aware noise injection enabled: "
+                      f"{len(self.noise_injection_config['epoch_ranges'])} epochs, "
+                      f"{self.noise_injection_config['stages_per_epoch']} stages/epoch, "
+                      f"targets={targets_str}")
+            else:
+                print(f"[AQN] Noise injection enabled: {len(self.noise_injection_config['sigma_trend'])} stages, "
+                      f"total_steps={self.noise_injection_config['total_steps']}, "
+                      f"targets={targets_str}")
 
         # Initialize HW error injection config (simulate GPU/NPU heterogeneous errors)
         self.hw_error_injection_enabled = getattr(config, 'hw_error_injection_enabled', False)
@@ -300,27 +315,55 @@ class vLLMAsyncRollout(BaseRollout):
 
             # NOISE INJECTION (AQN): Apply to RMSNorm layers after weight sync
             if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
-                from verl.utils.noise_injection import generate_expert_gaussian_noise, get_sigma_by_step
-
                 current_step = self.noise_injection_config.get('current_step', 0)
                 total_steps = self.noise_injection_config.get('total_steps', 1000)
-                sigma_trend = self.noise_injection_config.get('sigma_trend', [])
+                epoch_aware = self.noise_injection_config.get('epoch_aware', False)
 
-                if sigma_trend and total_steps > 0:
-                    # Use print() to ensure visibility regardless of logging level
-                    sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
-                    print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
-                    # Pass None for target_modules/exclude_patterns to enable auto-detection
-                    # based on model type (Dense vs MoE)
-                    generate_expert_gaussian_noise(
-                        model=model,
-                        step=current_step,
-                        total_step=total_steps,
-                        sigma_trend=sigma_trend,
-                        target_modules=self.noise_injection_config.get('target_modules'),  # None = auto-detect
-                        exclude_patterns=self.noise_injection_config.get('exclude_patterns'),  # None = auto-detect
-                        verbose=True
-                    )
+                if epoch_aware:
+                    # Epoch-aware mode (Option C): sigma decays within each epoch
+                    from verl.utils.noise_injection import get_sigma_by_step_epoch_aware
+                    epoch_ranges = self.noise_injection_config.get('epoch_ranges', [])
+                    stages_per_epoch = self.noise_injection_config.get('stages_per_epoch', 5)
+                    steps_per_epoch = self.noise_injection_config.get('steps_per_epoch', 1)
+
+                    if epoch_ranges and steps_per_epoch > 0:
+                        sigma_id, sigma = get_sigma_by_step_epoch_aware(
+                            current_step, steps_per_epoch, epoch_ranges, stages_per_epoch
+                        )
+                        current_epoch = current_step // steps_per_epoch
+                        step_in_epoch = current_step % steps_per_epoch
+                        print(f"[AQN-EpochAware] step={current_step} (epoch {current_epoch+1}, step {step_in_epoch}), "
+                              f"sigma_id={sigma_id}, sigma={sigma:.6f}")
+
+                        if sigma > 0:
+                            from verl.utils.noise_injection import generate_expert_gaussian_noise
+                            # Create a dummy sigma_trend for the generate function (it uses sigma directly)
+                            generate_expert_gaussian_noise(
+                                model=model,
+                                step=0,  # Not used when sigma_trend has single value
+                                total_step=1,
+                                sigma_trend=[sigma],  # Single value = use this sigma directly
+                                target_modules=self.noise_injection_config.get('target_modules'),
+                                exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                                verbose=True
+                            )
+                else:
+                    # Original mode: sigma decays globally across all steps
+                    from verl.utils.noise_injection import generate_expert_gaussian_noise, get_sigma_by_step
+                    sigma_trend = self.noise_injection_config.get('sigma_trend', [])
+
+                    if sigma_trend and total_steps > 0:
+                        sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
+                        print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
+                        generate_expert_gaussian_noise(
+                            model=model,
+                            step=current_step,
+                            total_step=total_steps,
+                            sigma_trend=sigma_trend,
+                            target_modules=self.noise_injection_config.get('target_modules'),
+                            exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                            verbose=True
+                        )
 
             # HW ERROR INJECTION: Register hooks on model for simulating GPU/NPU errors
             if hasattr(self, 'hw_error_injection_enabled') and self.hw_error_injection_enabled:

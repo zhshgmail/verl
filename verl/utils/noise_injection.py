@@ -225,8 +225,105 @@ def get_sigma_schedule(sigma_start=0.01, sigma_end=0.001, num_stages=10):
     return sigma_decay_schedule_np.tolist()
 
 
+def get_epoch_aware_sigma_schedule(sigma_start=0.05, sigma_end=0.0005, num_epochs=2, stages_per_epoch=5):
+    """
+    Generate epoch-aware sigma schedule (Option C).
+
+    Each epoch has its own sigma range with exponential decay within the epoch.
+    This ensures meaningful noise levels throughout all epochs.
+
+    Args:
+        sigma_start: Starting sigma for epoch 1
+        sigma_end: Ending sigma for final epoch
+        num_epochs: Number of training epochs
+        stages_per_epoch: Number of decay stages per epoch
+
+    Returns:
+        List of (epoch_ranges, stages_per_epoch) where epoch_ranges is list of (start, end) tuples
+
+    Example for 2 epochs:
+        Epoch 1: 0.05 → 0.01 (exploration)
+        Epoch 2: 0.01 → 0.0005 (refinement)
+    """
+    import numpy as np
+
+    if num_epochs <= 0:
+        return [], stages_per_epoch
+
+    # Calculate intermediate sigma values at epoch boundaries
+    # Using exponential decay: sigma_i = sigma_start * (sigma_end/sigma_start)^(i/num_epochs)
+    epoch_boundaries = [
+        sigma_start * (sigma_end / sigma_start) ** (i / num_epochs)
+        for i in range(num_epochs + 1)
+    ]
+
+    # Create ranges for each epoch
+    epoch_ranges = [
+        (epoch_boundaries[i], epoch_boundaries[i + 1])
+        for i in range(num_epochs)
+    ]
+
+    return epoch_ranges, stages_per_epoch
+
+
+def get_sigma_by_step_epoch_aware(step, steps_per_epoch, epoch_ranges, stages_per_epoch, current_epoch=None):
+    """
+    Calculate sigma for epoch-aware decay schedule (Option C).
+
+    Args:
+        step: Current global training step
+        steps_per_epoch: Number of steps in one epoch
+        epoch_ranges: List of (sigma_start, sigma_end) tuples per epoch
+        stages_per_epoch: Number of decay stages per epoch
+        current_epoch: Current epoch (0-indexed), auto-calculated if None
+
+    Returns:
+        Tuple of (stage_id, sigma value)
+    """
+    import numpy as np
+
+    if not epoch_ranges:
+        return 0, 0
+
+    # Calculate current epoch if not provided
+    if current_epoch is None:
+        current_epoch = min(step // steps_per_epoch, len(epoch_ranges) - 1)
+
+    # Get sigma range for current epoch
+    sigma_start, sigma_end = epoch_ranges[current_epoch]
+
+    # Calculate step within current epoch
+    step_in_epoch = step % steps_per_epoch
+
+    # Calculate intervals within epoch (including warmup)
+    num_intervals = stages_per_epoch + 1  # +1 for warmup
+    steps_per_interval = steps_per_epoch / num_intervals
+
+    interval_id = int(step_in_epoch // steps_per_interval)
+
+    # Warmup: first interval of each epoch has sigma=0
+    if interval_id == 0:
+        return (current_epoch * stages_per_epoch), 0
+
+    # Calculate sigma with exponential decay within epoch
+    stage_in_epoch = interval_id - 1
+    stage_in_epoch = min(stage_in_epoch, stages_per_epoch - 1)
+
+    if stages_per_epoch <= 1:
+        sigma = sigma_start
+    else:
+        # Exponential decay within epoch
+        decay_factor = (sigma_end / sigma_start) ** (stage_in_epoch / (stages_per_epoch - 1))
+        sigma = sigma_start * decay_factor
+
+    global_stage_id = current_epoch * stages_per_epoch + stage_in_epoch
+    return global_stage_id, sigma
+
+
 __all__ = [
     "generate_expert_gaussian_noise",
     "get_sigma_by_step",
     "get_sigma_schedule",
+    "get_epoch_aware_sigma_schedule",
+    "get_sigma_by_step_epoch_aware",
 ]

@@ -356,12 +356,31 @@ class RayPPOTrainer:
         # Initialize noise injection config early (needed before init_workers)
         self.noise_injection_enabled = self.config.trainer.get('noise_injection', {}).get('enabled', False)
         if self.noise_injection_enabled:
-            from verl.utils.noise_injection import get_sigma_schedule
             noise_config = self.config.trainer.get('noise_injection', {})
             sigma_start = noise_config.get('sigma_start', 0.01)
             sigma_end = noise_config.get('sigma_end', 0.001)
             num_stages = noise_config.get('num_stages', 10)
-            self.sigma_trend = get_sigma_schedule(sigma_start, sigma_end, num_stages)
+
+            # Check if epoch-aware mode is enabled (Option C)
+            self.noise_injection_epoch_aware = noise_config.get('epoch_aware', False)
+            stages_per_epoch = noise_config.get('stages_per_epoch', 5)
+
+            if self.noise_injection_epoch_aware:
+                from verl.utils.noise_injection import get_epoch_aware_sigma_schedule
+                num_epochs = self.config.trainer.total_epochs
+                self.noise_injection_epoch_ranges, self.noise_injection_stages_per_epoch = \
+                    get_epoch_aware_sigma_schedule(sigma_start, sigma_end, num_epochs, stages_per_epoch)
+                self.sigma_trend = []  # Not used in epoch-aware mode
+                print(f"[RayPPOTrainer] Epoch-aware noise injection (Option C): "
+                      f"{num_epochs} epochs, {stages_per_epoch} stages/epoch")
+                for i, (s, e) in enumerate(self.noise_injection_epoch_ranges):
+                    print(f"  Epoch {i+1}: sigma {s:.6f} → {e:.6f}")
+            else:
+                from verl.utils.noise_injection import get_sigma_schedule
+                self.sigma_trend = get_sigma_schedule(sigma_start, sigma_end, num_stages)
+                self.noise_injection_epoch_ranges = []
+                self.noise_injection_stages_per_epoch = 0
+
             self.noise_injection_target_modules = noise_config.get('target_modules', ['post_attention_layernorm'])
             self.noise_injection_exclude_patterns = noise_config.get('exclude_patterns', ['input_layernorm'])
 
@@ -409,8 +428,15 @@ class RayPPOTrainer:
 
         # Compute noise injection total steps after dataloader is created
         if self.noise_injection_enabled:
-            self.noise_injection_total_steps = self.config.trainer.total_epochs * len(self.train_dataloader)
-            print(f"[RayPPOTrainer] Noise injection initialized: {len(self.sigma_trend)} stages, {self.noise_injection_total_steps} total steps")
+            self.noise_injection_steps_per_epoch = len(self.train_dataloader)
+            self.noise_injection_total_steps = self.config.trainer.total_epochs * self.noise_injection_steps_per_epoch
+            if self.noise_injection_epoch_aware:
+                print(f"[RayPPOTrainer] Epoch-aware noise injection: "
+                      f"{self.noise_injection_steps_per_epoch} steps/epoch, "
+                      f"{self.noise_injection_total_steps} total steps")
+            else:
+                print(f"[RayPPOTrainer] Noise injection initialized: "
+                      f"{len(self.sigma_trend)} stages, {self.noise_injection_total_steps} total steps")
 
     def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler: Optional[Sampler]):
         """
@@ -913,7 +939,16 @@ class RayPPOTrainer:
                 self.config.actor_rollout_ref.rollout.noise_injection_total_steps = self.noise_injection_total_steps
                 self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
                 self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
-            print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
+                # Epoch-aware config (Option C)
+                self.config.actor_rollout_ref.rollout.noise_injection_epoch_aware = self.noise_injection_epoch_aware
+                self.config.actor_rollout_ref.rollout.noise_injection_epoch_ranges = list(self.noise_injection_epoch_ranges)
+                self.config.actor_rollout_ref.rollout.noise_injection_stages_per_epoch = self.noise_injection_stages_per_epoch
+                self.config.actor_rollout_ref.rollout.noise_injection_steps_per_epoch = self.noise_injection_steps_per_epoch
+            if self.noise_injection_epoch_aware:
+                print(f"[RayPPOTrainer] Epoch-aware noise injection config passed to rollout: "
+                      f"{len(self.noise_injection_epoch_ranges)} epochs, {self.noise_injection_stages_per_epoch} stages/epoch")
+            else:
+                print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
 
         # Pass HW error injection config to rollout workers
         if self.hw_error_injection_enabled:
