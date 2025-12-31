@@ -41,7 +41,7 @@ cd /home/z00637938/workspace/verl
 | E4b (1e-4) | `/tmp/noisy_ops_1e-4.log` |
 | E4c (1e-3) | `/tmp/noisy_ops_1e-3.log` |
 | E4d (1e-2) | `/tmp/noisy_ops_1e-2.log` (pending) |
-| E5 (all ops) | `/tmp/noisy_ops_all_ops_1e-3.log` (pending) |
+| E5 (5e-2 FP4-realistic) | `/tmp/noisy_ops_5e-2.log` |
 
 ### Monitoring Commands
 ```bash
@@ -614,35 +614,26 @@ nohup bash scripts/test_noisy_ops_a100.sh 1e-2 8 > /tmp/noisy_ops_1e-2.log 2>&1 
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-2.log"
 ```
 
-### E5: ALL Operators (Like quant_compute Simulation) (Implemented)
+### E5: FP4-Realistic Error Scale (5e-2) - Matmul Only (Running)
 
 **Rationale:**
-To properly simulate quantization error (like `quant_compute` for NVFP4 simulation), we need to inject noise into ALL operators affected by HW/quantization differences, not just matmul. This is analogous to how `quant_compute` applies fake quantization to all relevant operators during RL training.
+Analysis of `QeRL/llm-compressor` and `quant_compute` revealed:
 
-**Target Operators:**
-| Category | Operators | E4 Coverage | E5 Coverage |
-|----------|-----------|-------------|-------------|
-| **Matrix Multiply** | `torch.matmul`, `torch.bmm`, `F.linear` | ✅ Yes | ✅ Yes |
-| **Softmax** | `F.softmax` | ❌ No | ✅ **Yes** |
-| **Activations** | `F.silu`, `F.gelu` | ❌ No | ✅ **Yes** |
-| **Normalization** | `F.layer_norm` | ❌ No | ✅ **Yes** |
+1. **NVFP4 quantization error is ~5-15%**, not 0.1% (1e-3)
+2. **Only Linear layers are quantized** in QeRL (ignore lm_head)
+3. **Softmax, activations, LayerNorm are NOT quantized** - kept in BF16
 
-**Implementation (Done):**
-1. Extended `verl/utils/noisy_ops.py` with:
-   - `NoisySoftmax` - noisy F.softmax with re-normalization
-   - `NoisySiLU` - noisy F.silu activation
-   - `NoisyGeLU` - noisy F.gelu activation
-   - `NoisyLayerNorm` - noisy F.layer_norm
-2. Added `VERL_NOISY_OPS_ALL_OPS=1` env var to enable all operators mode
-3. Created `scripts/test_noisy_ops_all_ops.sh` test script
+Therefore, to properly simulate QeRL NVFP4:
+- Use **5e-2 (5%)** error scale
+- Apply to **matmul/linear ONLY** (not softmax, silu, gelu, layer_norm)
 
 **Configuration:**
-```yaml
-# Environment variables
+```bash
+# Environment variables - FP4-realistic simulation
 export VERL_NOISY_OPS_ENABLED=1
-export VERL_NOISY_OPS_SCALE=1e-3
+export VERL_NOISY_OPS_SCALE=5e-2  # 5% - matches FP4 error level
 export VERL_NOISY_OPS_TYPE=relative_gaussian
-export VERL_NOISY_OPS_ALL_OPS=1  # Enables softmax, silu, gelu, layer_norm
+# DO NOT set VERL_NOISY_OPS_ALL_OPS=1 (only matmul/linear)
 ```
 
 **Command:**
@@ -650,22 +641,23 @@ export VERL_NOISY_OPS_ALL_OPS=1  # Enables softmax, silu, gelu, layer_norm
 ssh root@90.90.102.18
 docker exec -it verl-r3-test bash
 cd /home/z00637938/workspace/verl
-git pull  # Get latest code with all_ops_mode
 
 MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
 TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
 VAL_DATA=/data/z00637938/gsm8k/test.parquet \
-nohup bash scripts/test_noisy_ops_all_ops.sh 1e-3 8 > /tmp/noisy_ops_all_ops_1e-3.log 2>&1 &
+nohup bash scripts/test_noisy_ops_a100.sh 5e-2 8 > /tmp/noisy_ops_5e-2.log 2>&1 &
 ```
 
 **Monitor:**
 ```bash
-ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_all_ops_1e-3.log"
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_5e-2.log"
 ```
 
-**Purpose:** Simulate full quantization-like error injection to observe degradation.
+**Purpose:** Simulate FP4-level quantization error to observe realistic degradation.
 
-**Status:** Implementation complete, ready to run test.
+**Status:** Running.
+
+**Note:** ALL_OPS mode implementation is available (`VERL_NOISY_OPS_ALL_OPS=1`) but NOT used for E5 since QeRL only quantizes Linear layers.
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -700,6 +692,72 @@ trainer:
 
 ---
 
+## QeRL/quant_compute Quantization Analysis
+
+### Key Finding: Error Scale Mismatch
+
+Our initial experiments (E4b, E4c) used error scales of 1e-4 and 1e-3, which are **50-150x smaller** than actual FP4 quantization error.
+
+| Format | Typical Relative Error | Our Test Scale | Gap |
+|--------|----------------------|----------------|-----|
+| **NVFP4** (E4M3 + E2M1) | **5-15%** | 0.1% (1e-3) | ~100x |
+| **MXFP4** (E8 + E2M1) | **5-15%** | 0.1% (1e-3) | ~100x |
+| **HiF4** (3-level scaling) | **3-10%** | 0.1% (1e-3) | ~50x |
+
+**Conclusion**: To simulate FP4-level degradation, use **5e-2 (5%)** error scale.
+
+### QeRL Layer Coverage Analysis
+
+Analysis of `QeRL/llm-compressor` shows which layers are quantized:
+
+**Quantized (FP4 error applied):**
+```python
+# From QeRL/llm-compressor/quantize_nvfp4.py
+recipe = QuantizationModifier(targets="Linear", scheme="NVFP4A16", ignore=["lm_head"])
+```
+
+| Layer Type | Quantized | Error Level |
+|------------|-----------|-------------|
+| Linear projections (q/k/v/o_proj, gate/up/down_proj) | ✅ Yes | ~5-15% |
+
+**NOT Quantized (kept in BF16):**
+
+| Layer Type | Ignore Pattern | Reason |
+|------------|----------------|--------|
+| **lm_head** | `ignore=["lm_head"]` | Output precision critical |
+| **Embeddings** | Not in `targets="Linear"` | Input precision critical |
+| **RMSNorm/LayerNorm** | Not Linear | Normalization precision |
+| **Softmax** | Not quantized | Attention precision |
+| **SiLU/GELU** | Not quantized | Activation functions |
+
+### Comparison: noisy_ops vs QeRL
+
+| Operator | QeRL NVFP4 | noisy_ops (matmul-only) | noisy_ops (ALL_OPS) |
+|----------|------------|-------------------------|---------------------|
+| **Linear/matmul** | ✅ ~5-15% | ✅ Configurable | ✅ Configurable |
+| **lm_head** | ❌ Ignored | ✅ Included | ✅ Included |
+| **RMSNorm/LayerNorm** | ❌ No | ❌ No | ✅ **Over-coverage** |
+| **Softmax** | ❌ No | ❌ No | ✅ **Over-coverage** |
+| **SiLU/GELU** | ❌ No | ❌ No | ✅ **Over-coverage** |
+
+### Recommended Test Configuration
+
+To properly simulate QeRL NVFP4 quantization:
+
+1. **Error scale**: **5e-2 (5%)** - matches FP4 quantization error
+2. **Operators**: **matmul/linear ONLY** (not softmax, silu, gelu, layer_norm)
+3. **all_ops_mode**: **False** (default)
+
+```bash
+# Correct simulation of QeRL NVFP4
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=5e-2  # 5% - matches FP4 error
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+# DO NOT set VERL_NOISY_OPS_ALL_OPS=1
+```
+
+---
+
 ## Experiment Summary Table
 
 | Test | Error Scale | Operator Coverage | Status | Final OOD | vs Baseline |
@@ -710,7 +768,7 @@ trainer:
 | E4b | 1e-4 | All matmul (fwd+bwd) | **Done** | 77.33% | +0.45% |
 | E4c | 1e-3 | All matmul (fwd+bwd) | **Done** | 77.18% | +0.30% |
 | E4d | 1e-2 | All matmul (fwd+bwd) | Pending | - | - |
-| E5 | 1e-3 | ALL ops (matmul+softmax+silu+gelu+layernorm) | **Ready** | - | - |
+| **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **Running** | - | - |
 | E6 | TBD | Systematic bias | Pending | - | - |
 | E7 | TBD | AQN + noisy ops | Pending | - | -
 
