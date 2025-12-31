@@ -732,7 +732,7 @@ nohup bash scripts/test_noisy_ops_aqn.sh 5e-2 8 > /tmp/noisy_ops_aqn_5e-2.log 2>
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_5e-2.log"
 ```
 
-**Status:** 🔄 Running (started 2025-12-31)
+**Status:** ✅ **COMPLETE** (2025-12-31)
 
 **AQN Configuration Verified:**
 | Setting | Value | Status |
@@ -743,15 +743,87 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn
 | Active phase | Steps 12+ (sigma=0.05→0.0005) | ✅ |
 | Total stages | 10 (9 active + 1 warmup) | ✅ |
 
-**Early Progress (Step 16):**
-- AQN activated at step 12 with sigma=0.05
-- Training scores progressing: step 15 = 47.0%, step 16 = 41.4%
-- Step 20 validation pending (~4 mins)
+**Final Results:**
+| Step | E5a OOD Accuracy | vs E5 (no AQN) | vs Baseline |
+|------|------------------|----------------|-------------|
+| 0 | 8.95% | -0.30% | -15.77% |
+| 20 | 58.00% | -3.64% | -15.77% |
+| 40 | 64.52% | -1.82% | -10.92% |
+| 60 | 66.49% | +0.30% | -7.73% |
+| 80 | 65.35% | -2.73% | -9.33% |
+| 100 | 66.87% | -2.27% | -10.61% |
+| **116** | **68.76%** | **+0.60%** | **-8.12%** |
 
-**Implementation Notes:**
-- `get_sigma_by_step()` returns sigma=0 for interval_id=0 (warmup)
-- With 116 total steps and 10 stages: steps_per_interval = 11.6
-- AQN applies noise to RMSNorm weights after each weight sync in vLLM rollout
+**Conclusion:**
+- E5a final: **68.76%** vs E5: **68.16%** → **+0.60% improvement** with AQN
+- AQN provides marginal benefit under 5% noise
+- E5a lagged behind E5 during training (steps 20-100) but caught up at the end
+- Hypothesis partially confirmed: AQN helps, but improvement is small
+
+**Observation:** E5a started slower than E5, possibly due to:
+1. Warmup phase (steps 0-11) with sigma=0 delayed AQN benefit
+2. Global decay means epoch 2 had very low sigma (~0.005-0.0005)
+3. Model may benefit from more sustained noise in later training
+
+**Next:** Test epoch-aware AQN (Option C) in E5b
+
+### E5b: Epoch-Aware AQN (Option C) - Pending
+
+**Rationale:**
+E5a used global sigma decay across all steps, resulting in very low sigma in epoch 2.
+Option C provides meaningful noise in BOTH epochs:
+- Epoch 1: sigma 0.05 → 0.01 (exploration)
+- Epoch 2: sigma 0.01 → 0.0005 (refinement)
+
+**Hypothesis:**
+- Each epoch should have meaningful noise levels for effective training
+- Epoch 2 with 0.01 sigma (vs ~0.005 in E5a) may help model adapt better
+
+**Schedule Comparison:**
+```
+E5a (Global Decay):
+  Step 0-11:  sigma=0 (warmup)
+  Step 12-23: sigma=0.05
+  Step 24-35: sigma=0.037
+  ...
+  Step 104-116: sigma=0.0005
+
+E5b (Epoch-Aware - Option C):
+  Epoch 1 (steps 0-57):
+    Step 0-9:   sigma=0 (warmup)
+    Step 10-19: sigma=0.05
+    Step 20-29: sigma=0.035
+    ...
+    Step 48-57: sigma=0.01
+
+  Epoch 2 (steps 58-116):
+    Step 58-67: sigma=0 (warmup)
+    Step 68-77: sigma=0.01
+    ...
+    Step 106-116: sigma=0.0005
+```
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_aqn_epoch_aware.sh 5e-2 8 > /tmp/noisy_ops_aqn_epoch_aware.log 2>&1 &
+```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_epoch_aware.log"
+```
+
+**Success Criteria:**
+1. E5b final OOD > 68.76% (E5a) - Epoch-aware AQN provides additional benefit
+2. E5b shows more stable training progression than E5a
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -894,7 +966,8 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | E4c | 1e-3 | All matmul (fwd+bwd) | No | Done | 77.18% | +0.30% |
 | E4d | 1e-2 | All matmul (fwd+bwd) | No | Pending | - | - |
 | **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Done** | **68.16%** | **-8.72%** |
-| **E5a** | **5e-2** | **matmul-only (FP4-realistic)** | **Yes** | **Running** | - | - |
+| **E5a** | **5e-2** | **matmul-only + Global AQN** | **Yes** | **Done** | **68.76%** | **-8.12%** |
+| **E5b** | **5e-2** | **matmul-only + Epoch-Aware AQN** | **Yes (Option C)** | **Pending** | - | - |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
 
 ## Robustness Evaluation Methodology
