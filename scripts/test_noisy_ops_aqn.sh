@@ -99,13 +99,13 @@ echo ""
 python3 -m verl.trainer.main_ppo \
     --config-name=ppo_trainer \
     ${COMMON_ARGS} \
-    +trainer.noisy_ops.enabled=True \
-    +trainer.noisy_ops.error_scale=${ERROR_SCALE} \
-    +trainer.noisy_ops.error_type=relative_gaussian \
-    +trainer.noise_injection.enabled=True \
-    +trainer.noise_injection.sigma_start=0.05 \
-    +trainer.noise_injection.sigma_end=0.0005 \
-    +trainer.noise_injection.num_stages=10 \
+    ++trainer.noisy_ops.enabled=True \
+    ++trainer.noisy_ops.error_scale=${ERROR_SCALE} \
+    ++trainer.noisy_ops.error_type=relative_gaussian \
+    ++trainer.noise_injection.enabled=True \
+    ++trainer.noise_injection.sigma_start=0.05 \
+    ++trainer.noise_injection.sigma_end=0.0005 \
+    ++trainer.noise_injection.num_stages=10 \
     trainer.experiment_name=noisy_ops_aqn_${ERROR_SCALE}
 
 echo "=== Test Complete ==="
