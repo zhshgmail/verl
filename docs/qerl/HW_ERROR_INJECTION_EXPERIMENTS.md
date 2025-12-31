@@ -767,7 +767,7 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn
 
 **Next:** Test epoch-aware AQN (Option C) in E5b
 
-### E5b: Epoch-Aware AQN (Option C) - Pending
+### E5b: Epoch-Aware AQN (Option C) - Running
 
 **Rationale:**
 E5a used global sigma decay across all steps, resulting in very low sigma in epoch 2.
@@ -821,9 +821,13 @@ nohup bash scripts/test_noisy_ops_aqn_epoch_aware.sh 5e-2 8 > /tmp/noisy_ops_aqn
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_epoch_aware.log"
 ```
 
+**Status:** 🔄 Running (started 2025-12-31 04:27 UTC)
+
 **Success Criteria:**
 1. E5b final OOD > 68.76% (E5a) - Epoch-aware AQN provides additional benefit
 2. E5b shows more stable training progression than E5a
+
+**Script:** `scripts/test_noisy_ops_aqn_epoch_aware.sh`
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -967,7 +971,7 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | E4d | 1e-2 | All matmul (fwd+bwd) | No | Pending | - | - |
 | **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Done** | **68.16%** | **-8.72%** |
 | **E5a** | **5e-2** | **matmul-only + Global AQN** | **Yes** | **Done** | **68.76%** | **-8.12%** |
-| **E5b** | **5e-2** | **matmul-only + Epoch-Aware AQN** | **Yes (Option C)** | **Pending** | - | - |
+| **E5b** | **5e-2** | **matmul-only + Epoch-Aware AQN** | **Yes (Option C)** | **Running** | - | - |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
 
 ## Robustness Evaluation Methodology
