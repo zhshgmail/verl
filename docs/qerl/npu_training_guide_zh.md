@@ -199,7 +199,23 @@ RAY_DEDUP_LOGS=0 python3 -m verl.trainer.main_ppo \
 
 AQN (Adaptive Quantization Noise) 是一种在训练过程中向模型权重注入噪声的正则化技术，特别适用于量化模型的训练。
 
-### 1. AQN 配置参数
+### 1. Dense vs MoE 模型自动检测
+
+VERL 会自动检测模型类型并应用相应的噪声注入策略：
+
+| 模型类型 | 目标模块 | 排除模块 | 说明 |
+|---------|---------|---------|------|
+| **Dense** (如 Qwen2.5-1.5B) | **所有 RMSNorm** | 无 | 遵循 QeRL 原始设计 |
+| **MoE** (如 Qwen1.5-MoE) | `post_attention_layernorm` | `input_layernorm` | 避免影响路由决策 |
+
+**MoE 模型检测逻辑**：通过检查模块名称中是否包含 `experts`、`gate`、`router`、`moe`、`shared_expert` 等关键词自动判断。
+
+**为什么 MoE 需要特殊处理？**
+- MoE 模型中 `input_layernorm` 的输出会影响 router/gate 的决策
+- 如果在 `input_layernorm` 注入噪声，会导致 rollout 和 training 阶段的 expert 选择不一致
+- 因此只在 `post_attention_layernorm`（router 决策之后）注入噪声
+
+### 2. AQN 配置参数
 
 ```yaml
 trainer:
@@ -216,14 +232,38 @@ trainer:
     # 衰减阶段数
     num_stages: 10
 
-    # 目标模块（接收噪声注入的层）
-    target_modules: ["post_attention_layernorm"]
+    # 目标模块（可选，默认自动根据模型类型选择）
+    # Dense 模型默认为空列表（所有 RMSNorm）
+    # MoE 模型默认为 ["post_attention_layernorm"]
+    target_modules: null
 
-    # 排除模式（不注入噪声的层）
+    # 排除模式（可选，默认自动根据模型类型选择）
+    # Dense 模型默认为空列表（无排除）
+    # MoE 模型默认为 ["input_layernorm"]
+    exclude_patterns: null
+```
+
+### 3. 强制指定模型类型
+
+如果自动检测不准确，可以通过配置强制指定：
+
+```yaml
+# 强制使用 Dense 模型行为（QeRL 原始）
+trainer:
+  noise_injection:
+    enabled: true
+    target_modules: []      # 空列表 = 所有 RMSNorm
+    exclude_patterns: []    # 空列表 = 无排除
+
+# 强制使用 MoE 模型行为
+trainer:
+  noise_injection:
+    enabled: true
+    target_modules: ["post_attention_layernorm"]
     exclude_patterns: ["input_layernorm"]
 ```
 
-### 2. Sigma 参数说明
+### 4. Sigma 参数说明
 
 `sigma` 是注入噪声的标准差，控制噪声的强度：
 
@@ -236,7 +276,7 @@ trainer:
 - `sigma_end: 0.0005` (0.05% 噪声)
 - `num_stages: 10`
 
-### 3. 噪声注入原理
+### 5. 噪声注入原理
 
 噪声按以下方式注入到目标模块的权重中：
 
