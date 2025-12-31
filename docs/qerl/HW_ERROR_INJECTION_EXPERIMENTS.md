@@ -732,7 +732,26 @@ nohup bash scripts/test_noisy_ops_aqn.sh 5e-2 8 > /tmp/noisy_ops_aqn_5e-2.log 2>
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_5e-2.log"
 ```
 
-**Status:** Running (started 2025-12-31)
+**Status:** 🔄 Running (started 2025-12-31)
+
+**AQN Configuration Verified:**
+| Setting | Value | Status |
+|---------|-------|--------|
+| Model type | Dense (auto-detected) | ✅ |
+| Target modules | ALL RMSNorm (57 layers) | ✅ |
+| Warmup phase | Steps 0-11 (sigma=0) | ✅ |
+| Active phase | Steps 12+ (sigma=0.05→0.0005) | ✅ |
+| Total stages | 10 (9 active + 1 warmup) | ✅ |
+
+**Early Progress (Step 16):**
+- AQN activated at step 12 with sigma=0.05
+- Training scores progressing: step 15 = 47.0%, step 16 = 41.4%
+- Step 20 validation pending (~4 mins)
+
+**Implementation Notes:**
+- `get_sigma_by_step()` returns sigma=0 for interval_id=0 (warmup)
+- With 116 total steps and 10 stages: steps_per_interval = 11.6
+- AQN applies noise to RMSNorm weights after each weight sync in vLLM rollout
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
