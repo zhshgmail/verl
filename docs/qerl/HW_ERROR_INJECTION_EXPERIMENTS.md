@@ -30,7 +30,9 @@ cd /home/z00637938/workspace/verl
 ### Training Scripts
 | Script | Purpose | Location |
 |--------|---------|----------|
-| `test_noisy_ops_a100.sh` | Operator-level noisy ops test | `scripts/test_noisy_ops_a100.sh` |
+| `run_gpu_baseline.sh` | GPU baseline (no error injection) | `scripts/run_gpu_baseline.sh` |
+| `test_noisy_ops_a100.sh` | Operator-level noisy ops test (matmul only) | `scripts/test_noisy_ops_a100.sh` |
+| `test_noisy_ops_all_ops.sh` | ALL operators noisy test (E5) | `scripts/test_noisy_ops_all_ops.sh` |
 | `test_hw_error_injection_a100.sh` | Module-level error injection test | `scripts/test_hw_error_injection_a100.sh` |
 
 ### Log Locations (Inside Container)
@@ -39,6 +41,7 @@ cd /home/z00637938/workspace/verl
 | E4b (1e-4) | `/tmp/noisy_ops_1e-4.log` |
 | E4c (1e-3) | `/tmp/noisy_ops_1e-3.log` |
 | E4d (1e-2) | `/tmp/noisy_ops_1e-2.log` (pending) |
+| E5 (all ops) | `/tmp/noisy_ops_all_ops_1e-3.log` (pending) |
 
 ### Monitoring Commands
 ```bash
@@ -611,30 +614,58 @@ nohup bash scripts/test_noisy_ops_a100.sh 1e-2 8 > /tmp/noisy_ops_1e-2.log 2>&1 
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-2.log"
 ```
 
-### E5: ALL Operators (Like quant_compute Simulation) (Pending)
+### E5: ALL Operators (Like quant_compute Simulation) (Implemented)
 
 **Rationale:**
 To properly simulate quantization error (like `quant_compute` for NVFP4 simulation), we need to inject noise into ALL operators affected by HW/quantization differences, not just matmul. This is analogous to how `quant_compute` applies fake quantization to all relevant operators during RL training.
 
 **Target Operators:**
-| Category | Operators | Current Coverage | E5 Coverage |
-|----------|-----------|------------------|-------------|
+| Category | Operators | E4 Coverage | E5 Coverage |
+|----------|-----------|-------------|-------------|
 | **Matrix Multiply** | `torch.matmul`, `torch.bmm`, `F.linear` | ✅ Yes | ✅ Yes |
-| **Element-wise** | `torch.add`, `torch.mul`, `torch.div` | ❌ No | ✅ Yes |
-| **Softmax** | `F.softmax` | ❌ No | ✅ Yes |
-| **Activations** | `F.silu`, `F.gelu`, `F.relu` | ❌ No | ✅ Yes |
-| **Normalization** | `F.layer_norm`, RMSNorm | ❌ No | ✅ Yes |
+| **Softmax** | `F.softmax` | ❌ No | ✅ **Yes** |
+| **Activations** | `F.silu`, `F.gelu` | ❌ No | ✅ **Yes** |
+| **Normalization** | `F.layer_norm` | ❌ No | ✅ **Yes** |
 
-**Implementation Required:**
-1. Extend `verl/utils/noisy_ops.py` to add noisy versions of:
-   - `F.softmax`
-   - `F.silu`, `F.gelu`
-   - `F.layer_norm`
-   - Element-wise ops (or use forward hooks on modules)
+**Implementation (Done):**
+1. Extended `verl/utils/noisy_ops.py` with:
+   - `NoisySoftmax` - noisy F.softmax with re-normalization
+   - `NoisySiLU` - noisy F.silu activation
+   - `NoisyGeLU` - noisy F.gelu activation
+   - `NoisyLayerNorm` - noisy F.layer_norm
+2. Added `VERL_NOISY_OPS_ALL_OPS=1` env var to enable all operators mode
+3. Created `scripts/test_noisy_ops_all_ops.sh` test script
 
-2. Create new test script or add env var to enable ALL ops mode
+**Configuration:**
+```yaml
+# Environment variables
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=1e-3
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+export VERL_NOISY_OPS_ALL_OPS=1  # Enables softmax, silu, gelu, layer_norm
+```
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull  # Get latest code with all_ops_mode
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_all_ops.sh 1e-3 8 > /tmp/noisy_ops_all_ops_1e-3.log 2>&1 &
+```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_all_ops_1e-3.log"
+```
 
 **Purpose:** Simulate full quantization-like error injection to observe degradation.
+
+**Status:** Implementation complete, ready to run test.
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -679,7 +710,7 @@ trainer:
 | E4b | 1e-4 | All matmul (fwd+bwd) | **Done** | 77.33% | +0.45% |
 | E4c | 1e-3 | All matmul (fwd+bwd) | **Done** | 77.18% | +0.30% |
 | E4d | 1e-2 | All matmul (fwd+bwd) | Pending | - | - |
-| E5 | TBD | ALL ops (like quant_compute) | Pending | - | - |
+| E5 | 1e-3 | ALL ops (matmul+softmax+silu+gelu+layernorm) | **Ready** | - | - |
 | E6 | TBD | Systematic bias | Pending | - | - |
 | E7 | TBD | AQN + noisy ops | Pending | - | -
 
@@ -689,6 +720,8 @@ trainer:
 - Related doc: [AQN_ACCURACY_ANALYSIS.md](AQN_ACCURACY_ANALYSIS.md)
 - Module-level implementation: `verl/utils/hw_error_injection.py`
 - Operator-level implementation: `verl/utils/noisy_ops.py`
+- GPU baseline script: `scripts/run_gpu_baseline.sh`
 - Module-level test script: `scripts/test_hw_error_injection_a100.sh`
-- Operator-level test script: `scripts/test_noisy_ops_a100.sh`
+- Operator-level test script (matmul only): `scripts/test_noisy_ops_a100.sh`
+- Operator-level test script (ALL ops): `scripts/test_noisy_ops_all_ops.sh`
 - quant_compute library: Fake quantization reference implementation
