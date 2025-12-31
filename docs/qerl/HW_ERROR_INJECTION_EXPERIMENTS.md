@@ -808,6 +808,37 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 # DO NOT set VERL_NOISY_OPS_ALL_OPS=1
 ```
 
+### Methodology Note: Gaussian Noise vs Quantization Error
+
+**Important:** Our noise injection differs fundamentally from real quantization error:
+
+| Property | Real Quantization Error | Our Gaussian Noise |
+|----------|------------------------|-------------------|
+| **Deterministic** | ✅ Same input → same error | ❌ Random each forward pass |
+| **Bounded** | ✅ Limited by quantization step | ❌ Unbounded (Gaussian tail) |
+| **Systematic bias** | ✅ Often present (truncation/rounding) | ❌ Zero mean, no bias |
+| **Learnable pattern** | ✅ Model can adapt to consistent errors | ❌ Cannot learn random noise |
+| **Train-inference consistency** | ✅ Same error pattern | ❌ Different noise each time |
+
+**Implications for our experiments:**
+
+1. **Random noise is HARDER than real quantization:**
+   - Model cannot learn to compensate for consistent error patterns
+   - Gradients are randomly perturbed (optimizer can't work around it)
+   - Each forward pass sees completely different errors
+
+2. **Real quantization is CONSISTENT:**
+   - `quant(x)` always produces the same output for the same `x`
+   - Model can naturally adapt to the fixed error pattern during training
+   - Inference error matches training error exactly
+
+3. **Conservative test interpretation:**
+   - If a model trained with random Gaussian noise shows robustness, it is likely **over-robust** compared to what's needed for deterministic quantization
+   - Random noise acts as a **stronger regularizer** than deterministic quantization error
+   - **Success with Gaussian noise implies success with real FP4 quantization**
+
+**Conclusion:** Our Gaussian noise injection is a conservative upper bound on quantization difficulty. Results from E5/E5a experiments should transfer (or exceed) to real NVFP4 quantization scenarios.
+
 ---
 
 ## Experiment Summary Table
