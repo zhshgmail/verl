@@ -953,8 +953,10 @@ bash scripts/eval_robustness.sh /path/to/E5a/checkpoint /data/gsm8k/test.parquet
 
 ## References
 
-- Related doc: [HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md](HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md)
-- Related doc: [AQN_ACCURACY_ANALYSIS.md](AQN_ACCURACY_ANALYSIS.md)
+### Related Documentation
+- **[NOISE_INJECTION_LITERATURE_REVIEW.md](NOISE_INJECTION_LITERATURE_REVIEW.md)** - Survey of related work on noise injection for robustness (RL, LLM, Embodied AI, Hardware)
+- [HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md](HW_HETEROGENEOUS_ROBUSTNESS_HYPOTHESIS.md)
+- [AQN_ACCURACY_ANALYSIS.md](AQN_ACCURACY_ANALYSIS.md)
 - Module-level implementation: `verl/utils/hw_error_injection.py`
 - Operator-level implementation: `verl/utils/noisy_ops.py`
 - GPU baseline script: `scripts/run_gpu_baseline.sh`
