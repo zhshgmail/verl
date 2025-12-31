@@ -656,11 +656,20 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_5e-
 
 **Purpose:** Establish baseline for "training on noisy HW without mitigation". Shows how much FP4-level noise degrades accuracy.
 
-**Status:** Running.
+**Status:** ✅ **COMPLETE** (2025-12-30)
 
-**Early Results (Step 20):**
-- OOD Accuracy: **61.64%** (vs baseline 73.01% = **-11.37%**)
-- First significant degradation observed!
+**Final Results:**
+| Step | OOD Accuracy | vs Baseline |
+|------|--------------|-------------|
+| 0 | 9.25% | -15.47% |
+| 20 | 61.64% | -12.13% |
+| 40 | 66.34% | -9.10% |
+| 60 | 66.19% | -8.03% |
+| 80 | 68.08% | -6.60% |
+| 100 | 69.14% | -8.34% |
+| **116** | **68.16%** | **-8.72%** |
+
+**Conclusion:** 5% noise (FP4-realistic) causes **8.72% accuracy degradation** compared to GPU baseline (76.88%). This establishes the baseline that E5a (with AQN) needs to improve upon.
 
 **Note:** ALL_OPS mode implementation is available (`VERL_NOISY_OPS_ALL_OPS=1`) but NOT used for E5 since QeRL only quantizes Linear layers.
 
@@ -690,10 +699,10 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 GPU Baseline: 76.88%
        │
        ▼
-E5 (Noise only): ~65-70%? ◄── Degradation from 5% noise
+E5 (Noise only): 68.16% ◄── Degradation from 5% noise (-8.72%)
        │
        ▼
-E5a (Noise + AQN): > E5 ◄── AQN mitigates degradation
+E5a (Noise + AQN): > 68.16%? ◄── AQN mitigates degradation
        │
        ▼
 Robustness eval on E5a:
@@ -701,15 +710,29 @@ Robustness eval on E5a:
 ```
 
 **Success Criteria:**
-1. E5a final OOD > E5 final OOD (AQN provides benefit under noise)
+1. E5a final OOD > 68.16% (E5) - AQN provides benefit under noise
 2. E5a robustness eval: |Clean - Noisy| < 1% (model is robust)
 
 **If Successful:** This proves AQN works for **HW heterogeneous errors**, not just quantization - a novel finding beyond QeRL's original scope.
 
-**Command (after E5 completes):**
+**Command:**
 ```bash
-# TBD - will create test_noisy_ops_aqn.sh script
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_aqn.sh 5e-2 8 > /tmp/noisy_ops_aqn_5e-2.log 2>&1 &
 ```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_5e-2.log"
+```
+
+**Status:** Running (started 2025-12-31)
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
@@ -851,8 +874,8 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | E4b | 1e-4 | All matmul (fwd+bwd) | No | Done | 77.33% | +0.45% |
 | E4c | 1e-3 | All matmul (fwd+bwd) | No | Done | 77.18% | +0.30% |
 | E4d | 1e-2 | All matmul (fwd+bwd) | No | Pending | - | - |
-| **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Running** | ~61%@s20 | -11.37%@s20 |
-| **E5a** | **5e-2** | **matmul-only (FP4-realistic)** | **Yes** | **Pending** | - | - |
+| **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Done** | **68.16%** | **-8.72%** |
+| **E5a** | **5e-2** | **matmul-only (FP4-realistic)** | **Yes** | **Running** | - | - |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
 
 ## Robustness Evaluation Methodology
