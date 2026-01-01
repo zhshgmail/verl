@@ -509,7 +509,7 @@ except Exception:
     pass
 
 
-def noisy_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def noisy_matmul(a: torch.Tensor, b: torch.Tensor, **kwargs) -> torch.Tensor:
     """Drop-in replacement for torch.matmul with error injection."""
     if not _NOISY_OPS_ENABLED:
         return _ORIGINAL_MATMUL(a, b)
@@ -517,14 +517,14 @@ def noisy_matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return _noisy_matmul_impl(a, b)
 
 
-def noisy_bmm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def noisy_bmm(a: torch.Tensor, b: torch.Tensor, **kwargs) -> torch.Tensor:
     """Drop-in replacement for torch.bmm with error injection."""
     if not _NOISY_OPS_ENABLED:
         return _ORIGINAL_BMM(a, b)
     return _noisy_bmm_impl(a, b)
 
 
-def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
     """
     Drop-in replacement for F.linear with error injection.
 
@@ -536,28 +536,31 @@ def noisy_linear(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch
     return _noisy_linear_impl(input, weight, bias)
 
 
-def noisy_softmax(input: torch.Tensor, dim: int = -1, dtype=None) -> torch.Tensor:
-    """Drop-in replacement for F.softmax with error injection (only in ALL_OPS_MODE)."""
+def noisy_softmax(input: torch.Tensor, dim: int = -1, dtype=None, **kwargs) -> torch.Tensor:
+    """Drop-in replacement for F.softmax with error injection (only in ALL_OPS_MODE).
+
+    Note: **kwargs is used to absorb extra arguments from torch.compile (e.g., _stacklevel).
+    """
     if not _NOISY_OPS_ENABLED or not _ALL_OPS_MODE:
         return _ORIGINAL_SOFTMAX(input, dim=dim, dtype=dtype)
     return _noisy_softmax_impl(input, dim, dtype)
 
 
-def noisy_silu(input: torch.Tensor, inplace: bool = False) -> torch.Tensor:
+def noisy_silu(input: torch.Tensor, inplace: bool = False, **kwargs) -> torch.Tensor:
     """Drop-in replacement for F.silu with error injection (only in ALL_OPS_MODE)."""
     if not _NOISY_OPS_ENABLED or not _ALL_OPS_MODE:
         return _ORIGINAL_SILU(input, inplace=inplace)
     return _noisy_silu_impl(input, inplace)
 
 
-def noisy_gelu(input: torch.Tensor, approximate: str = 'none') -> torch.Tensor:
+def noisy_gelu(input: torch.Tensor, approximate: str = 'none', **kwargs) -> torch.Tensor:
     """Drop-in replacement for F.gelu with error injection (only in ALL_OPS_MODE)."""
     if not _NOISY_OPS_ENABLED or not _ALL_OPS_MODE:
         return _ORIGINAL_GELU(input, approximate=approximate)
     return _noisy_gelu_impl(input, approximate)
 
 
-def noisy_layer_norm(input: torch.Tensor, normalized_shape, weight=None, bias=None, eps=1e-5) -> torch.Tensor:
+def noisy_layer_norm(input: torch.Tensor, normalized_shape, weight=None, bias=None, eps=1e-5, **kwargs) -> torch.Tensor:
     """Drop-in replacement for F.layer_norm with error injection (only in ALL_OPS_MODE)."""
     if not _NOISY_OPS_ENABLED or not _ALL_OPS_MODE:
         return _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, bias, eps)
