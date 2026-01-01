@@ -97,6 +97,25 @@ Similar to **quantization simulation** (fake quantization):
 - Simulation: Add quant/dequant error to BF16 computation
 - Our case: Add "NPU-like errors" to GPU computation
 
+### Research Scope: Beyond QeRL
+
+**QeRL's Original Scope:**
+- AQN helps stabilize RL training when using FP4 quantization
+- Noise injection targets **Linear layers only** (matching NVFP4 quantization scope)
+- Goal: Train models robust to quantization-induced numerical errors
+
+**Our Extended Research Goal:**
+- Test if AQN can stabilize RL training for **general HW heterogeneous scenarios**
+- Scenario: Base model trained on HW-A (e.g., GPU), RL training on HW-B (e.g., NPU)
+- HW-B may have numerical differences in **ALL operators**, not just Linear layers
+
+| Scenario | Base Model Training | RL Training | Operator Difference |
+|----------|---------------------|-------------|---------------------|
+| **QeRL (original)** | GPU FP16/BF16 | GPU with FP4 quantization | Linear layers only |
+| **Our hypothesis** | Any HW (high precision) | Different HW (heterogeneous) | **ALL operators** |
+
+**Key Question:** Can AQN help RL training when the target hardware has numerical differences across ALL operators (matmul, softmax, activations, normalization)?
+
 ## Implementation
 
 ### Module: `verl/utils/hw_error_injection.py`
@@ -961,6 +980,128 @@ The epoch-aware AQN training produced models that are highly robust to operator-
 
 **Robustness Test Script:** `scripts/robustness_eval.py`
 
+---
+
+## Phase 2: General HW Heterogeneous Robustness (ALL_OPS)
+
+### Motivation
+
+E5/E5a/E5b tested AQN with noise injection on **matmul only**, matching QeRL's quantization scope. However, real HW heterogeneous scenarios (e.g., GPU→NPU transfer) may have numerical differences across **ALL operators**:
+
+| Operator Type | QeRL Scope | General HW Heterogeneous |
+|---------------|------------|--------------------------|
+| Linear/matmul | ✅ Quantized (FP4) | ✅ May differ |
+| Softmax | ❌ Kept in BF16 | ✅ May differ (approximation algorithms) |
+| SiLU/GELU | ❌ Kept in BF16 | ✅ May differ (lookup tables vs compute) |
+| RMSNorm/LayerNorm | ❌ Kept in BF16 | ✅ May differ (reduction order) |
+
+**Research Question:** Does AQN help when noise affects ALL operators, not just matmul?
+
+### E5c: ALL_OPS Noise, No AQN (Planned)
+
+**Purpose:** Establish baseline degradation when ALL operators have 5% noise.
+
+**Configuration:**
+```bash
+export VERL_NOISY_OPS_ENABLED=1
+export VERL_NOISY_OPS_SCALE=5e-2
+export VERL_NOISY_OPS_TYPE=relative_gaussian
+export VERL_NOISY_OPS_ALL_OPS=1  # Enable noise on ALL operators
+```
+
+**Operators with noise:**
+| Operator | Function | Noise Applied |
+|----------|----------|---------------|
+| matmul | `torch.matmul`, `F.linear` | ✅ 5% relative |
+| bmm | `torch.bmm` | ✅ 5% relative |
+| softmax | `F.softmax` | ✅ 5% relative |
+| layer_norm | `F.layer_norm` | ✅ 5% relative |
+| silu | `F.silu` | ✅ 5% relative |
+| gelu | `F.gelu` | ✅ 5% relative |
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_all_ops.sh 5e-2 8 > /tmp/noisy_ops_all_ops_5e-2.log 2>&1 &
+```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_all_ops_5e-2.log"
+```
+
+**Expected Outcome:**
+- Degradation likely **worse** than E5 (68.16%) due to noise in more operators
+- Establishes baseline for E5d comparison
+
+**Status:** 🔲 Planned
+
+### E5d: ALL_OPS Noise + Epoch-Aware AQN (Planned)
+
+**Purpose:** Test if epoch-aware AQN helps when ALL operators have noise.
+
+**Configuration:**
+- Same as E5c (ALL_OPS noise)
+- PLUS epoch-aware AQN (same as E5b)
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+MODEL_PATH=/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_all_ops_aqn_epoch_aware.sh 5e-2 8 > /tmp/noisy_ops_all_ops_aqn_epoch_aware.log 2>&1 &
+```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_all_ops_aqn_epoch_aware.log"
+```
+
+**Success Criteria:**
+1. E5d final OOD > E5c final OOD (AQN helps with ALL_OPS noise)
+2. E5d shows robustness in evaluation (clean ≈ noisy accuracy)
+
+**Status:** 🔲 Planned (after E5c)
+
+### Expected Experimental Flow
+
+```
+Phase 1: QeRL-scope (matmul only)
+┌─────────────────────────────────────────────────────────────────────┐
+│ Baseline: 76.88%                                                    │
+│     │                                                               │
+│     ▼                                                               │
+│ E5 (matmul noise only): 68.16%  ◄── -8.72% degradation             │
+│     │                                                               │
+│     ▼                                                               │
+│ E5b (matmul + epoch-aware AQN): 70.58%  ◄── AQN recovers +2.42%    │
+└─────────────────────────────────────────────────────────────────────┘
+
+Phase 2: General HW Heterogeneous (ALL_OPS)
+┌─────────────────────────────────────────────────────────────────────┐
+│ E5c (ALL_OPS noise only): ???  ◄── Expected worse than E5          │
+│     │                                                               │
+│     ▼                                                               │
+│ E5d (ALL_OPS + epoch-aware AQN): ???  ◄── Does AQN still help?     │
+└─────────────────────────────────────────────────────────────────────┘
+
+Key Question: Is (E5d - E5c) > 0?
+If YES → AQN works for general HW heterogeneous scenarios (novel finding!)
+```
+
+---
+
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
 **Rationale:**
@@ -1104,6 +1245,8 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Done** | **68.16%** | **-8.72%** |
 | **E5a** | **5e-2** | **matmul-only + Global AQN** | **Yes** | **Done** | **68.76%** | **-8.12%** |
 | **E5b** | **5e-2** | **matmul-only + Epoch-Aware AQN** | **Yes (Option C)** | **Done** | **70.58%** | **-6.30%** |
+| **E5c** | **5e-2** | **ALL_OPS (general HW heterogeneous)** | **No** | **Planned** | - | - |
+| **E5d** | **5e-2** | **ALL_OPS + Epoch-Aware AQN** | **Yes (Option C)** | **Planned** | - | - |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
 
 ## Robustness Evaluation Methodology
