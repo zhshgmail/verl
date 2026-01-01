@@ -821,13 +821,62 @@ nohup bash scripts/test_noisy_ops_aqn_epoch_aware.sh 5e-2 8 > /tmp/noisy_ops_aqn
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_epoch_aware.log"
 ```
 
-**Status:** 🔄 Running (started 2025-12-31 04:27 UTC)
+**Status:** 🔄 Running (restarted 2025-12-31 17:21 UTC after RolloutConfig fix)
+
+**Implementation Details:**
+
+Files modified for epoch-aware AQN:
+1. `verl/utils/noise_injection.py` - Added functions:
+   - `get_epoch_aware_sigma_schedule()`: Generate per-epoch sigma ranges
+   - `get_sigma_by_step_epoch_aware()`: Calculate sigma based on epoch and step
+
+2. `verl/trainer/ppo/ray_trainer.py` - Added support:
+   - `noise_injection.epoch_aware=True` config option
+   - `noise_injection.stages_per_epoch=5` config option
+   - Passes `epoch_ranges` and `steps_per_epoch` to rollout workers
+
+3. `verl/workers/rollout/vllm_rollout/vllm_rollout.py` - Updated:
+   - Reads epoch-aware config from rollout config
+   - Uses `get_sigma_by_step_epoch_aware()` when `epoch_aware=True`
+   - Logs `[AQN-EpochAware]` messages for visibility
+
+4. `verl/workers/config/rollout.py` - Added dataclass fields:
+   - `noise_injection_epoch_aware: bool = False`
+   - `noise_injection_epoch_ranges: list = []`
+   - `noise_injection_stages_per_epoch: int = 5`
+   - `noise_injection_steps_per_epoch: int = 0`
+
+**Config passed to trainer:**
+```yaml
+trainer:
+  noise_injection:
+    enabled: True
+    epoch_aware: True
+    sigma_start: 0.05
+    sigma_end: 0.0005
+    stages_per_epoch: 5
+  noisy_ops:
+    enabled: True
+    error_scale: 0.05
+    error_type: relative_gaussian
+```
+
+**Verified initialization (from log):**
+```
+[RayPPOTrainer] Epoch-aware noise injection (Option C): 2 epochs, 5 stages/epoch
+[RayPPOTrainer] Epoch-aware noise injection: 58 steps/epoch, 116 total steps
+[RayPPOTrainer] Epoch-aware noise injection config passed to rollout: 2 epochs, 5 stages/epoch
+```
 
 **Success Criteria:**
 1. E5b final OOD > 68.76% (E5a) - Epoch-aware AQN provides additional benefit
 2. E5b shows more stable training progression than E5a
 
 **Script:** `scripts/test_noisy_ops_aqn_epoch_aware.sh`
+
+**Commits:**
+- `4399ddd0` - feat(qerl): add epoch-aware AQN scheduling (Option C)
+- `b83e5efd` - fix(qerl): add epoch-aware fields to RolloutConfig
 
 ### E6: Systematic Bias Instead of Gaussian (Pending)
 
