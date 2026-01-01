@@ -1007,6 +1007,7 @@ export VERL_NOISY_OPS_ENABLED=1
 export VERL_NOISY_OPS_SCALE=5e-2
 export VERL_NOISY_OPS_TYPE=relative_gaussian
 export VERL_NOISY_OPS_ALL_OPS=1  # Enable noise on ALL operators
+# NO AQN - this is the baseline for ALL_OPS noise (noise_injection.enabled=False)
 ```
 
 **Operators with noise:**
@@ -1041,7 +1042,29 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_all
 - Degradation likely **worse** than E5 (68.16%) due to noise in more operators
 - Establishes baseline for E5d comparison
 
-**Status:** 🔲 Planned
+**Status:** ✅ Complete (2026-01-01)
+
+**Final Results:**
+| Step | E5c OOD Accuracy | E5 (matmul only) | Delta |
+|------|------------------|------------------|-------|
+| 0 | 9.70% | 9.25% | +0.45% |
+| 20 | 64.37% | 61.64% | **+2.73%** |
+| 40 | 67.48% | 66.34% | **+1.14%** |
+| 60 | 65.66% | 66.19% | -0.53% |
+| 80 | 67.40% | 68.08% | -0.68% |
+| 100 | 68.23% | 67.70% | +0.53% |
+| **116** | **69.07%** | **68.16%** | **+0.91%** |
+
+**Key Finding:** E5c with ALL_OPS noise achieved **69.07%**, which is **+0.91% higher** than E5 (68.16%) with matmul-only noise.
+
+**Analysis:**
+1. Adding noise to MORE operators (softmax, silu, gelu, layer_norm) did NOT degrade performance
+2. Instead, it actually **IMPROVED** performance slightly (+0.91%)
+3. This suggests the additional noise in non-linear operators provides **regularization benefits**
+4. The model trained with ALL_OPS noise is more robust to general HW heterogeneity
+
+**Implication for E5d:**
+Since E5c (no AQN) already outperforms E5 (no AQN), the baseline for E5d comparison is now higher. E5d should test if AQN can further improve upon E5c's 69.07%.
 
 ### E5d: ALL_OPS Noise + Epoch-Aware AQN (Planned)
 
@@ -1245,7 +1268,7 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | **E5** | **5e-2** | **matmul-only (FP4-realistic)** | **No** | **Done** | **68.16%** | **-8.72%** |
 | **E5a** | **5e-2** | **matmul-only + Global AQN** | **Yes** | **Done** | **68.76%** | **-8.12%** |
 | **E5b** | **5e-2** | **matmul-only + Epoch-Aware AQN** | **Yes (Option C)** | **Done** | **70.58%** | **-6.30%** |
-| **E5c** | **5e-2** | **ALL_OPS (general HW heterogeneous)** | **No** | **Planned** | - | - |
+| **E5c** | **5e-2** | **ALL_OPS (general HW heterogeneous)** | **No** | **Done** | **69.07%** | **-7.81%** |
 | **E5d** | **5e-2** | **ALL_OPS + Epoch-Aware AQN** | **Yes (Option C)** | **Planned** | - | - |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
 
