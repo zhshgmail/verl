@@ -1230,24 +1230,57 @@ Real HW differences often have systematic patterns (e.g., consistent rounding di
 | `systematic_bias` | `sign(x) * |x| * scale` | Consistent rounding bias |
 | `truncation` | `floor(x / scale) * scale` | Truncation error |
 
-### E7: AQN + Noisy Ops (Pending)
+### E7: 7B Model Scale Validation (Running)
 
-**Prerequisites:**
-- E4d or E5 shows significant degradation (>2-3%)
+**Purpose:** Validate AQN effectiveness at larger model scale (7B vs 1.5B).
 
-**Purpose:**
-Test if AQN (Adaptive Quantization Noise) during training can improve robustness to HW errors during inference.
+**Hypothesis:**
+- AQN improvement should scale to larger models
+- Expected: ~2% improvement over noise-only baseline (same as E5b)
 
 **Configuration:**
-```yaml
-trainer:
-  aqn:
-    enabled: true
-    sigma: 0.05
-  noisy_ops:
-    enabled: true
-    error_scale: <scale that showed degradation>
+| Parameter | 1.5B (E5b) | 7B (E7) | Notes |
+|-----------|------------|---------|-------|
+| Model | Qwen2.5-1.5B-Instruct | Qwen2.5-7B-Instruct | 4.5x larger |
+| train_batch_size | 128 | 64 | Reduced for memory |
+| ppo_mini_batch_size | 32 | 16 | Reduced for memory |
+| ppo_micro_batch_size | 4 | 2 | Reduced for memory |
+| tensor_parallel_size | 1 | 2 | TP=2 for 7B rollout |
+| learning_rate | 5e-7 | 1e-7 | Lower for stability |
+| max_response_length | 1024 | 512 | Reduced for memory |
+| gpu_memory_utilization | 0.8 | 0.7 | Lower for stability |
+
+**Model Path:** `/data/g30067331/Qwen2.5-7B-Instruct`
+
+**Command:**
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull personal feature/npu-aqn-test
+
+MODEL_PATH=/data/g30067331/Qwen2.5-7B-Instruct \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_noisy_ops_aqn_7b.sh 5e-2 8 > /tmp/noisy_ops_aqn_7b.log 2>&1 &
 ```
+
+**Monitor:**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn_7b.log"
+ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.log"
+```
+
+**Expected Results:**
+| Metric | 1.5B (E5b) | 7B (E7 expected) |
+|--------|------------|------------------|
+| Noise-only baseline | 68.16% | ~68-70%? |
+| With Epoch-Aware AQN | 70.58% | ~70-72%? |
+| AQN improvement | +2.42% | ~+2%? |
+
+**Status:** Running (started 2026-01-02)
+
+**Script:** `scripts/test_noisy_ops_aqn_7b.sh`
 
 ---
 
@@ -1364,6 +1397,7 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | **E5c** | **5e-2** | **ALL_OPS (general HW heterogeneous)** | **No** | **Done** | **69.07%** | **-7.81%** |
 | **E5d** | **5e-2** | **ALL_OPS + Epoch-Aware AQN** | **Yes (Option C)** | **Done** | **70.20%** | **-6.68%** |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
+| **E7** | **5e-2** | **7B model + Epoch-Aware AQN** | **Yes (Option C)** | **Running** | - | - |
 
 ## Robustness Evaluation Methodology
 
