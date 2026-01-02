@@ -1116,7 +1116,67 @@ Since E5c (no AQN) already outperforms E5 (no AQN), the baseline for E5d compari
 
 **Script:** `scripts/test_noisy_ops_all_ops_aqn_epoch_aware.sh`
 
-**Robustness Testing:** 🔲 Pending (need to re-run with `save_freq=58` to save checkpoints)
+### E5d Robustness Testing (Pending)
+
+**Status:** Re-run with `save_freq=58` completed (2026-01-02). Checkpoints should be saved at steps 58 and 116.
+
+**Checkpoint Paths (expected):**
+```
+/home/dpsk_a2a/DeepEP/checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/noisy_ops_all_ops_aqn_epoch_aware_5e-2/
+├── global_step_58/   # Epoch 1 checkpoint
+└── global_step_116/  # Epoch 2 checkpoint
+```
+
+**Commands to run robustness testing on A100:**
+```bash
+# SSH to A100 server
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+# 1. Find checkpoint directory
+ls -la checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/
+
+# 2. Merge FSDP shards to HuggingFace format
+CKPT_DIR=checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/noisy_ops_all_ops_aqn_epoch_aware_5e-2
+
+# Merge step 58 (epoch 1)
+python -m verl.model_merger \
+    --model_path /data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+    --ckpt_path ${CKPT_DIR}/global_step_58/actor \
+    --output_path ${CKPT_DIR}/global_step_58/merged_hf
+
+# Merge step 116 (epoch 2)
+python -m verl.model_merger \
+    --model_path /data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+    --ckpt_path ${CKPT_DIR}/global_step_116/actor \
+    --output_path ${CKPT_DIR}/global_step_116/merged_hf
+
+# 3. Run robustness evaluation at 0%, 5%, 10% noise levels
+# For step 58
+python scripts/robustness_eval.py \
+    --model_path ${CKPT_DIR}/global_step_58/merged_hf \
+    --data_path /data/z00637938/gsm8k/test.parquet \
+    --noise_levels 0.0 0.05 0.10 \
+    --n_samples 200
+
+# For step 116
+python scripts/robustness_eval.py \
+    --model_path ${CKPT_DIR}/global_step_116/merged_hf \
+    --data_path /data/z00637938/gsm8k/test.parquet \
+    --noise_levels 0.0 0.05 0.10 \
+    --n_samples 200
+```
+
+**Expected Results Template:**
+| Checkpoint | 0% Noise (Clean) | 5% Noise (Training) | 10% Noise (Stress) |
+|------------|------------------|---------------------|-------------------|
+| Step 58 (Epoch 1) | ? | ? | ? |
+| Step 116 (Epoch 2) | ? | ? | ? |
+
+**Success Criteria:**
+- < 1% degradation from clean to 5% noise = ROBUST
+- < 2% degradation from clean to 10% noise = STRESS-ROBUST
 
 ### Experimental Flow (Complete)
 
