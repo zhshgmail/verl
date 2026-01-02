@@ -1242,9 +1242,13 @@ Real HW differences often have systematic patterns (e.g., consistent rounding di
 
 | Experiment | Noise | AQN | Purpose | Status |
 |------------|-------|-----|---------|--------|
-| **E7a** | No | No | 7B clean baseline | Pending (after E7c) |
+| **E7a** | No | No | 7B clean baseline | **Pending** |
 | **E7b** | 5% | No | 7B noise degradation | Pending (after E7a) |
-| **E7c** | 5% | Yes (Epoch-Aware) | 7B noise + AQN | **Running** |
+| **E7c** | 5% | Yes (Epoch-Aware) | 7B noise + AQN | Pending (after E7b) |
+
+**Execution Order:** E7a (baseline) → E7b (noise only) → E7c (noise + AQN)
+
+**Checkpoint Saving:** All E7 scripts save checkpoints every 58 steps (`save_freq=58`) for robustness evaluation.
 
 **Configuration (shared across E7a/E7b/E7c):**
 | Parameter | 1.5B (E5b) | 7B (E7) | Notes |
@@ -1276,7 +1280,7 @@ nohup bash scripts/test_7b_baseline.sh 8 > /tmp/7b_baseline.log 2>&1 &
 
 **Script:** `scripts/test_7b_baseline.sh`
 
-**Status:** Pending (will run after E7c completes)
+**Status:** **Pending** (first to run)
 
 ---
 
@@ -1318,13 +1322,10 @@ ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.l
 
 **Script:** `scripts/test_noisy_ops_aqn_7b.sh`
 
-**Status:** Running (started 2026-01-02)
+**Status:** Pending (after E7b)
 
-**Early Results (E7c):**
-| Step | val-core/acc | Notes |
-|------|-------------|-------|
-| 0 | 66.41% | Initial (before training) |
-| 20 | 77.86% | First validation |
+**Note:** First E7c attempt (2026-01-02) was stopped at step 45/232 because checkpoint saving was disabled (`save_freq=-1`). Script has been updated to `save_freq=58`. Early results showed promising training:
+- Step 0: 66.41%, Step 20: 77.86%, Step 40: 83.70%
 
 ---
 
@@ -1337,7 +1338,17 @@ ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.l
 | **E7c** (noise + AQN) | 70.58% | ~68-72%? | AQN improvement |
 | **AQN improvement** | +2.42% | ~+2%? | E7c - E7b |
 
-**Execution Order:** E7c (running) → E7a → E7b
+**Execution Order:** E7a (baseline) → E7b (noise only) → E7c (noise + AQN)
+
+**Scripts:**
+- E7a: `scripts/test_7b_baseline.sh`
+- E7b: `scripts/test_7b_noise_only.sh`
+- E7c: `scripts/test_noisy_ops_aqn_7b.sh`
+
+**Log Files (on A100 server):**
+- E7a: `/tmp/7b_baseline.log`
+- E7b: `/tmp/7b_noise_only.log`
+- E7c: `/tmp/noisy_ops_aqn_7b.log`
 
 ---
 
