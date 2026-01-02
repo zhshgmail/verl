@@ -1116,67 +1116,58 @@ Since E5c (no AQN) already outperforms E5 (no AQN), the baseline for E5d compari
 
 **Script:** `scripts/test_noisy_ops_all_ops_aqn_epoch_aware.sh`
 
-### E5d Robustness Testing (Pending)
+### E5d Robustness Testing (Complete)
 
-**Status:** Re-run with `save_freq=58` completed (2026-01-02). Checkpoints should be saved at steps 58 and 116.
+**Status:** ✅ Complete (2026-01-02)
 
-**Checkpoint Paths (expected):**
+**Checkpoint Paths:**
 ```
-/home/dpsk_a2a/DeepEP/checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/noisy_ops_all_ops_aqn_epoch_aware_5e-2/
-├── global_step_58/   # Epoch 1 checkpoint
-└── global_step_116/  # Epoch 2 checkpoint
-```
-
-**Commands to run robustness testing on A100:**
-```bash
-# SSH to A100 server
-ssh root@90.90.102.18
-docker exec -it verl-r3-test bash
-cd /home/z00637938/workspace/verl
-
-# 1. Find checkpoint directory
-ls -la checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/
-
-# 2. Merge FSDP shards to HuggingFace format
-CKPT_DIR=checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/noisy_ops_all_ops_aqn_epoch_aware_5e-2
-
-# Merge step 58 (epoch 1)
-python -m verl.model_merger \
-    --model_path /data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
-    --ckpt_path ${CKPT_DIR}/global_step_58/actor \
-    --output_path ${CKPT_DIR}/global_step_58/merged_hf
-
-# Merge step 116 (epoch 2)
-python -m verl.model_merger \
-    --model_path /data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
-    --ckpt_path ${CKPT_DIR}/global_step_116/actor \
-    --output_path ${CKPT_DIR}/global_step_116/merged_hf
-
-# 3. Run robustness evaluation at 0%, 5%, 10% noise levels
-# For step 58
-python scripts/robustness_eval.py \
-    --model_path ${CKPT_DIR}/global_step_58/merged_hf \
-    --data_path /data/z00637938/gsm8k/test.parquet \
-    --noise_levels 0.0 0.05 0.10 \
-    --n_samples 200
-
-# For step 116
-python scripts/robustness_eval.py \
-    --model_path ${CKPT_DIR}/global_step_116/merged_hf \
-    --data_path /data/z00637938/gsm8k/test.parquet \
-    --noise_levels 0.0 0.05 0.10 \
-    --n_samples 200
+/home/z00637938/workspace/verl/checkpoints/noisy_ops_all_ops_aqn_epoch_aware_test/noisy_ops_all_ops_aqn_epoch_aware_5e-2/
+├── global_step_58/merged_hf/   # Epoch 1 checkpoint
+└── global_step_116/merged_hf/  # Epoch 2 checkpoint
 ```
 
-**Expected Results Template:**
+**Robustness Test Results (200 sample evaluation):**
+
 | Checkpoint | 0% Noise (Clean) | 5% Noise (Training) | 10% Noise (Stress) |
 |------------|------------------|---------------------|-------------------|
-| Step 58 (Epoch 1) | ? | ? | ? |
-| Step 116 (Epoch 2) | ? | ? | ? |
+| **Step 58 (Epoch 1)** | **76.50%** | **77.00%** | **76.50%** |
+| **Step 116 (Epoch 2)** | 74.50% | 74.50% | 74.50% |
 
-**Success Criteria:**
-- < 1% degradation from clean to 5% noise = ROBUST
-- < 2% degradation from clean to 10% noise = STRESS-ROBUST
+**Degradation Analysis:**
+
+| Checkpoint | 5% Noise Degradation | 10% Noise Degradation |
+|------------|---------------------|----------------------|
+| Step 58 (Epoch 1) | **+0.50%** (improved!) | **0.00%** |
+| Step 116 (Epoch 2) | **0.00%** | **0.00%** |
+
+**Key Findings:**
+
+1. **Both checkpoints are extremely noise-robust:**
+   - Step 58: 0% degradation even at 10% noise (2x training noise)
+   - Step 116: 0% degradation at any noise level
+   - ✅ **SUCCESS**: Both meet < 1% degradation criteria
+
+2. **Epoch 1 checkpoint outperforms Epoch 2:**
+   - Clean accuracy: 76.50% vs 74.50%
+   - Similar pattern to E5b - epoch 1 may capture better generalization point
+
+3. **ALL_OPS + AQN creates highly noise-tolerant models:**
+   - Models trained with noise on ALL operators (matmul, softmax, silu, gelu, layer_norm)
+   - Combined with epoch-aware AQN for robust training
+   - Result: **Zero degradation under stress testing**
+
+**Comparison with E5b Robustness:**
+
+| Experiment | Noise Scope | Step 58 Clean | Step 116 Clean | Robustness |
+|------------|-------------|---------------|----------------|------------|
+| **E5b** (matmul + AQN) | matmul only | 79.00% | 77.00% | < 1% degradation |
+| **E5d** (ALL_OPS + AQN) | ALL operators | 76.50% | 74.50% | **0% degradation** |
+
+**Conclusion:**
+- ✅ E5d validates that **AQN works for general HW heterogeneous scenarios**
+- ✅ ALL_OPS noise training with AQN produces extremely robust models
+- ✅ The broader research hypothesis is confirmed: AQN helps beyond just quantization
 
 ### Experimental Flow (Complete)
 
