@@ -1554,6 +1554,83 @@ bash scripts/eval_robustness.sh /path/to/E5a/checkpoint /data/gsm8k/test.parquet
 
 ---
 
+## Metrics Visualization (Wandb)
+
+### Training Metrics Project: `aqn`
+
+**Project URL:** https://wandb.ai/vaai/aqn
+
+All E5 experiment training metrics have been uploaded to wandb for visualization and comparison.
+
+| Run Name | Experiment | Final Accuracy | Wandb URL |
+|----------|------------|----------------|-----------|
+| `Baseline-1.5B-clean-76.88` | Baseline (no noise) | 76.88% | https://wandb.ai/vaai/aqn/runs/ym6okonj |
+| `E5-matmul-noAQN-68.16` | E5 (matmul, no AQN) | 68.16% | https://wandb.ai/vaai/aqn/runs/mya03uq7 |
+| `E5a-matmul-GlobalAQN-68.76` | E5a (matmul, Global AQN) | 68.76% | https://wandb.ai/vaai/aqn/runs/ltzgnasy |
+| `E5b-matmul-EpochAwareAQN-70.58` | E5b (matmul, Epoch-Aware AQN) | 70.58% | https://wandb.ai/vaai/aqn/runs/dzra2702 |
+| `E5c-ALLOPS-noAQN-69.07` | E5c (ALL_OPS, no AQN) | 69.07% | https://wandb.ai/vaai/aqn/runs/y501xwrn |
+| `E5d-ALLOPS-EpochAwareAQN-70.20` | E5d (ALL_OPS, Epoch-Aware AQN) | 70.20% | https://wandb.ai/vaai/aqn/runs/4x7uf2xq |
+
+**Tags used:**
+- Experiment ID: `E5`, `E5a`, `E5b`, `E5c`, `E5d`, `baseline`
+- Noise type: `matmul`, `ALLOPS`
+- AQN type: `noAQN`, `GlobalAQN`, `EpochAwareAQN`
+- Common: `1.5B`, `gsm8k`, `noise-5pct`
+
+### Robustness Testing Project: `aqn-robustness`
+
+**Project URL:** https://wandb.ai/vaai/aqn-robustness
+
+Robustness testing results for E5b and E5d checkpoints at different noise levels.
+
+| Run Name | Checkpoint | 0% Noise | 5% Noise | 10% Noise | Max Degradation | Wandb URL |
+|----------|------------|----------|----------|-----------|-----------------|-----------|
+| `E5b-step_58` | Epoch 1 | 79.00% | 79.00% | 78.00% | -1.00% | https://wandb.ai/vaai/aqn-robustness/runs/6hvvx0jz |
+| `E5b-step_116` | Epoch 2 | 77.00% | 78.00% | 77.50% | +0.50% | https://wandb.ai/vaai/aqn-robustness/runs/0ls50h7l |
+| `E5d-step_58` | Epoch 1 | 76.50% | 77.00% | 76.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/fg4irwsc |
+| `E5d-step_116` | Epoch 2 | 74.50% | 74.50% | 74.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/wymje5dq |
+
+**Key Findings from Robustness Testing:**
+- **E5b** (matmul + AQN): < 1% degradation at 10% noise (2x training noise)
+- **E5d** (ALL_OPS + AQN): **0% degradation** at any noise level - most robust
+
+### Local Log Archives
+
+Training logs are archived locally for reproducibility:
+
+```
+logs/e5_experiments/
+├── Baseline_1.5B_clean_76.88.log
+├── E5_matmul_noAQN_68.16.log
+├── E5a_matmul_GlobalAQN_68.76.log
+├── E5b_matmul_EpochAwareAQN_70.58.log
+├── E5c_ALLOPS_noAQN_69.07.log
+└── E5d_ALLOPS_EpochAwareAQN_70.20.log
+```
+
+### Upload Scripts
+
+- **Training metrics upload:** `scripts/upload_log_to_wandb.py`
+- **Robustness results upload:** `scripts/upload_robustness_to_wandb.py`
+
+**Usage:**
+```bash
+export WANDB_API_KEY='your_api_key'
+export WANDB_ENTITY='vaai'
+
+# Upload training log
+python scripts/upload_log_to_wandb.py \
+    --log logs/e5_experiments/E5b_matmul_EpochAwareAQN_70.58.log \
+    --run-name "E5b-matmul-EpochAwareAQN-70.58" \
+    --project aqn \
+    --entity vaai
+
+# Upload robustness results
+python scripts/upload_robustness_to_wandb.py --project aqn-robustness --entity vaai
+```
+
+---
+
 ## References
 
 ### Related Documentation
