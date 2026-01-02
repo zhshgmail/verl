@@ -1230,7 +1230,7 @@ Real HW differences often have systematic patterns (e.g., consistent rounding di
 | `systematic_bias` | `sign(x) * |x| * scale` | Consistent rounding bias |
 | `truncation` | `floor(x / scale) * scale` | Truncation error |
 
-### E7: 7B Model Scale Validation (Running)
+### E7: 7B Model Scale Validation
 
 **Purpose:** Validate AQN effectiveness at larger model scale (7B vs 1.5B).
 
@@ -1238,7 +1238,15 @@ Real HW differences often have systematic patterns (e.g., consistent rounding di
 - AQN improvement should scale to larger models
 - Expected: ~2% improvement over noise-only baseline (same as E5b)
 
-**Configuration:**
+**Experiment Plan:**
+
+| Experiment | Noise | AQN | Purpose | Status |
+|------------|-------|-----|---------|--------|
+| **E7a** | No | No | 7B clean baseline | Pending (after E7c) |
+| **E7b** | 5% | No | 7B noise degradation | Pending (after E7a) |
+| **E7c** | 5% | Yes (Epoch-Aware) | 7B noise + AQN | **Running** |
+
+**Configuration (shared across E7a/E7b/E7c):**
 | Parameter | 1.5B (E5b) | 7B (E7) | Notes |
 |-----------|------------|---------|-------|
 | Model | Qwen2.5-1.5B-Instruct | Qwen2.5-7B-Instruct | 4.5x larger |
@@ -1252,13 +1260,50 @@ Real HW differences often have systematic patterns (e.g., consistent rounding di
 
 **Model Path:** `/data/g30067331/Qwen2.5-7B-Instruct`
 
+---
+
+#### E7a: 7B Baseline (No Noise, No AQN)
+
+**Purpose:** Establish clean baseline accuracy for 7B model.
+
 **Command:**
 ```bash
-ssh root@90.90.102.18
-docker exec -it verl-r3-test bash
-cd /home/z00637938/workspace/verl
-git pull personal feature/npu-aqn-test
+MODEL_PATH=/data/g30067331/Qwen2.5-7B-Instruct \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_7b_baseline.sh 8 > /tmp/7b_baseline.log 2>&1 &
+```
 
+**Script:** `scripts/test_7b_baseline.sh`
+
+**Status:** Pending (will run after E7c completes)
+
+---
+
+#### E7b: 7B + Noise Only (No AQN)
+
+**Purpose:** Measure noise degradation on 7B without AQN mitigation.
+
+**Command:**
+```bash
+MODEL_PATH=/data/g30067331/Qwen2.5-7B-Instruct \
+TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
+VAL_DATA=/data/z00637938/gsm8k/test.parquet \
+nohup bash scripts/test_7b_noise_only.sh 5e-2 8 > /tmp/7b_noise_only.log 2>&1 &
+```
+
+**Script:** `scripts/test_7b_noise_only.sh`
+
+**Status:** Pending (will run after E7a completes)
+
+---
+
+#### E7c: 7B + Noise + Epoch-Aware AQN
+
+**Purpose:** Test if AQN helps at 7B scale.
+
+**Command:**
+```bash
 MODEL_PATH=/data/g30067331/Qwen2.5-7B-Instruct \
 TRAIN_DATA=/data/z00637938/gsm8k/train.parquet \
 VAL_DATA=/data/z00637938/gsm8k/test.parquet \
@@ -1271,16 +1316,28 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_aqn
 ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.log"
 ```
 
-**Expected Results:**
-| Metric | 1.5B (E5b) | 7B (E7 expected) |
-|--------|------------|------------------|
-| Noise-only baseline | 68.16% | ~68-70%? |
-| With Epoch-Aware AQN | 70.58% | ~70-72%? |
-| AQN improvement | +2.42% | ~+2%? |
+**Script:** `scripts/test_noisy_ops_aqn_7b.sh`
 
 **Status:** Running (started 2026-01-02)
 
-**Script:** `scripts/test_noisy_ops_aqn_7b.sh`
+**Early Results (E7c):**
+| Step | val-core/acc | Notes |
+|------|-------------|-------|
+| 0 | 66.41% | Initial (before training) |
+| 20 | 77.86% | First validation |
+
+---
+
+#### E7 Expected Results
+
+| Experiment | 1.5B Result | 7B Expected | Notes |
+|------------|-------------|-------------|-------|
+| **E7a** (baseline) | 76.88% | ~75-78%? | Clean baseline |
+| **E7b** (noise only) | 68.16% | ~66-70%? | Noise degradation |
+| **E7c** (noise + AQN) | 70.58% | ~68-72%? | AQN improvement |
+| **AQN improvement** | +2.42% | ~+2%? | E7c - E7b |
+
+**Execution Order:** E7c (running) → E7a → E7b
 
 ---
 
@@ -1397,7 +1454,9 @@ export VERL_NOISY_OPS_TYPE=relative_gaussian
 | **E5c** | **5e-2** | **ALL_OPS (general HW heterogeneous)** | **No** | **Done** | **69.07%** | **-7.81%** |
 | **E5d** | **5e-2** | **ALL_OPS + Epoch-Aware AQN** | **Yes (Option C)** | **Done** | **70.20%** | **-6.68%** |
 | E6 | TBD | Systematic bias | No | Pending | - | - |
-| **E7** | **5e-2** | **7B model + Epoch-Aware AQN** | **Yes (Option C)** | **Running** | - | - |
+| **E7a** | - | **7B baseline (no noise)** | **No** | **Pending** | - | - |
+| **E7b** | **5e-2** | **7B + noise only** | **No** | **Pending** | - | - |
+| **E7c** | **5e-2** | **7B + noise + Epoch-Aware AQN** | **Yes (Option C)** | **Running** | - | - |
 
 ## Robustness Evaluation Methodology
 
