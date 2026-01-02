@@ -1164,10 +1164,26 @@ Since E5c (no AQN) already outperforms E5 (no AQN), the baseline for E5d compari
 | **E5b** (matmul + AQN) | matmul only | 79.00% | 77.00% | < 1% degradation |
 | **E5d** (ALL_OPS + AQN) | ALL operators | 76.50% | 74.50% | **0% degradation** |
 
+**Cost-Benefit Analysis:**
+
+| Metric | E5b (matmul+AQN) | E5d (ALL_OPS+AQN) | Cost |
+|--------|------------------|-------------------|------|
+| Training accuracy (noisy) | 70.58% | 70.20% | -0.38% |
+| Clean eval (Step 58) | 79.00% | 76.50% | **-2.50%** |
+| Clean eval (Step 116) | 77.00% | 74.50% | **-2.50%** |
+| vs Baseline (76.88%) | +2.12% | -0.38% | |
+| Robustness | < 1% degradation | **0% degradation** | ✅ Better |
+
+**Trade-off:**
+- ⚠️ **Cost**: ~2.5% accuracy drop in clean evaluation compared to matmul-only training
+- ✅ **Benefit**: Stronger robustness (0% degradation vs < 1%)
+- 📊 **Recovery**: E5d recovers +6.3% when evaluated cleanly (70.20% → 76.50%)
+
 **Conclusion:**
 - ✅ E5d validates that **AQN works for general HW heterogeneous scenarios**
 - ✅ ALL_OPS noise training with AQN produces extremely robust models
-- ✅ The broader research hypothesis is confirmed: AQN helps beyond just quantization
+- ⚠️ **Trade-off exists**: Higher robustness comes at ~2.5% accuracy cost vs matmul-only
+- 🎯 **Recommendation**: Use matmul-only noise (E5b) unless deploying to HW with known differences in non-linear operators
 
 ### Experimental Flow (Complete)
 
