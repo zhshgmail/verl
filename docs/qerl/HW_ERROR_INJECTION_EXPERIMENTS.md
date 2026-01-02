@@ -1590,6 +1590,8 @@ Robustness testing results for E5b and E5d checkpoints at different noise levels
 | `E5d-step_58` | Epoch 1 | 76.50% | 77.00% | 76.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/fg4irwsc |
 | `E5d-step_116` | Epoch 2 | 74.50% | 74.50% | 74.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/wymje5dq |
 
+> **Note:** If you see a duplicate `E5b-step_58` run (`g3r6q79w`), it was a failed upload attempt and can be deleted.
+
 **Key Findings from Robustness Testing:**
 - **E5b** (matmul + AQN): < 1% degradation at 10% noise (2x training noise)
 - **E5d** (ALL_OPS + AQN): **0% degradation** at any noise level - most robust
