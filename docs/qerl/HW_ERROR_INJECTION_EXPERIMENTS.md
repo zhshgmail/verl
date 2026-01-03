@@ -8,91 +8,43 @@
 
 ## ⚠️ CURRENT TASK STATUS (for continuing agents)
 
-**Last Updated**: 2026-01-04 (03:12 UTC)
+**Last Updated**: 2026-01-04 (10:22 UTC)
 
-### Active Experiment: E7c (7B + Noise + AQN)
+### E7 Experiments: ✅ ALL COMPLETE
 
-| Item | Status |
-|------|--------|
-| **E7a (7B baseline)** | ✅ Complete - 90.67% |
-| **E7b (7B + 5% noise)** | ✅ Complete - 88.70% |
-| **E7c (7B + noise + AQN)** | 🔄 **IN PROGRESS** (70%, step 163/232, val@160: 88.02%) |
+| Item | Status | Final Accuracy |
+|------|--------|----------------|
+| **E7a (7B baseline)** | ✅ Complete | **90.67%** |
+| **E7b (7B + 5% noise)** | ✅ Complete | **88.70%** (-1.97%) |
+| **E7c (7B + noise + AQN)** | ✅ Complete | **89.50%** (+0.80% from E7b) |
+| **E7c Robustness Test** | ✅ Complete | 89.50%→89.50%→89.00% (0%/5%/10% noise) |
+| **Wandb Upload** | ✅ Complete | All metrics uploaded |
 
-**E7c Validation Accuracy Trend:**
-| Step | Val Accuracy | Notes |
-|------|--------------|-------|
-| 20 | 77.18% | End of warmup |
-| 60 | 85.64% | Epoch 1 checkpoint |
-| 100 | 87.56% | |
-| 140 | 87.87% | |
-| 160 | **88.02%** | Latest |
-| 232 | TBD | Final (ETA ~1h 20m) |
+### E7c Robustness Test Results
 
-### How to Monitor E7c
+| Checkpoint | 0% Noise | 5% Noise | 10% Noise | Degradation |
+|------------|----------|----------|-----------|-------------|
+| Step 232 (Epoch 4) | **89.50%** | **89.50%** | **89.00%** | -0.50% max |
 
-```bash
-# Check if training is running (look for main_ppo process)
-ssh root@90.90.102.18 "ps aux | grep main_ppo | grep -v grep"
+**Key Finding**: AQN-trained 7B model shows excellent noise robustness:
+- Only -0.50% degradation at 10% inference noise
+- No degradation at 5% inference noise (matched training noise level)
+- AQN improvement: +0.80% over noise-only baseline (E7c vs E7b)
 
-# Check GPU utilization (should be 75-90% if running)
-ssh root@90.90.102.18 "nvidia-smi | grep -E '%'"
+### Wandb Project URLs
 
-# Get training progress (find the log FD for the process)
-ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | tail -50 | grep -E 'step|Progress|val-core|AQN'"
+- **Training runs**: https://wandb.ai/vaai/aqn
+  - E7a: https://wandb.ai/vaai/aqn/runs/649j3lxk
+  - E7b: https://wandb.ai/vaai/aqn/runs/x4alatdd
+  - E7c: https://wandb.ai/vaai/aqn/runs/4uu85x0k
+- **Robustness**: https://wandb.ai/vaai/aqn/runs/mrrm0qlq
 
-# Alternative: check recent outputs directory
-ssh root@90.90.102.18 "ls -lat /home/z00637938/workspace/verl/outputs/2026-01-03/"
-```
+### Archived Logs
 
-### When E7c Completes - Next Steps
-
-1. **Record E7c final results** in E7 Results Summary table below
-2. **Merge FSDP checkpoint to HuggingFace format**:
-   ```bash
-   ssh root@90.90.102.18
-   cd /home/z00637938/workspace/verl
-
-   # Merge step 58 (epoch 1) and step 232 (final)
-   python -m verl.model_merger \
-       --checkpoint_path /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2/global_step_58 \
-       --output_path /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2/global_step_58/merged_hf
-
-   # Repeat for final step (232)
-   ```
-
-3. **Run robustness testing** (0%/5%/10% noise):
-   ```bash
-   # Modify scripts/robustness_eval.py paths for 7B:
-   #   --checkpoint_base: /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2
-   #   --tokenizer: /data/g30067331/Qwen2.5-7B-Instruct
-   #   --steps: 58, 232 (not 58, 116)
-
-   python scripts/robustness_eval.py \
-       --checkpoint_base /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2 \
-       --tokenizer /data/g30067331/Qwen2.5-7B-Instruct \
-       --val_data /data/z00637938/gsm8k/test.parquet \
-       --n_samples 200
-   ```
-
-4. **Upload E7 results to wandb** (project: `aqn`):
-   ```bash
-   # Download logs locally first
-   scp root@90.90.102.18:/tmp/7b_baseline.log logs/e7_experiments/E7a_7B_baseline_90.67.log
-   scp root@90.90.102.18:/tmp/7b_noise_only.log logs/e7_experiments/E7b_7B_noise_only_88.70.log
-   # E7c log location TBD based on how it was launched
-
-   # Upload to wandb
-   python scripts/upload_log_to_wandb.py --log logs/e7_experiments/E7a_7B_baseline_90.67.log ...
-   ```
-
-5. **Update this documentation** with final E7c results and robustness test results
-
-6. **Clean up checkpoints** (optional, if disk space needed):
-   ```bash
-   # E7a and E7b checkpoints NOT needed for robustness (only E7c)
-   rm -rf /data/z00637938/verl_checkpoints/7b_baseline_test      # 42G
-   rm -rf /data/z00637938/verl_checkpoints/7b_noise_only_test    # 341G
-   ```
+Logs archived locally at: `logs/e7_experiments/`
+- `E7a_7B_baseline.log`
+- `E7b_7B_noise_only.log`
+- `E7c_7B_aqn.log`
 
 ### Important Notes for New Agents
 
@@ -1508,13 +1460,14 @@ ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.l
 |------------|-------------|-----------|-------|
 | **E7a** (baseline) | 76.88% | **90.67%** ✅ | Clean baseline (7B much stronger) |
 | **E7b** (noise only) | 68.16% | **88.70%** ✅ | Noise degradation: -1.97% |
-| **E7c** (noise + AQN) | 70.58% | 🔄 In Progress | AQN improvement |
-| **AQN improvement** | +2.42% | TBD | E7c - E7b |
+| **E7c** (noise + AQN) | 70.58% | **89.50%** ✅ | AQN improvement: +0.80% |
+| **AQN improvement** | +2.42% | **+0.80%** | E7c - E7b |
 
 **Key Observations:**
 - 7B model achieves 90.67% vs 76.88% for 1.5B - a significant **+13.79%** improvement from model scale
 - 7B noise degradation: -1.97% (E7b vs E7a), less severe than 1.5B: -8.72% (E5 vs Baseline)
-- Larger models appear more robust to computational noise
+- 7B AQN improvement: +0.80% (E7c vs E7b), smaller than 1.5B: +2.42% (expected - larger models already more robust)
+- Larger models appear more robust to computational noise and benefit less from AQN (but still benefit)
 
 **Execution Order:** E7a (baseline) → E7b (noise only) → E7c (noise + AQN)
 
@@ -1775,12 +1728,15 @@ All E5 experiment training metrics have been uploaded to wandb for visualization
 | `E5b-matmul-EpochAwareAQN-70.58` | E5b (matmul, Epoch-Aware AQN) | 70.58% | https://wandb.ai/vaai/aqn/runs/dzra2702 |
 | `E5c-ALLOPS-noAQN-69.07` | E5c (ALL_OPS, no AQN) | 69.07% | https://wandb.ai/vaai/aqn/runs/y501xwrn |
 | `E5d-ALLOPS-EpochAwareAQN-70.20` | E5d (ALL_OPS, Epoch-Aware AQN) | 70.20% | https://wandb.ai/vaai/aqn/runs/4x7uf2xq |
+| `E7a_7B_baseline_90.67` | E7a (7B baseline) | 90.67% | https://wandb.ai/vaai/aqn/runs/649j3lxk |
+| `E7b_7B_noise_only_88.70` | E7b (7B + 5% noise) | 88.70% | https://wandb.ai/vaai/aqn/runs/x4alatdd |
+| `E7c_7B_aqn_89.50` | E7c (7B + noise + AQN) | 89.50% | https://wandb.ai/vaai/aqn/runs/4uu85x0k |
 
 **Tags used:**
-- Experiment ID: `E5`, `E5a`, `E5b`, `E5c`, `E5d`, `baseline`
+- Experiment ID: `E5`, `E5a`, `E5b`, `E5c`, `E5d`, `E7`, `baseline`
 - Noise type: `matmul`, `ALLOPS`
 - AQN type: `noAQN`, `GlobalAQN`, `EpochAwareAQN`
-- Common: `1.5B`, `gsm8k`, `noise-5pct`
+- Common: `1.5B`, `7B`, `gsm8k`, `noise-5pct`
 
 ### Robustness Testing Project: `aqn-robustness`
 
@@ -1794,8 +1750,11 @@ Robustness testing results for E5b and E5d checkpoints at different noise levels
 | `E5b-step_116` | Epoch 2 | 77.00% | 78.00% | 77.50% | +0.50% | https://wandb.ai/vaai/aqn-robustness/runs/0ls50h7l |
 | `E5d-step_58` | Epoch 1 | 76.50% | 77.00% | 76.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/fg4irwsc |
 | `E5d-step_116` | Epoch 2 | 74.50% | 74.50% | 74.50% | **0.00%** | https://wandb.ai/vaai/aqn-robustness/runs/wymje5dq |
+| **`E7c_7B_aqn_step_232`** | **7B Epoch 4** | **89.50%** | **89.50%** | **89.00%** | **-0.50%** | https://wandb.ai/vaai/aqn/runs/mrrm0qlq |
 
 > **Note:** If you see a duplicate `E5b-step_58` run (`g3r6q79w`), it was a failed upload attempt and can be deleted.
+
+**E7c Robustness Key Finding:** The 7B model shows excellent noise robustness with only -0.50% degradation at 10% inference noise. At 5% noise (matching training noise level), there is zero degradation.
 
 **Key Findings from Robustness Testing:**
 - **E5b** (matmul + AQN): < 1% degradation at 10% noise (2x training noise)
