@@ -139,26 +139,44 @@ cd /home/z00637938/workspace/verl
 
 ### Monitoring Commands
 
-**For E5 experiments (inside container):**
+**For E5 experiments (inside container `verl-r3-test`):**
 ```bash
+# Check if training is running inside container
+ssh root@90.90.102.18 "docker exec verl-r3-test pgrep -a python | grep trainer"
+
+# Check training progress
+ssh root@90.90.102.18 "docker exec verl-r3-test grep 'Training Progress' /tmp/noisy_ops_5e-2.log | tail -3"
+
+# Check validation results
 ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_5e-2.log"
+
+# Full log tail
 ssh root@90.90.102.18 "docker exec verl-r3-test tail -100 /tmp/noisy_ops_5e-2.log"
 ```
 
-**For E7 experiments (direct on host):**
+**For E7 experiments (direct on host, NO container):**
 ```bash
-# Check if training is running
+# Check if training is running (look for main_ppo process)
 ssh root@90.90.102.18 "ps aux | grep main_ppo | grep -v grep"
 
-# Check GPU utilization
+# Check GPU utilization (should be 75-90% if running)
 ssh root@90.90.102.18 "nvidia-smi | grep -E '%'"
 
-# Get training output (via process file descriptor)
+# Get training output (via process file descriptor - works even without log file)
 ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | tail -50"
 
 # Check validation results
 ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | grep val-core"
+
+# Alternative: check outputs directory for log files
+ssh root@90.90.102.18 "ls -lat /home/z00637938/workspace/verl/outputs/2026-01-03/ | head -5"
 ```
+
+**Important Notes:**
+- E5 experiments (1.5B): Run **inside** container `verl-r3-test`
+- E7 experiments (7B): Run **directly on host** (no container)
+- Container name: `verl-r3-test`
+- Working directory: `/home/z00637938/workspace/verl`
 
 ### Running a New Test
 ```bash
