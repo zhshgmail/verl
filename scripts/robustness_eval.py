@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
 """
-Robustness evaluation for E5b checkpoints.
-Tests checkpoints at different noise levels.
+Robustness evaluation for AQN-trained checkpoints.
+Tests checkpoints at different noise levels (0%, 5%, 10%).
+
+Usage for 1.5B (E5b):
+    python scripts/robustness_eval.py \
+        --checkpoint_base /path/to/noisy_ops_aqn_epoch_aware_ckpt_5e-2 \
+        --tokenizer /data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/... \
+        --steps 58 116
+
+Usage for 7B (E7c):
+    python scripts/robustness_eval.py \
+        --checkpoint_base /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2 \
+        --tokenizer /data/g30067331/Qwen2.5-7B-Instruct \
+        --steps 58 232 \
+        --tp_size 2
 """
 
 import os
@@ -13,7 +26,7 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
-def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_samples=200):
+def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_samples=200, tp_size=1):
     """Run evaluation on GSM8K with given noise level."""
     from vllm import LLM, SamplingParams
 
@@ -27,6 +40,7 @@ def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_sam
 
     print(f"\n=== Evaluation with noise={noise_scale*100:.0f}% ===")
     print(f"Model: {model_path}")
+    print(f"Tensor Parallel Size: {tp_size}")
 
     # Load data
     df = pd.read_parquet(val_data_path)
@@ -37,7 +51,7 @@ def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_sam
     llm = LLM(
         model=model_path,
         tokenizer=tokenizer_path,
-        tensor_parallel_size=1,
+        tensor_parallel_size=tp_size,
         gpu_memory_utilization=0.6,
         trust_remote_code=True,
         dtype="bfloat16",
@@ -115,20 +129,27 @@ def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_sam
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint_base", type=str,
-                       default="/home/dpsk_a2a/DeepEP/checkpoints/noisy_ops_aqn_epoch_aware_test/noisy_ops_aqn_epoch_aware_ckpt_5e-2")
-    parser.add_argument("--tokenizer", type=str,
-                       default="/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306")
+    parser = argparse.ArgumentParser(description="Robustness evaluation for AQN-trained checkpoints")
+    parser.add_argument("--checkpoint_base", type=str, required=True,
+                       help="Base path to checkpoint directory (e.g., /path/to/noisy_ops_aqn_epoch_aware_ckpt_5e-2)")
+    parser.add_argument("--tokenizer", type=str, required=True,
+                       help="Path to tokenizer/base model (e.g., /data/g30067331/Qwen2.5-7B-Instruct)")
     parser.add_argument("--val_data", type=str,
-                       default="/data/z00637938/gsm8k/test.parquet")
-    parser.add_argument("--n_samples", type=int, default=200)
+                       default="/data/z00637938/gsm8k/test.parquet",
+                       help="Path to validation data parquet file")
+    parser.add_argument("--n_samples", type=int, default=200,
+                       help="Number of samples to evaluate (default: 200)")
+    parser.add_argument("--steps", type=int, nargs="+", default=[58, 116],
+                       help="Checkpoint steps to evaluate (default: 58 116, use '58 232' for 7B)")
+    parser.add_argument("--tp_size", type=int, default=1,
+                       help="Tensor parallel size (default: 1, use 2 for 7B)")
     args = parser.parse_args()
 
     results = {}
+    steps = args.steps
 
-    # Test both checkpoints at all noise levels
-    for step in [58, 116]:
+    # Test all checkpoints at all noise levels
+    for step in steps:
         model_path = f"{args.checkpoint_base}/global_step_{step}/merged_hf"
         results[step] = {}
 
@@ -145,6 +166,7 @@ def main():
                     val_data_path=args.val_data,
                     noise_scale=noise,
                     n_samples=args.n_samples,
+                    tp_size=args.tp_size,
                 )
                 results[step][noise_label] = acc
             except Exception as e:
@@ -160,8 +182,8 @@ def main():
     print(f"\n{'Checkpoint':<20} {'0% Noise':<15} {'5% Noise':<15} {'10% Noise':<15}")
     print("-" * 65)
 
-    for step in [58, 116]:
-        epoch = 1 if step == 58 else 2
+    for i, step in enumerate(steps):
+        epoch = i + 1
         row = f"Step {step} (Epoch {epoch})"
         row = f"{row:<20}"
         for noise in ["0%", "5%", "10%"]:
@@ -176,8 +198,8 @@ def main():
 
     # Calculate degradation
     print(f"\nDegradation Analysis:")
-    for step in [58, 116]:
-        epoch = 1 if step == 58 else 2
+    for i, step in enumerate(steps):
+        epoch = i + 1
         clean = results.get(step, {}).get("0%")
         noise5 = results.get(step, {}).get("5%")
         noise10 = results.get(step, {}).get("10%")
