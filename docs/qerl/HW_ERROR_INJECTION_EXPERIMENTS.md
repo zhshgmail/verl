@@ -8,7 +8,7 @@
 
 ## ⚠️ CURRENT TASK STATUS (for continuing agents)
 
-**Last Updated**: 2026-01-03
+**Last Updated**: 2026-01-04 (03:12 UTC)
 
 ### Active Experiment: E7c (7B + Noise + AQN)
 
@@ -16,7 +16,17 @@
 |------|--------|
 | **E7a (7B baseline)** | ✅ Complete - 90.67% |
 | **E7b (7B + 5% noise)** | ✅ Complete - 88.70% |
-| **E7c (7B + noise + AQN)** | 🔄 **IN PROGRESS** (~11% at last check) |
+| **E7c (7B + noise + AQN)** | 🔄 **IN PROGRESS** (70%, step 163/232, val@160: 88.02%) |
+
+**E7c Validation Accuracy Trend:**
+| Step | Val Accuracy | Notes |
+|------|--------------|-------|
+| 20 | 77.18% | End of warmup |
+| 60 | 85.64% | Epoch 1 checkpoint |
+| 100 | 87.56% | |
+| 140 | 87.87% | |
+| 160 | **88.02%** | Latest |
+| 232 | TBD | Final (ETA ~1h 20m) |
 
 ### How to Monitor E7c
 
