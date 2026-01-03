@@ -6,6 +6,94 @@
 
 ---
 
+## ⚠️ CURRENT TASK STATUS (for continuing agents)
+
+**Last Updated**: 2026-01-03
+
+### Active Experiment: E7c (7B + Noise + AQN)
+
+| Item | Status |
+|------|--------|
+| **E7a (7B baseline)** | ✅ Complete - 90.67% |
+| **E7b (7B + 5% noise)** | ✅ Complete - 88.70% |
+| **E7c (7B + noise + AQN)** | 🔄 **IN PROGRESS** (~11% at last check) |
+
+### How to Monitor E7c
+
+```bash
+# Check if training is running (look for main_ppo process)
+ssh root@90.90.102.18 "ps aux | grep main_ppo | grep -v grep"
+
+# Check GPU utilization (should be 75-90% if running)
+ssh root@90.90.102.18 "nvidia-smi | grep -E '%'"
+
+# Get training progress (find the log FD for the process)
+ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | tail -50 | grep -E 'step|Progress|val-core|AQN'"
+
+# Alternative: check recent outputs directory
+ssh root@90.90.102.18 "ls -lat /home/z00637938/workspace/verl/outputs/2026-01-03/"
+```
+
+### When E7c Completes - Next Steps
+
+1. **Record E7c final results** in E7 Results Summary table below
+2. **Merge FSDP checkpoint to HuggingFace format**:
+   ```bash
+   ssh root@90.90.102.18
+   cd /home/z00637938/workspace/verl
+
+   # Merge step 58 (epoch 1) and step 232 (final)
+   python -m verl.model_merger \
+       --checkpoint_path /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2/global_step_58 \
+       --output_path /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2/global_step_58/merged_hf
+
+   # Repeat for final step (232)
+   ```
+
+3. **Run robustness testing** (0%/5%/10% noise):
+   ```bash
+   # Modify scripts/robustness_eval.py paths for 7B:
+   #   --checkpoint_base: /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2
+   #   --tokenizer: /data/g30067331/Qwen2.5-7B-Instruct
+   #   --steps: 58, 232 (not 58, 116)
+
+   python scripts/robustness_eval.py \
+       --checkpoint_base /data/z00637938/verl_checkpoints/noisy_ops_aqn_7b_test/noisy_ops_aqn_7b_5e-2 \
+       --tokenizer /data/g30067331/Qwen2.5-7B-Instruct \
+       --val_data /data/z00637938/gsm8k/test.parquet \
+       --n_samples 200
+   ```
+
+4. **Upload E7 results to wandb** (project: `aqn`):
+   ```bash
+   # Download logs locally first
+   scp root@90.90.102.18:/tmp/7b_baseline.log logs/e7_experiments/E7a_7B_baseline_90.67.log
+   scp root@90.90.102.18:/tmp/7b_noise_only.log logs/e7_experiments/E7b_7B_noise_only_88.70.log
+   # E7c log location TBD based on how it was launched
+
+   # Upload to wandb
+   python scripts/upload_log_to_wandb.py --log logs/e7_experiments/E7a_7B_baseline_90.67.log ...
+   ```
+
+5. **Update this documentation** with final E7c results and robustness test results
+
+6. **Clean up checkpoints** (optional, if disk space needed):
+   ```bash
+   # E7a and E7b checkpoints NOT needed for robustness (only E7c)
+   rm -rf /data/z00637938/verl_checkpoints/7b_baseline_test      # 42G
+   rm -rf /data/z00637938/verl_checkpoints/7b_noise_only_test    # 341G
+   ```
+
+### Important Notes for New Agents
+
+1. **Server access**: `ssh root@90.90.102.18` (NOT via container for E7 experiments)
+2. **Working directory**: `/home/z00637938/workspace/verl`
+3. **Git branch**: `feature/npu-aqn-test` (push to both `team` and `personal` remotes)
+4. **E7 uses 232 steps** (not 116 like E5) because batch_size=64 vs 128
+5. **AQN warmup**: First ~39 steps of each epoch have sigma=0 (intentional design)
+
+---
+
 ## Quick Reference: Environment & Reproduction
 
 ### A100 Remote Machine Access
@@ -13,49 +101,63 @@
 # SSH to A100 machine
 ssh root@90.90.102.18
 
-# Enter verl container
+# For E5 experiments (1.5B): Enter verl container
 docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
 
-# Working directory inside container
+# For E7 experiments (7B): Run directly on host (no container)
 cd /home/z00637938/workspace/verl
 ```
 
-### Model & Data Paths (Inside Container)
-| Resource | Path |
-|----------|------|
-| **Model** | `/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306` |
-| **Train Data** | `/data/z00637938/gsm8k/train.parquet` |
-| **Val Data** | `/data/z00637938/gsm8k/test.parquet` |
+### Model & Data Paths
+| Resource | 1.5B (E5) | 7B (E7) |
+|----------|-----------|---------|
+| **Model** | `/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306` | `/data/g30067331/Qwen2.5-7B-Instruct` |
+| **Train Data** | `/data/z00637938/gsm8k/train.parquet` | Same |
+| **Val Data** | `/data/z00637938/gsm8k/test.parquet` | Same |
 
 ### Training Scripts
-| Script | Purpose | Location |
-|--------|---------|----------|
-| `run_gpu_baseline.sh` | GPU baseline (no error injection) | `scripts/run_gpu_baseline.sh` |
-| `test_noisy_ops_a100.sh` | Operator-level noisy ops test (matmul only) | `scripts/test_noisy_ops_a100.sh` |
-| `test_noisy_ops_all_ops.sh` | ALL operators noisy test (E5) | `scripts/test_noisy_ops_all_ops.sh` |
-| `test_hw_error_injection_a100.sh` | Module-level error injection test | `scripts/test_hw_error_injection_a100.sh` |
+| Script | Purpose | Model |
+|--------|---------|-------|
+| `run_gpu_baseline.sh` | GPU baseline (no error injection) | 1.5B |
+| `test_noisy_ops_a100.sh` | Operator-level noisy ops test (matmul only) | 1.5B |
+| `test_noisy_ops_all_ops.sh` | ALL operators noisy test | 1.5B |
+| `test_noisy_ops_aqn_epoch_aware.sh` | E5b: matmul + epoch-aware AQN | 1.5B |
+| **`test_7b_baseline.sh`** | E7a: 7B baseline | **7B** |
+| **`test_7b_noise_only.sh`** | E7b: 7B + 5% noise | **7B** |
+| **`test_noisy_ops_aqn_7b.sh`** | E7c: 7B + noise + AQN | **7B** |
 
-### Log Locations (Inside Container)
-| Experiment | Log File |
-|------------|----------|
-| E4b (1e-4) | `/tmp/noisy_ops_1e-4.log` |
-| E4c (1e-3) | `/tmp/noisy_ops_1e-3.log` |
-| E4d (1e-2) | `/tmp/noisy_ops_1e-2.log` (pending) |
-| E5 (5e-2 FP4-realistic) | `/tmp/noisy_ops_5e-2.log` |
+### Log Locations
+| Experiment | Log File | Container? |
+|------------|----------|------------|
+| E4b (1e-4) | `/tmp/noisy_ops_1e-4.log` | Yes |
+| E5 (5e-2) | `/tmp/noisy_ops_5e-2.log` | Yes |
+| E5b (5e-2 + AQN) | `/tmp/noisy_ops_aqn_epoch_aware.log` | Yes |
+| **E7a (7B baseline)** | `/tmp/7b_baseline.log` | **No** |
+| **E7b (7B noise)** | `/tmp/7b_noise_only.log` | **No** |
+| **E7c (7B + AQN)** | `/tmp/noisy_ops_aqn_7b.log` or process fd | **No** |
 
 ### Monitoring Commands
+
+**For E5 experiments (inside container):**
+```bash
+ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_5e-2.log"
+ssh root@90.90.102.18 "docker exec verl-r3-test tail -100 /tmp/noisy_ops_5e-2.log"
+```
+
+**For E7 experiments (direct on host):**
 ```bash
 # Check if training is running
-ssh root@90.90.102.18 "docker exec verl-r3-test pgrep -a python | grep trainer"
+ssh root@90.90.102.18 "ps aux | grep main_ppo | grep -v grep"
 
-# Check training progress
-ssh root@90.90.102.18 "docker exec verl-r3-test grep 'Training Progress' /tmp/noisy_ops_1e-4.log | tail -3"
+# Check GPU utilization
+ssh root@90.90.102.18 "nvidia-smi | grep -E '%'"
+
+# Get training output (via process file descriptor)
+ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | tail -50"
 
 # Check validation results
-ssh root@90.90.102.18 "docker exec verl-r3-test grep val-core /tmp/noisy_ops_1e-4.log"
-
-# Full log tail
-ssh root@90.90.102.18 "docker exec verl-r3-test tail -100 /tmp/noisy_ops_1e-4.log"
+ssh root@90.90.102.18 "cat /proc/\$(pgrep -f 'main_ppo' | head -1)/fd/1 2>/dev/null | grep val-core"
 ```
 
 ### Running a New Test
