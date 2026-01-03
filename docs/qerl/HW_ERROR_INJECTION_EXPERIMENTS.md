@@ -1280,7 +1280,30 @@ nohup bash scripts/test_7b_baseline.sh 8 > /tmp/7b_baseline.log 2>&1 &
 
 **Script:** `scripts/test_7b_baseline.sh`
 
-**Status:** **Pending** (first to run)
+**Status:** ✅ **Complete** (2026-01-03)
+
+**Results:**
+
+| Step | OOD Accuracy | Epoch |
+|------|--------------|-------|
+| 0 | 78.92% | 0 |
+| 20 | 84.84% | 0 |
+| 40 | 88.48% | 0 |
+| 60 | 89.16% | 0 |
+| 80 | 89.23% | 0 |
+| 100 | 89.69% | 0 |
+| 120 | 89.31% | 1 |
+| 140 | 89.39% | 1 |
+| 160 | 90.60% | 1 |
+| 180 | 90.22% | 1 |
+| 200 | **90.83%** | 1 |
+| 220 | 90.67% | 1 |
+
+**Final Accuracy: 90.67%** (peak: 90.83% at step 200)
+
+**Checkpoint:** `/data/z00637938/verl_checkpoints/7b_baseline_test/7b_baseline/global_step_232/` (42G)
+
+**Training Time:** ~2h 46m on 8x A100 GPUs
 
 ---
 
@@ -1298,7 +1321,24 @@ nohup bash scripts/test_7b_noise_only.sh 5e-2 8 > /tmp/7b_noise_only.log 2>&1 &
 
 **Script:** `scripts/test_7b_noise_only.sh`
 
-**Status:** Pending (will run after E7a completes)
+**Status:** ✅ **Complete** (2026-01-03)
+
+**Results:**
+| Step | OOD Accuracy | Epoch |
+|------|--------------|-------|
+| 0 | 70.05% | 0 |
+| 20 | 77.10% | 0 |
+| 40 | 85.22% | 0 |
+| 60 | 87.41% | 0 |
+| 100 | 87.87% | 0 |
+| 140 | ~88% | 1 |
+| 180 | ~88% | 1 |
+| 220 | ~88% | 1 |
+| 232 | **88.70%** | 1 |
+
+**Final Accuracy: 88.70%** (degraded -1.97% from E7a baseline due to 5% noise)
+
+**Training Time:** ~4h 29m on 8x A100 GPUs
 
 ---
 
@@ -1322,21 +1362,29 @@ ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.l
 
 **Script:** `scripts/test_noisy_ops_aqn_7b.sh`
 
-**Status:** Pending (after E7b)
+**Status:** 🔄 **In Progress** (2026-01-03)
 
-**Note:** First E7c attempt (2026-01-02) was stopped at step 45/232 because checkpoint saving was disabled (`save_freq=-1`). Script has been updated to `save_freq=58`. Early results showed promising training:
-- Step 0: 66.41%, Step 20: 77.86%, Step 40: 83.70%
+**Note:** First E7c attempt (2026-01-02) was stopped at step 45/232 because checkpoint saving was disabled (`save_freq=-1`). Script has been updated to `save_freq=58`.
+
+**Configuration:**
+- NoisyOps: 5% relative Gaussian noise on matmul/bmm/linear
+- Epoch-Aware AQN: σ=0.05→0.005 (epoch 1), σ=0.005→0.0005 (epoch 2)
 
 ---
 
-#### E7 Expected Results
+#### E7 Results Summary
 
-| Experiment | 1.5B Result | 7B Expected | Notes |
-|------------|-------------|-------------|-------|
-| **E7a** (baseline) | 76.88% | ~75-78%? | Clean baseline |
-| **E7b** (noise only) | 68.16% | ~66-70%? | Noise degradation |
-| **E7c** (noise + AQN) | 70.58% | ~68-72%? | AQN improvement |
-| **AQN improvement** | +2.42% | ~+2%? | E7c - E7b |
+| Experiment | 1.5B Result | 7B Result | Notes |
+|------------|-------------|-----------|-------|
+| **E7a** (baseline) | 76.88% | **90.67%** ✅ | Clean baseline (7B much stronger) |
+| **E7b** (noise only) | 68.16% | **88.70%** ✅ | Noise degradation: -1.97% |
+| **E7c** (noise + AQN) | 70.58% | 🔄 In Progress | AQN improvement |
+| **AQN improvement** | +2.42% | TBD | E7c - E7b |
+
+**Key Observations:**
+- 7B model achieves 90.67% vs 76.88% for 1.5B - a significant **+13.79%** improvement from model scale
+- 7B noise degradation: -1.97% (E7b vs E7a), less severe than 1.5B: -8.72% (E5 vs Baseline)
+- Larger models appear more robust to computational noise
 
 **Execution Order:** E7a (baseline) → E7b (noise only) → E7c (noise + AQN)
 
@@ -1344,6 +1392,22 @@ ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_7b.l
 - E7a: `scripts/test_7b_baseline.sh`
 - E7b: `scripts/test_7b_noise_only.sh`
 - E7c: `scripts/test_noisy_ops_aqn_7b.sh`
+
+**Robustness Testing Plan:**
+- Only E7c checkpoint needs robustness testing (at 0%/5%/10% inference noise)
+- E7a/E7b checkpoints were for training-time comparison only
+
+**TODO - Checkpoint Cleanup (when disk space needed):**
+```bash
+# E7a and E7b checkpoints can be deleted after E7 experiments complete
+# They are NOT needed for robustness testing (only E7c is tested)
+# Location: /data/z00637938/verl_checkpoints/
+# - 7b_baseline_test: 42G (E7a) - can delete
+# - 7b_noise_only_test: 341G (E7b) - can delete
+# Total reclaimable: 383G
+rm -rf /data/z00637938/verl_checkpoints/7b_baseline_test
+rm -rf /data/z00637938/verl_checkpoints/7b_noise_only_test
+```
 
 **Log Files (on A100 server):**
 - E7a: `/tmp/7b_baseline.log`
@@ -1641,6 +1705,33 @@ python scripts/upload_log_to_wandb.py \
 # Upload robustness results
 python scripts/upload_robustness_to_wandb.py --project aqn-robustness --entity vaai
 ```
+
+---
+
+## Checkpoint Storage (A100 Server)
+
+Checkpoints are stored on `/data` partition (28T, symlinked from `/home`):
+
+```
+/data/z00637938/verl_checkpoints/
+├── 7b_baseline_test/
+│   └── 7b_baseline/
+│       └── global_step_232/     # E7a final checkpoint (42G)
+├── 7b_noise_only_test/          # E7b checkpoints (pending)
+└── 7b_noisy_ops_aqn_test/       # E7c checkpoints (pending)
+```
+
+**Symlink:** `/home/z00637938/workspace/verl/checkpoints` → `/data/z00637938/verl_checkpoints`
+
+**Server Access:**
+- Primary: `ssh root@90.90.102.18`
+- Alternate: `ssh g30067331@10.198.30.53` (may timeout)
+
+**Disk Management Notes:**
+- Root filesystem (`/`) is 3.5T, often near capacity
+- `/data` has 28T with ~1.9T free - use for large files
+- Each 7B checkpoint is ~42G (final step only) or ~86G (full with optimizer)
+- Clean up intermediate checkpoints (keep only step_58 and final) to save space
 
 ---
 
