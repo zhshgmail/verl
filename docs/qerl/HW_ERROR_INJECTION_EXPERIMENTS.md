@@ -40,9 +40,20 @@ The training OOD accuracy (e.g., E5b: 70.58%) was measured **WITH 5% noise activ
 
 | Test | Status | Notes |
 |------|--------|-------|
-| **E5b (matmul + AQN)** | ✅ Verified | See results above |
-| **E5d (ALL_OPS + AQN)** | ⏳ Pending | Need native PyTorch test |
-| **E7c (7B + AQN)** | ⏳ Pending | Need native PyTorch test |
+| **E5b (matmul + AQN)** | ✅ Verified | See results above (-14% at 5%, -28% at 10%) |
+| **E5d (ALL_OPS + AQN)** | ❌ Not Found | Checkpoint does not exist |
+| **E7c (7B + AQN)** | ✅ Verified | Mechanism works, but results inconclusive (small n) |
+
+**✅ E7c Preliminary Results (Native PyTorch, n=10 samples):**
+
+| Noise Level | Accuracy | Forward Injections | Notes |
+|-------------|----------|-------------------|-------|
+| **0% (clean)** | 70.0% (7/10) | 0 | Small sample |
+| **5%** | 90.0% (9/10) | 551,009 | High variance |
+| **10%** | 90.0% (9/10) | 569,527 | High variance |
+
+⚠️ **Note**: 10 samples is too small for statistical significance. The variance at 70% accuracy with n=10 is ±30%.
+Noise injection mechanism is **verified working**, but conclusive results need n≥100+ samples.
 
 ### ⚠️ Important Bug Fix (2026-01-04)
 
@@ -67,17 +78,23 @@ The training OOD accuracy (e.g., E5b: 70.58%) was measured **WITH 5% noise activ
 | **E7c Robustness Test** | ⚠️ **INVALID** | ~~89.50%→89.50%→89.00%~~ | Previous results had no noise injection |
 | **Wandb Upload** | ✅ Complete | All metrics uploaded | |
 
-### E7c Robustness Test Results - ⚠️ NEEDS RE-VALIDATION
+### E7c Robustness Test Results - ✅ Mechanism Verified
 
-Previous results were from vLLM evaluation that did NOT inject noise:
+**Previous vLLM results (INVALID):**
 
 | Checkpoint | 0% Noise | 5% Noise | 10% Noise | Degradation |
 |------------|----------|----------|-----------|-------------|
 | Step 232 (Epoch 4) | ~~89.50%~~ | ~~89.50%~~ | ~~89.00%~~ | ~~-0.50% max~~ |
 
-**⚠️ These results are INVALID** - need to re-run with native PyTorch and verify injection counts.
+**✅ New Native PyTorch results (n=10, mechanism verified):**
 
-**Expected**: Based on E5b results, E7c likely also shows significant degradation (~10-20%) at 5% noise.
+| Checkpoint | 0% Noise | 5% Noise | 10% Noise | Forward Injections |
+|------------|----------|----------|-----------|-------------------|
+| Step 232 | 70% (7/10) | 90% (9/10) | 90% (9/10) | 551K-569K |
+
+**Status**: Noise injection mechanism **CONFIRMED WORKING** (551K+ forward injections).
+Results are statistically inconclusive due to small sample size (n=10).
+Need to run with n=100+ for meaningful comparison with E5b.
 
 ### Wandb Project URLs
 
