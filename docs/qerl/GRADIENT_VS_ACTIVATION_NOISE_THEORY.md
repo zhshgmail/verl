@@ -312,7 +312,7 @@ class NoisyMatMul(torch.autograd.Function):
 
 ---
 
-**Document Status**: APPROVED WITH CONDITIONS - Implementing
+**Document Status**: E8c TRAINING IN PROGRESS
 
 ---
 
@@ -410,4 +410,45 @@ def test_phase_persistence():
 
 ---
 
-**Document Status**: APPROVED WITH CONDITIONS - Implementing
+**Document Status**: E8c TRAINING IN PROGRESS
+
+---
+
+## 11. Second QA Review (2026-01-05)
+
+### 11.1 Decision: **APPROVED (8.5/10)**
+
+The second QA review confirmed the experiment design is sound:
+
+**Strengths:**
+- ✅ Code implementation correct (all 6 operators, tests pass)
+- ✅ Experimental design has proper controls
+- ✅ Theory is clear and falsifiable
+- ✅ Success criteria well-defined
+
+**Areas for Improvement:**
+- ⚠️ Checkpoint saving disabled (`save_freq=-1`) - limits multi-stage evaluation
+- ⚠️ Recommendation: Use n≥100 samples for robustness evaluation
+
+### 11.2 E8c Training Progress (2026-01-05)
+
+Training started with verified forward-only mode:
+```
+[NoisyOps] Phases: forward=True, backward=False
+[NoisyOps] Enabled: scale=0.05, type=relative_gaussian
+```
+
+- Initial accuracy: 9.1%
+- Step 8/116 reached
+- Score improving: 8.4% → 18.1%
+- ETA: ~2 hours
+
+### 11.3 Updated Blockers Status
+
+| Blocker | Priority | Status |
+|---------|----------|--------|
+| No unit tests for phase flags | CRITICAL | ✅ RESOLVED |
+| Sample size too small (n=100) | CRITICAL | Will use n≥100 |
+| Thread safety not addressed | HIGH | ✅ RESOLVED |
+| Env var support for phases | HIGH | ✅ RESOLVED |
+| Checkpoint saving disabled | MEDIUM | Noted for future runs |
