@@ -124,6 +124,20 @@ def _auto_enable_from_env():
     scale = float(os.environ.get('VERL_NOISY_OPS_SCALE', '1e-4'))
     error_type = os.environ.get('VERL_NOISY_OPS_TYPE', 'relative_gaussian')
     all_ops = os.environ.get('VERL_NOISY_OPS_ALL_OPS', '').lower() in ('1', 'true', 'yes')
+
+    # Check for forward-only or backward-only mode
+    forward_only = os.environ.get('VERL_NOISY_OPS_FORWARD_ONLY', '').lower() in ('1', 'true', 'yes')
+    backward_only = os.environ.get('VERL_NOISY_OPS_BACKWARD_ONLY', '').lower() in ('1', 'true', 'yes')
+
+    if forward_only and backward_only:
+        print("[NoisyOps] WARNING: Both FORWARD_ONLY and BACKWARD_ONLY set, using both=True")
+        set_noise_phases(forward=True, backward=True)
+    elif forward_only:
+        set_noise_phases(forward=True, backward=False)
+    elif backward_only:
+        set_noise_phases(forward=False, backward=True)
+    # else: default is both enabled
+
     enable_noisy_ops(error_scale=scale, error_type=error_type, all_ops_mode=all_ops)
     _AUTO_ENABLED = True
     print(f"[NoisyOps] Auto-enabled from environment: scale={scale}, type={error_type}, all_ops_mode={all_ops}")
