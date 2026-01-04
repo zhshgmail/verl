@@ -8,7 +8,32 @@
 
 ## ⚠️ CURRENT TASK STATUS (for continuing agents)
 
-**Last Updated**: 2026-01-04 (10:35 UTC)
+**Last Updated**: 2026-01-04 (20:10 UTC)
+
+### ✅ ROBUSTNESS TESTS COMPLETED (2026-01-04)
+
+**vLLM-based Evaluation Results (Clean Inference Only):**
+
+⚠️ **Important Limitation**: The vLLM-based `robustness_eval.py` was unable to inject noise because vLLM v1 spawns separate EngineCore processes. The noisy_ops monkey patching in the parent process doesn't propagate to spawned child processes (even with spawn method instead of fork).
+
+**Results (Clean Inference Baseline):**
+
+| Test | 0% Noise | 5% Noise | 10% Noise | Notes |
+|------|----------|----------|-----------|-------|
+| **E5b (1.5B + AQN)** | 80.00% | 79.00% | 78.50% | ⚠️ No actual noise injection |
+| **E7c (7B + AQN)** | 89.00% | 90.00% | 90.00% | ⚠️ No actual noise injection |
+
+The small variations (±1%) are due to random seed differences, NOT noise injection. These results show clean inference performance only.
+
+**Why noisy_ops doesn't work in vLLM-based evaluation:**
+- In training: vLLM rollout uses `ExternalZeroMQDistributedExecutor` connecting to ray actor workers via ZMQ
+- Ray actors import verl modules which apply noisy_ops patching BEFORE model initialization
+- In standalone `LLM()`: vLLM spawns fresh EngineCore processes that have no patching
+
+**Previous Robustness Results (from native PyTorch, confirmed working):**
+- E5b Step 58: 79.00% → 79.00% → 78.00% (0%/5%/10%)
+- E5d Step 58: 79.00% → 79.50% → 78.50% (0%/5%/10%)
+- E7c Step 232: 89.50% → 89.50% → 89.00% (0%/5%/10%) - from earlier native eval
 
 ### ⚠️ Important Bug Fix (2026-01-04)
 
