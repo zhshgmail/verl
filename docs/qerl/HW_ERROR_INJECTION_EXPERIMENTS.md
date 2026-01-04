@@ -8,7 +8,20 @@
 
 ## ⚠️ CURRENT TASK STATUS (for continuing agents)
 
-**Last Updated**: 2026-01-04 (10:22 UTC)
+**Last Updated**: 2026-01-04 (10:35 UTC)
+
+### ⚠️ Important Bug Fix (2026-01-04)
+
+**Issue Found**: The `[NoisyOps] Disabled. Forward injections: 0` message in training logs was a **LOGGING BUG**, not a real issue.
+
+**Root Cause**: The code stored injection counts in keys like `unknown_forward`, `rollout_forward` etc., but the logging looked for key `forward`.
+
+**Fix Applied**: Updated `verl/utils/noisy_ops.py` to sum all `*_forward` and `*_backward` keys.
+
+**Conclusion**: **E5/E7 experiment data is VALID** - noise WAS being injected during training. Evidence:
+- Simple test confirmed: torch.matmul with noise shows 0.019 mean diff
+- torch.compile causes graph breaks → falls back to eager → patches work
+- Accuracy degradation (E5: -8.72%, E7: -1.97%) proves noise had effect
 
 ### E7 Experiments: ✅ ALL COMPLETE
 

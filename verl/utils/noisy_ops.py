@@ -661,9 +661,12 @@ def disable_noisy_ops() -> dict:
     _ALL_OPS_MODE = False
 
     stats = _INJECTION_COUNT.copy()
+    # Sum all forward/backward injections across phases
+    forward_total = sum(v for k, v in stats.items() if 'forward' in k)
+    backward_total = sum(v for k, v in stats.items() if 'backward' in k)
     logger.info(f"[NoisyOps] Disabled. Stats: {stats}")
-    print(f"[NoisyOps] Disabled. Forward injections: {stats.get('forward', 0)}, "
-          f"Backward injections: {stats.get('backward', 0)}")
+    print(f"[NoisyOps] Disabled. Forward injections: {forward_total}, "
+          f"Backward injections: {backward_total}")
 
     return stats
 
@@ -696,12 +699,17 @@ def noisy_ops_context(
 
 def get_injection_stats() -> dict:
     """Get current injection statistics by phase."""
+    counts = _INJECTION_COUNT.copy()
+    forward_total = sum(v for k, v in counts.items() if 'forward' in k)
+    backward_total = sum(v for k, v in counts.items() if 'backward' in k)
     return {
         'enabled': _NOISY_OPS_ENABLED,
         'error_scale': _ERROR_SCALE,
         'error_type': _ERROR_TYPE,
         'current_phase': _CURRENT_PHASE,
-        'counts': _INJECTION_COUNT.copy(),
+        'counts': counts,
+        'total_forward': forward_total,
+        'total_backward': backward_total,
     }
 
 

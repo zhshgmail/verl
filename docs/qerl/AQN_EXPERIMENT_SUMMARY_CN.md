@@ -6,6 +6,21 @@
 
 ---
 
+## ⚠️ 重要Bug修复 (2026-01-04)
+
+**发现问题**: 训练日志中 `[NoisyOps] Disabled. Forward injections: 0` 消息是**日志Bug**，不是实际问题。
+
+**根本原因**: 代码将注入计数存储在如 `unknown_forward`、`rollout_forward` 等键中，但日志输出时查找的是 `forward` 键。
+
+**已修复**: 更新了 `verl/utils/noisy_ops.py`，现在正确汇总所有 `*_forward` 和 `*_backward` 键。
+
+**结论**: **E5/E7实验数据有效** - 噪声确实在训练过程中被注入。证据：
+- 简单测试确认：带噪声的 torch.matmul 显示 0.019 平均差异
+- torch.compile 导致图中断 → 回退到eager模式 → 我们的补丁生效
+- 准确率下降（E5: -8.72%, E7: -1.97%）证明噪声产生了效果
+
+---
+
 ## 1. 研究背景与动机
 
 ### 1.1 问题陈述
