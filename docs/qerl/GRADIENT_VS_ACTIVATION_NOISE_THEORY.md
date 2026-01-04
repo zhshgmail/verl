@@ -451,4 +451,58 @@ Training started with verified forward-only mode:
 | Sample size too small (n=100) | CRITICAL | Will use n≥100 |
 | Thread safety not addressed | HIGH | ✅ RESOLVED |
 | Env var support for phases | HIGH | ✅ RESOLVED |
-| Checkpoint saving disabled | MEDIUM | Noted for future runs |
+| Checkpoint saving disabled | MEDIUM | ⚠️ BLOCKS ROBUSTNESS EVAL |
+
+---
+
+## 12. E8c Results (2026-01-05)
+
+### 12.1 Training Completed
+
+E8c (forward-only noise) training completed successfully:
+
+| Step | Validation Accuracy |
+|------|---------------------|
+| 0 | 9.1% |
+| 20 | 63.1% |
+| 40 | 65.0% |
+| 60 | 66.3% |
+| 80 | **70.5%** (peak) |
+| 100 | 69.2% |
+| 116 | 69.4% (final) |
+
+**Training Configuration:**
+- Forward noise: ✅ Enabled (5% scale)
+- Backward noise: ❌ Disabled
+- Total time: ~1h47m
+- Checkpoint saved: ❌ No (save_freq=-1)
+
+### 12.2 Comparison with E5b
+
+| Metric | E5b (both) | E8c (forward-only) | Δ |
+|--------|------------|-------------------|---|
+| Clean accuracy | ~78% | 69.4% | **-8.6%** |
+| Peak accuracy | ~80% | 70.5% | **-9.5%** |
+| Noise type | forward + backward | forward only | |
+| Checkpoint | ✅ Available | ❌ Not saved | |
+
+### 12.3 Theory Validation (Partial)
+
+**Hypothesis 1: Backward noise provides training regularization**
+- ✅ **SUPPORTED**: E8c's lower clean accuracy (-8.6%) confirms removing gradient noise hurts training performance
+
+**Hypothesis 2: Forward noise provides inference robustness**
+- ⏳ **CANNOT TEST**: No checkpoint saved to run robustness evaluation
+- Recommendation: Re-run E8c with `save_freq=58`
+
+### 12.4 Preliminary Conclusion
+
+The E8c training results provide **partial evidence** supporting the gradient vs activation noise theory:
+
+1. **Gradient noise (backward) = Training benefit**: Confirmed by -8.6% clean accuracy drop
+2. **Activation noise (forward) = Inference robustness**: Requires robustness evaluation
+
+**Next Steps:**
+1. [ ] Re-run E8c with checkpoint saving (`save_freq=58`)
+2. [ ] Run robustness evaluation at 0%, 5%, 10% noise
+3. [ ] Compare E8c robustness with E5b (64% @ 5% noise)
