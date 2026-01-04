@@ -31,10 +31,10 @@ export VERL_NOISY_OPS_SCALE=${ERROR_SCALE}
 export VERL_NOISY_OPS_TYPE=relative_gaussian
 export VERL_NOISY_OPS_FORWARD_ONLY=1  # KEY: Only inject noise in forward pass
 
-# Model and data paths
-MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}
-TRAIN_DATA=${TRAIN_DATA:-"/data/datasets/gsm8k/train.parquet"}
-VAL_DATA=${VAL_DATA:-"/data/datasets/gsm8k/test.parquet"}
+# Model and data paths (for verl-r3-test container)
+MODEL_PATH=${MODEL_PATH:-"/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306"}
+TRAIN_DATA=${TRAIN_DATA:-"/data/z00637938/gsm8k/train.parquet"}
+VAL_DATA=${VAL_DATA:-"/data/z00637938/gsm8k/test.parquet"}
 
 # Common training args (same as E5b)
 COMMON_ARGS="
