@@ -110,6 +110,16 @@ output = original_op(input) + randn_like(output) * |output| * scale
 
 对训练后的checkpoint在不同噪声水平下进行评估（200样本）：
 
+> ⚠️ **评估工具说明 (2026-01-04更新)**:
+>
+> vLLM-based的`robustness_eval.py`脚本**无法注入噪声**，因为vLLM v1会启动独立的EngineCore子进程，父进程中的noisy_ops猴子补丁无法传播到子进程中。
+>
+> **以下鲁棒性结果来自早期的原生PyTorch评估**（已验证噪声注入正常工作）。
+>
+> **为什么训练时noisy_ops有效但vLLM评估无效?**
+> - **训练时**: 使用`ExternalZeroMQDistributedExecutor`通过ZMQ连接ray actor workers，ray actors在模型初始化前已导入verl模块（应用了noisy_ops补丁）
+> - **评估时**: 独立的`LLM()`会启动新的EngineCore进程，这些进程没有补丁
+
 **E5b (matmul + Epoch-Aware AQN):**
 
 | Checkpoint | 0% 噪声 | 5% 噪声 | 10% 噪声 | 退化 |
@@ -350,8 +360,19 @@ bash scripts/test_noisy_ops_all_ops_aqn_epoch_aware.sh 5e-2 8
 
 ### A.3 鲁棒性评估
 
+> ⚠️ **注意**: vLLM-based的`robustness_eval.py`由于多进程架构限制**无法注入噪声**。
+> 如需带噪声的鲁棒性测试，请使用原生PyTorch的`robustness_eval_native.py`（较慢但有效）。
+
 ```bash
+# vLLM版本（快速，但只能测试清洁推理）
 python scripts/robustness_eval.py \
+    --checkpoint_base /path/to/checkpoints \
+    --tokenizer /path/to/tokenizer \
+    --val_data /path/to/test.parquet \
+    --n_samples 200
+
+# 原生PyTorch版本（较慢，但噪声注入有效）
+python scripts/robustness_eval_native.py \
     --checkpoint_base /path/to/checkpoints \
     --tokenizer /path/to/tokenizer \
     --val_data /path/to/test.parquet \
