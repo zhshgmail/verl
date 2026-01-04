@@ -3,6 +3,8 @@
 Robustness evaluation for AQN-trained checkpoints.
 Tests checkpoints at different noise levels (0%, 5%, 10%).
 
+Uses verl's noisy_ops for noise injection (same as RL training rollout).
+
 Usage for 1.5B (E5b):
     python scripts/robustness_eval.py \
         --checkpoint_base /path/to/noisy_ops_aqn_epoch_aware_ckpt_5e-2 \
@@ -26,28 +28,32 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
+# Import verl FIRST to use same noisy_ops as training
+from verl.utils.noisy_ops import enable_noisy_ops, disable_noisy_ops, get_injection_stats
+
+
 def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_samples=200, tp_size=1):
     """Run evaluation on GSM8K with given noise level."""
     from vllm import LLM, SamplingParams
 
-    # Set noise environment
+    # Enable/disable noisy ops using verl's API (same as training)
     if noise_scale > 0:
-        os.environ["VERL_NOISY_OPS_ENABLED"] = "1"
-        os.environ["VERL_NOISY_OPS_SCALE"] = str(noise_scale)
-        os.environ["VERL_NOISY_OPS_TYPE"] = "relative_gaussian"
+        enable_noisy_ops(error_scale=noise_scale, error_type='relative_gaussian')
+        print(f"[NoisyOps] Enabled with scale={noise_scale}", flush=True)
     else:
-        os.environ["VERL_NOISY_OPS_ENABLED"] = "0"
+        disable_noisy_ops()
+        print("[NoisyOps] Disabled (clean inference)", flush=True)
 
-    print(f"\n=== Evaluation with noise={noise_scale*100:.0f}% ===")
-    print(f"Model: {model_path}")
-    print(f"Tensor Parallel Size: {tp_size}")
+    print(f"\n=== Evaluation with noise={noise_scale*100:.0f}% ===", flush=True)
+    print(f"Model: {model_path}", flush=True)
+    print(f"Tensor Parallel Size: {tp_size}", flush=True)
 
     # Load data
     df = pd.read_parquet(val_data_path)
     df = df.head(n_samples)
     print(f"Loaded {len(df)} samples")
 
-    # Initialize vLLM
+    # Initialize vLLM with enforce_eager=True (same as training rollout)
     llm = LLM(
         model=model_path,
         tokenizer=tokenizer_path,
@@ -55,6 +61,7 @@ def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_sam
         gpu_memory_utilization=0.6,
         trust_remote_code=True,
         dtype="bfloat16",
+        enforce_eager=True,  # Required for noisy_ops to work
     )
 
     sampling_params = SamplingParams(
@@ -117,11 +124,17 @@ def run_evaluation(model_path, tokenizer_path, val_data_path, noise_scale, n_sam
 
     accuracy = correct / len(outputs) * 100
 
+    # Print injection stats
+    stats = get_injection_stats()
+    print(f"\n[NoisyOps] Injection stats: total_forward={stats['total_forward']}, total_backward={stats['total_backward']}", flush=True)
+
     print(f"\n{'='*50}")
     print(f"RESULT: accuracy={accuracy:.2f}% ({correct}/{len(outputs)})")
-    print(f"{'='*50}\n")
+    print(f"{'='*50}\n", flush=True)
 
     # Cleanup
+    if noise_scale > 0:
+        disable_noisy_ops()
     del llm
     torch.cuda.empty_cache()
 
