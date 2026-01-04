@@ -1282,31 +1282,27 @@ Since E5c (no AQN) already outperforms E5 (no AQN), the baseline for E5d compari
    - Clean accuracy: 76.50% vs 74.50%
    - Similar pattern to E5b - epoch 1 may capture better generalization point
 
-3. **ALL_OPS + AQN creates highly noise-tolerant models:**
-   - Models trained with noise on ALL operators (matmul, softmax, silu, gelu, layer_norm)
-   - Combined with epoch-aware AQN for robust training
-   - Result: **Zero degradation under stress testing**
+3. ~~**ALL_OPS + AQN creates highly noise-tolerant models**~~ ❌ **INVALIDATED**
+   - ~~Models trained with noise on ALL operators~~
+   - ~~Result: Zero degradation under stress testing~~
+   - 🔴 **This conclusion was based on incorrect robustness tests**
 
-**Comparison with E5b Robustness:**
+**~~Comparison with E5b Robustness~~** - ⚠️ OLD DATA INVALIDATED:
 
-| Experiment | Noise Scope | Step 58 Clean | Step 116 Clean | Robustness |
+| Experiment | Noise Scope | ~~Step 58 Clean~~ | ~~Step 116 Clean~~ | ~~Robustness~~ |
 |------------|-------------|---------------|----------------|------------|
-| **E5b** (matmul + AQN) | matmul only | 79.00% | 77.00% | < 1% degradation |
-| **E5d** (ALL_OPS + AQN) | ALL operators | 76.50% | 74.50% | **0% degradation** |
+| **E5b** (matmul + AQN) | matmul only | ~~79.00%~~ | ~~77.00%~~ | ~~< 1% degradation~~ |
+| **E5d** (ALL_OPS + AQN) | ALL operators | ~~76.50%~~ | ~~74.50%~~ | ~~0% degradation~~ |
 
-**Cost-Benefit Analysis:**
+> 🔴 **These results are INVALID** - the original evaluation did not inject noise.
+> See verified E5b results at top of document: 78%→64%→50% (0%/5%/10%), actual degradation ~14% at 5%.
+> E5d checkpoint not found for re-validation.
 
-| Metric | E5b (matmul+AQN) | E5d (ALL_OPS+AQN) | Cost |
-|--------|------------------|-------------------|------|
-| Training accuracy (noisy) | 70.58% | 70.20% | -0.38% |
-| Clean eval (Step 58) | 79.00% | 76.50% | **-2.50%** |
-| Clean eval (Step 116) | 77.00% | 74.50% | **-2.50%** |
-| vs Baseline (76.88%) | +2.12% | -0.38% | |
-| Robustness | < 1% degradation | **0% degradation** | ✅ Better |
+**~~Cost-Benefit Analysis~~** - INVALIDATED:
 
-**Trade-off:**
-- ⚠️ **Cost**: ~2.5% accuracy drop in clean evaluation compared to matmul-only training
-- ✅ **Benefit**: Stronger robustness (0% degradation vs < 1%)
+Previous analysis was based on incorrect robustness assumptions. The actual cost-benefit is:
+- AQN improves **training stability** (E5b 70.58% vs E5 68.16% = +2.42%)
+- AQN does **NOT** improve inference robustness (verified: -14% at 5% noise)
 - 📊 **Recovery**: E5d recovers +6.3% when evaluated cleanly (70.20% → 76.50%)
 
 **Conclusion:**
