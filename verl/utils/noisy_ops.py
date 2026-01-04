@@ -45,11 +45,17 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 from contextlib import contextmanager
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
+# Thread safety lock for phase configuration
+_NOISE_CONFIG_LOCK = threading.Lock()
+
 # Global state
 _NOISY_OPS_ENABLED = False
+_NOISY_OPS_FORWARD_ENABLED = True   # Inject noise in forward pass
+_NOISY_OPS_BACKWARD_ENABLED = True  # Inject noise in backward pass
 _ERROR_SCALE = 1e-5
 _ERROR_TYPE = 'relative_gaussian'  # 'relative_gaussian', 'absolute_gaussian'
 _ALL_OPS_MODE = False  # When True, inject noise into ALL operators (like quant_compute)
@@ -141,6 +147,43 @@ def get_phase() -> str:
     return _CURRENT_PHASE
 
 
+def set_noise_phases(forward: bool = True, backward: bool = True) -> None:
+    """
+    Control which phases have noise injection.
+
+    This allows testing the theory that forward noise (activations) vs
+    backward noise (gradients) have different effects on model robustness.
+
+    Args:
+        forward: If True, inject noise in forward pass (affects activations)
+        backward: If True, inject noise in backward pass (affects gradients)
+
+    Example:
+        # Forward-only noise (test activation robustness)
+        set_noise_phases(forward=True, backward=False)
+
+        # Backward-only noise (test gradient regularization)
+        set_noise_phases(forward=False, backward=True)
+
+        # Both (default, current AQN behavior)
+        set_noise_phases(forward=True, backward=True)
+    """
+    global _NOISY_OPS_FORWARD_ENABLED, _NOISY_OPS_BACKWARD_ENABLED
+    with _NOISE_CONFIG_LOCK:
+        _NOISY_OPS_FORWARD_ENABLED = forward
+        _NOISY_OPS_BACKWARD_ENABLED = backward
+    logger.info(f"[NoisyOps] Phases set: forward={forward}, backward={backward}")
+    print(f"[NoisyOps] Phases: forward={forward}, backward={backward}")
+
+
+def get_noise_phases() -> dict:
+    """Get current noise phase configuration."""
+    return {
+        'forward_enabled': _NOISY_OPS_FORWARD_ENABLED,
+        'backward_enabled': _NOISY_OPS_BACKWARD_ENABLED,
+    }
+
+
 def _log_injection(phase: str, direction: str, shape: tuple, error_mean: float, error_max: float) -> None:
     """Log injection event if within first N for this phase."""
     global _LOGGED_COUNT
@@ -184,7 +227,7 @@ class NoisyMatMul(torch.autograd.Function):
         # Use original matmul to avoid recursion
         result = _ORIGINAL_MATMUL(a, b)
 
-        if _NOISY_OPS_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
 
@@ -209,7 +252,7 @@ class NoisyMatMul(torch.autograd.Function):
         grad_a = _ORIGINAL_MATMUL(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_MATMUL(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED:
             # Inject error into gradients too
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
@@ -236,7 +279,7 @@ class NoisyBMM(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_BMM(a, b)
 
-        if _NOISY_OPS_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
 
@@ -255,7 +298,7 @@ class NoisyBMM(torch.autograd.Function):
         grad_a = _ORIGINAL_BMM(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_BMM(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED:
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
             grad_a = grad_a + error_a
@@ -276,7 +319,7 @@ class NoisySoftmax(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SOFTMAX(input, dim=dim)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
             # Re-normalize to keep it a valid probability distribution
@@ -301,7 +344,7 @@ class NoisySoftmax(torch.autograd.Function):
         sum_term = (grad_output * result).sum(dim=dim, keepdim=True)
         grad_input = result * (grad_output - sum_term)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -320,7 +363,7 @@ class NoisySiLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SILU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
 
@@ -340,7 +383,7 @@ class NoisySiLU(torch.autograd.Function):
         sigmoid_x = torch.sigmoid(input)
         grad_input = grad_output * sigmoid_x * (1 + input * (1 - sigmoid_x))
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -359,7 +402,7 @@ class NoisyGeLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_GELU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
 
@@ -385,7 +428,7 @@ class NoisyGeLU(torch.autograd.Function):
         inner_deriv = sqrt_2_over_pi * (1 + 3 * coeff * input.pow(2))
         grad_input = grad_output * 0.5 * (1 + tanh_inner + input * sech2_inner * inner_deriv)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -404,7 +447,7 @@ class NoisyLayerNorm(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, bias, eps)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
             error = _compute_error(result)
             result = result + error
 
@@ -431,7 +474,7 @@ class NoisyLayerNorm(torch.autograd.Function):
             output = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, None, eps)
             grad_input, = torch.autograd.grad(output, input, grad_output, retain_graph=False)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -707,6 +750,8 @@ def get_injection_stats() -> dict:
         'error_scale': _ERROR_SCALE,
         'error_type': _ERROR_TYPE,
         'current_phase': _CURRENT_PHASE,
+        'forward_enabled': _NOISY_OPS_FORWARD_ENABLED,
+        'backward_enabled': _NOISY_OPS_BACKWARD_ENABLED,
         'counts': counts,
         'total_forward': forward_total,
         'total_backward': backward_total,
@@ -756,6 +801,8 @@ __all__ = [
     'noisy_ops_context',
     'set_phase',
     'get_phase',
+    'set_noise_phases',
+    'get_noise_phases',
     'get_injection_stats',
     'print_injection_summary',
     'reset_injection_stats',
