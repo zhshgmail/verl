@@ -8,32 +8,41 @@
 
 ## ⚠️ CURRENT TASK STATUS (for continuing agents)
 
-**Last Updated**: 2026-01-04 (20:10 UTC)
+**Last Updated**: 2026-01-04 (22:00 UTC)
 
-### ✅ ROBUSTNESS TESTS COMPLETED (2026-01-04)
+### 🔴 CRITICAL CORRECTION: Robustness Results Were WRONG (2026-01-04)
 
-**vLLM-based Evaluation Results (Clean Inference Only):**
+Previous robustness results claiming "<1% degradation" were **INCORRECT** due to:
+1. vLLM-based evaluation did NOT actually inject noise (multiprocessing issue)
+2. Earlier "native PyTorch" results were never properly validated with injection counts
 
-⚠️ **Important Limitation**: The vLLM-based `robustness_eval.py` was unable to inject noise because vLLM v1 spawns separate EngineCore processes. The noisy_ops monkey patching in the parent process doesn't propagate to spawned child processes (even with spawn method instead of fork).
+**✅ VERIFIED E5b Results (Native PyTorch, injection confirmed):**
 
-**Results (Clean Inference Baseline):**
+| Noise Level | Accuracy | Forward Injections | Degradation |
+|-------------|----------|-------------------|-------------|
+| **0% (clean)** | **78.0%** | 0 | - |
+| **5%** | **64.0%** | 2,056,680 | **-14%** |
+| **10%** | **50.0%** | 2,180,396 | **-28%** |
 
-| Test | 0% Noise | 5% Noise | 10% Noise | Notes |
-|------|----------|----------|-----------|-------|
-| **E5b (1.5B + AQN)** | 80.00% | 79.00% | 78.50% | ⚠️ No actual noise injection |
-| **E7c (7B + AQN)** | 89.00% | 90.00% | 90.00% | ⚠️ No actual noise injection |
+**Key Findings:**
+- Model is **NOT robust** to inference noise: -14% at 5%, -28% at 10%
+- Clean accuracy (78%) is slightly better than baseline (76.88%)
+- AQN helps training stability but does NOT provide inference robustness
 
-The small variations (±1%) are due to random seed differences, NOT noise injection. These results show clean inference performance only.
+### ⚠️ Training OOD Metric Was Misleading
 
-**Why noisy_ops doesn't work in vLLM-based evaluation:**
-- In training: vLLM rollout uses `ExternalZeroMQDistributedExecutor` connecting to ray actor workers via ZMQ
-- Ray actors import verl modules which apply noisy_ops patching BEFORE model initialization
-- In standalone `LLM()`: vLLM spawns fresh EngineCore processes that have no patching
+The training OOD accuracy (e.g., E5b: 70.58%) was measured **WITH 5% noise active**.
+- `noisy_ops` was enabled globally, including during validation
+- Comparing 70.58% (with noise) to baseline 76.88% (clean) is misleading
+- True clean accuracy is ~78%, meaning noise training slightly IMPROVED clean performance
 
-**Previous Robustness Results (from native PyTorch, confirmed working):**
-- E5b Step 58: 79.00% → 79.00% → 78.00% (0%/5%/10%)
-- E5d Step 58: 79.00% → 79.50% → 78.50% (0%/5%/10%)
-- E7c Step 232: 89.50% → 89.50% → 89.00% (0%/5%/10%) - from earlier native eval
+### 🔄 Remaining Validation Tasks
+
+| Test | Status | Notes |
+|------|--------|-------|
+| **E5b (matmul + AQN)** | ✅ Verified | See results above |
+| **E5d (ALL_OPS + AQN)** | ⏳ Pending | Need native PyTorch test |
+| **E7c (7B + AQN)** | ⏳ Pending | Need native PyTorch test |
 
 ### ⚠️ Important Bug Fix (2026-01-04)
 
@@ -48,26 +57,27 @@ The small variations (±1%) are due to random seed differences, NOT noise inject
 - torch.compile causes graph breaks → falls back to eager → patches work
 - Accuracy degradation (E5: -8.72%, E7: -1.97%) proves noise had effect
 
-### E7 Experiments: ✅ ALL COMPLETE
+### E7 Experiments: Training Complete, Robustness Pending
 
-| Item | Status | Final Accuracy |
-|------|--------|----------------|
-| **E7a (7B baseline)** | ✅ Complete | **90.67%** |
-| **E7b (7B + 5% noise)** | ✅ Complete | **88.70%** (-1.97%) |
-| **E7c (7B + noise + AQN)** | ✅ Complete | **89.50%** (+0.80% from E7b) |
-| **E7c Robustness Test** | ✅ Complete | 89.50%→89.50%→89.00% (0%/5%/10% noise) |
-| **Wandb Upload** | ✅ Complete | All metrics uploaded |
+| Item | Status | Final Accuracy | Notes |
+|------|--------|----------------|-------|
+| **E7a (7B baseline)** | ✅ Complete | **90.67%** | Clean training |
+| **E7b (7B + 5% noise)** | ✅ Complete | **88.70%** (-1.97%) | With noise during validation |
+| **E7c (7B + noise + AQN)** | ✅ Complete | **89.50%** (+0.80% from E7b) | With noise during validation |
+| **E7c Robustness Test** | ⚠️ **INVALID** | ~~89.50%→89.50%→89.00%~~ | Previous results had no noise injection |
+| **Wandb Upload** | ✅ Complete | All metrics uploaded | |
 
-### E7c Robustness Test Results
+### E7c Robustness Test Results - ⚠️ NEEDS RE-VALIDATION
+
+Previous results were from vLLM evaluation that did NOT inject noise:
 
 | Checkpoint | 0% Noise | 5% Noise | 10% Noise | Degradation |
 |------------|----------|----------|-----------|-------------|
-| Step 232 (Epoch 4) | **89.50%** | **89.50%** | **89.00%** | -0.50% max |
+| Step 232 (Epoch 4) | ~~89.50%~~ | ~~89.50%~~ | ~~89.00%~~ | ~~-0.50% max~~ |
 
-**Key Finding**: AQN-trained 7B model shows excellent noise robustness:
-- Only -0.50% degradation at 10% inference noise
-- No degradation at 5% inference noise (matched training noise level)
-- AQN improvement: +0.80% over noise-only baseline (E7c vs E7b)
+**⚠️ These results are INVALID** - need to re-run with native PyTorch and verify injection counts.
+
+**Expected**: Based on E5b results, E7c likely also shows significant degradation (~10-20%) at 5% noise.
 
 ### Wandb Project URLs
 
