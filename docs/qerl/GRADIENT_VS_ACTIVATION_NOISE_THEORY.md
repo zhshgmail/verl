@@ -503,6 +503,63 @@ The E8c training results provide **partial evidence** supporting the gradient vs
 2. **Activation noise (forward) = Inference robustness**: Requires robustness evaluation
 
 **Next Steps:**
-1. [ ] Re-run E8c with checkpoint saving (`save_freq=58`)
-2. [ ] Run robustness evaluation at 0%, 5%, 10% noise
-3. [ ] Compare E8c robustness with E5b (64% @ 5% noise)
+1. [x] Re-run E8c with checkpoint saving (`save_freq=58`) - Script updated: `ec12c783`
+2. [ ] Execute E8c training on verl-r3-test container (~2h)
+3. [ ] Run robustness evaluation at 0%, 5%, 10% noise
+4. [ ] Compare E8c robustness with E5b (64% @ 5% noise)
+
+---
+
+## 13. E8c Re-run Preparation (2026-01-05)
+
+### 13.1 Script Updated
+
+The E8c script has been updated to enable checkpoint saving:
+- File: `scripts/test_noisy_ops_e8c_forward_only.sh`
+- Change: `trainer.save_freq=-1` → `trainer.save_freq=58`
+- Commit: `ec12c783`
+
+### 13.2 Execution Command
+
+To run E8c v2 with checkpoints on verl-r3-test container:
+
+```bash
+docker exec -it verl-r3-test bash
+cd /workspace/verl
+git pull personal feature/npu-aqn-test  # Get latest script
+bash scripts/test_noisy_ops_e8c_forward_only.sh
+```
+
+### 13.3 Expected Outputs
+
+1. **Checkpoint files** at epoch 1 and 2:
+   - `checkpoints/e8c_forward_only_5e-2/epoch_0/`
+   - `checkpoints/e8c_forward_only_5e-2/epoch_1/`
+
+2. **Training metrics** (expected similar to E8c v1):
+   - Clean accuracy: ~69-70%
+   - Peak accuracy: ~70-71%
+
+### 13.4 Post-Training Evaluation
+
+After training completes, run robustness evaluation:
+
+```bash
+# Evaluate with native PyTorch at 0%, 5%, 10% noise
+python scripts/eval_checkpoint_robustness.py \
+    --checkpoint checkpoints/e8c_forward_only_5e-2/epoch_1/ \
+    --noise-levels 0.0 0.05 0.10 \
+    --n-samples 100
+```
+
+### 13.5 Success Criteria for Theory Validation
+
+| Criterion | E5b (both) | E8c Target | Interpretation |
+|-----------|------------|------------|----------------|
+| Clean (0%) | 78% | ~70% | Expected lower (less regularization) |
+| Robustness (5%) | 64% | **>70%** | If higher, theory SUPPORTED |
+| Robustness (10%) | ~50% | **>55%** | If higher, theory SUPPORTED |
+
+**Theory CONFIRMED if:**
+- E8c shows better % retention at noisy inference than E5b
+- i.e., (E8c @ 5%) / (E8c @ 0%) > (E5b @ 5%) / (E5b @ 0%)
