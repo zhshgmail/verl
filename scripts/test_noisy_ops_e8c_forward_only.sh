@@ -1,5 +1,5 @@
 #!/bin/bash
-# E8c: Forward-Only Noise + Epoch-Aware AQN
+# E8c: Forward-Only Noise + Epoch-Aware AQN (with checkpoints)
 #
 # This experiment tests the theory that forward noise (activations) is
 # responsible for inference robustness, while backward noise (gradients)
@@ -9,10 +9,12 @@
 #   - Model: 1.5B (same as E5b)
 #   - Noise: 5% forward-only (no backward noise)
 #   - AQN: Epoch-aware scheduling
+#   - Checkpoint: Saves at end of each epoch (save_freq=58)
 #
-# Expected outcome based on theory:
-#   - Training stability: Slightly worse than E5b (less gradient regularization)
-#   - Inference robustness: Better than E5b (training noise matches inference noise)
+# Previous E8c result (no checkpoint): 69.4% clean accuracy
+# Theory validation:
+#   - Training benefit: -8.6% vs E5b confirms backward noise helps training
+#   - Robustness: PENDING (requires checkpoint for evaluation)
 #
 # Usage: bash scripts/test_noisy_ops_e8c_forward_only.sh
 
@@ -72,7 +74,7 @@ COMMON_ARGS="
     trainer.logger=console
     trainer.total_epochs=2
     trainer.test_freq=20
-    trainer.save_freq=-1
+    trainer.save_freq=58
     trainer.nnodes=1
     trainer.project_name=noisy_ops_e8c_forward_only
     trainer.n_gpus_per_node=${N_GPUS}
@@ -93,9 +95,11 @@ echo "  VERL_NOISY_OPS_SCALE=${VERL_NOISY_OPS_SCALE}"
 echo "  VERL_NOISY_OPS_TYPE=${VERL_NOISY_OPS_TYPE}"
 echo "  VERL_NOISY_OPS_FORWARD_ONLY=${VERL_NOISY_OPS_FORWARD_ONLY}"
 echo ""
-echo "Expected results:"
-echo "  E5b (both): Training +2.42%, Robustness -14%"
-echo "  E8c (forward-only): Training +1-2%?, Robustness BETTER?"
+echo "Previous results:"
+echo "  E5b (both noise): 78% clean, 64% @ 5% noise"
+echo "  E8c v1 (forward-only, no ckpt): 69.4% clean (-8.6% vs E5b)"
+echo ""
+echo "This run: Re-run with checkpoint saving for robustness eval"
 echo ""
 
 python3 -m verl.trainer.main_ppo \
