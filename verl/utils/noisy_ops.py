@@ -67,6 +67,11 @@ _ORIGINAL_SILU = None
 _ORIGINAL_GELU = None
 _ORIGINAL_LAYER_NORM = None
 _CURRENT_PHASE = 'unknown'  # 'rollout', 'actor_forward', 'actor_backward', 'unknown'
+
+# Selective layer injection (for diagnostic probing)
+_SELECTIVE_LAYERS = None  # None = all layers, set() = specific layer IDs only
+_CURRENT_LAYER_ID = None  # Current layer being processed (set via hooks)
+_LAYER_INJECTION_STATS = {}  # Per-layer injection counts: {layer_id: {'forward': N, 'backward': M}}
 _INJECTION_COUNT = {
     'rollout_forward': 0,
     'rollout_backward': 0,
@@ -198,6 +203,170 @@ def get_noise_phases() -> dict:
     }
 
 
+# ============================================================================
+# Selective Layer Injection API (for Diagnostic Probing)
+# ============================================================================
+
+def set_selective_layers(layer_ids: list = None) -> None:
+    """
+    Enable noise injection only for specific layers (for diagnostic probing).
+
+    This allows testing which layers are most sensitive to noise, enabling:
+    1. Layer-wise sensitivity profiling
+    2. Hardware error localization (which layers cause GPU/NPU divergence)
+    3. Adaptive AQN targeting (apply more noise to robust layers)
+
+    Args:
+        layer_ids: List of layer indices to inject noise into.
+                   None = all layers (default behavior)
+                   [] = no layers (effectively disables noise)
+                   [0, 5, 10] = only layers 0, 5, and 10
+
+    Example:
+        # Test sensitivity of early layers
+        set_selective_layers([0, 1, 2, 3, 4])
+        accuracy_early = evaluate(model, test_data)
+
+        # Test sensitivity of late layers
+        set_selective_layers([24, 25, 26, 27])
+        accuracy_late = evaluate(model, test_data)
+
+        # Compare to identify which region is more sensitive
+    """
+    global _SELECTIVE_LAYERS
+    with _NOISE_CONFIG_LOCK:
+        if layer_ids is None:
+            _SELECTIVE_LAYERS = None
+            logger.info("[NoisyOps] Selective layers: ALL (disabled filtering)")
+            print("[NoisyOps] Selective layers: ALL")
+        else:
+            _SELECTIVE_LAYERS = set(layer_ids)
+            logger.info(f"[NoisyOps] Selective layers: {sorted(_SELECTIVE_LAYERS)}")
+            print(f"[NoisyOps] Selective layers: {sorted(_SELECTIVE_LAYERS)}")
+
+
+def get_selective_layers() -> set:
+    """Get current selective layer configuration."""
+    return _SELECTIVE_LAYERS
+
+
+def set_current_layer(layer_id: int) -> None:
+    """
+    Set the current layer ID being processed.
+
+    This should be called by layer hooks during forward pass to track
+    which layer's operations are currently executing.
+
+    Args:
+        layer_id: The transformer layer index (0-based)
+    """
+    global _CURRENT_LAYER_ID
+    _CURRENT_LAYER_ID = layer_id
+
+
+def get_current_layer() -> int:
+    """Get the current layer ID being processed."""
+    return _CURRENT_LAYER_ID
+
+
+def should_inject_for_layer(layer_id: int = None) -> bool:
+    """
+    Check if noise should be injected for the given layer.
+
+    Args:
+        layer_id: Layer index to check. If None, uses _CURRENT_LAYER_ID.
+
+    Returns:
+        True if noise should be injected, False otherwise.
+    """
+    if _SELECTIVE_LAYERS is None:
+        return True  # All layers
+
+    if layer_id is None:
+        layer_id = _CURRENT_LAYER_ID
+
+    if layer_id is None:
+        return True  # No layer context, default to inject
+
+    return layer_id in _SELECTIVE_LAYERS
+
+
+def _update_layer_stats(layer_id: int, direction: str) -> None:
+    """Update per-layer injection statistics."""
+    global _LAYER_INJECTION_STATS
+    if layer_id is None:
+        layer_id = 'unknown'
+
+    if layer_id not in _LAYER_INJECTION_STATS:
+        _LAYER_INJECTION_STATS[layer_id] = {'forward': 0, 'backward': 0}
+
+    _LAYER_INJECTION_STATS[layer_id][direction] += 1
+
+
+def get_layer_injection_stats() -> dict:
+    """
+    Get per-layer injection statistics.
+
+    Returns:
+        Dict mapping layer_id to {'forward': count, 'backward': count}
+    """
+    return _LAYER_INJECTION_STATS.copy()
+
+
+def reset_layer_injection_stats() -> None:
+    """Reset per-layer injection statistics."""
+    global _LAYER_INJECTION_STATS
+    _LAYER_INJECTION_STATS = {}
+
+
+def register_layer_hooks(model, layer_pattern: str = '.layers.') -> int:
+    """
+    Register forward hooks to track current layer during forward pass.
+
+    This enables layer-aware noise injection for diagnostic probing.
+
+    Args:
+        model: The PyTorch model (typically a transformer)
+        layer_pattern: Pattern to identify layer modules (default: '.layers.')
+
+    Returns:
+        Number of hooks registered
+
+    Example:
+        model = AutoModelForCausalLM.from_pretrained(...)
+        num_hooks = register_layer_hooks(model)
+        print(f"Registered {num_hooks} layer hooks")
+
+        # Now noise injection will be layer-aware
+        set_selective_layers([0, 10, 20])
+        output = model(input_ids)  # Only layers 0, 10, 20 get noise
+    """
+    import re
+
+    hooks_registered = 0
+
+    def make_hook(lid):
+        def hook(module, input):
+            set_current_layer(lid)
+        return hook
+
+    for name, module in model.named_modules():
+        if layer_pattern in name:
+            # Extract layer ID: 'model.layers.12.mlp' → 12
+            match = re.search(r'\.layers\.(\d+)', name)
+            if match:
+                layer_id = int(match.group(1))
+                # Only register for top-level layer module (not sub-modules)
+                if name.count('.layers.') == 1 and name.endswith(f'.layers.{layer_id}'):
+                    module.register_forward_pre_hook(make_hook(layer_id))
+                    hooks_registered += 1
+
+    if hooks_registered > 0:
+        print(f"[NoisyOps] Registered {hooks_registered} layer hooks for diagnostic probing")
+
+    return hooks_registered
+
+
 def _log_injection(phase: str, direction: str, shape: tuple, error_mean: float, error_max: float) -> None:
     """Log injection event if within first N for this phase."""
     global _LOGGED_COUNT
@@ -241,7 +410,7 @@ class NoisyMatMul(torch.autograd.Function):
         # Use original matmul to avoid recursion
         result = _ORIGINAL_MATMUL(a, b)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
 
@@ -249,6 +418,9 @@ class NoisyMatMul(torch.autograd.Function):
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
             # Log first few injections per phase
             _log_injection(phase, 'forward', tuple(result.shape),
@@ -266,7 +438,7 @@ class NoisyMatMul(torch.autograd.Function):
         grad_a = _ORIGINAL_MATMUL(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_MATMUL(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             # Inject error into gradients too
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
@@ -277,6 +449,9 @@ class NoisyMatMul(torch.autograd.Function):
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
             # Log first few injections per phase
             _log_injection(phase, 'backward', tuple(grad_a.shape),
@@ -293,13 +468,16 @@ class NoisyBMM(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_BMM(a, b)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
         ctx.save_for_backward(a, b)
         return result
@@ -312,7 +490,7 @@ class NoisyBMM(torch.autograd.Function):
         grad_a = _ORIGINAL_BMM(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_BMM(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
             grad_a = grad_a + error_a
@@ -321,6 +499,9 @@ class NoisyBMM(torch.autograd.Function):
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
         return grad_a, grad_b
 
@@ -333,7 +514,7 @@ class NoisySoftmax(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SOFTMAX(input, dim=dim)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
             # Re-normalize to keep it a valid probability distribution
@@ -343,6 +524,9 @@ class NoisySoftmax(torch.autograd.Function):
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
         ctx.save_for_backward(result)
         ctx.dim = dim
@@ -358,13 +542,16 @@ class NoisySoftmax(torch.autograd.Function):
         sum_term = (grad_output * result).sum(dim=dim, keepdim=True)
         grad_input = result * (grad_output - sum_term)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
         return grad_input, None
 
@@ -377,13 +564,16 @@ class NoisySiLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SILU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
         ctx.save_for_backward(input)
         return result
@@ -397,13 +587,16 @@ class NoisySiLU(torch.autograd.Function):
         sigmoid_x = torch.sigmoid(input)
         grad_input = grad_output * sigmoid_x * (1 + input * (1 - sigmoid_x))
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
         return grad_input
 
@@ -416,13 +609,16 @@ class NoisyGeLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_GELU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
         ctx.save_for_backward(input)
         return result
@@ -442,13 +638,16 @@ class NoisyGeLU(torch.autograd.Function):
         inner_deriv = sqrt_2_over_pi * (1 + 3 * coeff * input.pow(2))
         grad_input = grad_output * 0.5 * (1 + tanh_inner + input * sech2_inner * inner_deriv)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
         return grad_input
 
@@ -461,13 +660,16 @@ class NoisyLayerNorm(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, bias, eps)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(result)
             result = result + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_forward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'forward')
 
         ctx.save_for_backward(input, weight)
         ctx.normalized_shape = normalized_shape
@@ -488,13 +690,16 @@ class NoisyLayerNorm(torch.autograd.Function):
             output = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, None, eps)
             grad_input, = torch.autograd.grad(output, input, grad_output, retain_graph=False)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED:
+        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
             phase = _CURRENT_PHASE
             key = f"{phase}_backward"
             _INJECTION_COUNT[key] = _INJECTION_COUNT.get(key, 0) + 1
+
+            # Track per-layer stats
+            _update_layer_stats(_CURRENT_LAYER_ID, 'backward')
 
         # Gradient for weight and bias
         grad_weight = (grad_output * ((input - input.mean(dim=-1, keepdim=True)) /
@@ -810,22 +1015,36 @@ def reset_injection_stats() -> None:
 
 
 __all__ = [
+    # Core API
     'enable_noisy_ops',
     'disable_noisy_ops',
     'noisy_ops_context',
+    # Phase control
     'set_phase',
     'get_phase',
     'set_noise_phases',
     'get_noise_phases',
+    # Selective layer injection (diagnostic probing)
+    'set_selective_layers',
+    'get_selective_layers',
+    'set_current_layer',
+    'get_current_layer',
+    'should_inject_for_layer',
+    'register_layer_hooks',
+    'get_layer_injection_stats',
+    'reset_layer_injection_stats',
+    # Statistics
     'get_injection_stats',
     'print_injection_summary',
     'reset_injection_stats',
+    # Noisy operator classes
     'NoisyMatMul',
     'NoisyBMM',
     'NoisySoftmax',
     'NoisySiLU',
     'NoisyGeLU',
     'NoisyLayerNorm',
+    # Noisy operator functions
     'noisy_matmul',
     'noisy_bmm',
     'noisy_linear',
@@ -833,6 +1052,7 @@ __all__ = [
     'noisy_silu',
     'noisy_gelu',
     'noisy_layer_norm',
+    # Internal
     '_auto_enable_from_env',
 ]
 
