@@ -91,14 +91,15 @@ def parse_log_file(log_path):
 def upload_to_wandb(metrics_list, project, run_name, entity=None, tags=None, config=None):
     """Upload metrics to Weights & Biases."""
 
-    # Initialize wandb run
+    # Initialize wandb run with extended timeout for slow connections
     run = wandb.init(
         project=project,
         name=run_name,
         entity=entity,
         tags=tags or [],
         config=config or {},
-        reinit=True
+        reinit=True,
+        settings=wandb.Settings(init_timeout=300)
     )
 
     print(f"Uploading {len(metrics_list)} steps to wandb...")

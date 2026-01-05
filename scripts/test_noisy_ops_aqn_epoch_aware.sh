@@ -7,13 +7,15 @@
 # Key hypothesis:
 #   E5 (noise only): 68.16% accuracy
 #   E5a (noise + global AQN): 68.76% (+0.60%)
-#   E5b (noise + epoch-aware AQN): Should be > E5a if Option C helps
+#   E5b (noise + epoch-aware AQN): 70.58% (+2.42% vs E5) - CONFIRMED
 #
 # Epoch-aware schedule (Option C):
 #   Epoch 1: sigma 0.05 → 0.01 (high exploration)
 #   Epoch 2: sigma 0.01 → 0.0005 (refinement)
 #
 # Usage: bash scripts/test_noisy_ops_aqn_epoch_aware.sh [ERROR_SCALE] [N_GPUS]
+#
+# Checkpoint saving: save_freq=58 (saves at end of each epoch for robustness testing)
 
 set -x
 
@@ -31,9 +33,9 @@ export VERL_NOISY_OPS_SCALE=${ERROR_SCALE}
 export VERL_NOISY_OPS_TYPE=relative_gaussian
 
 # Model and data paths (adjust for your setup)
-MODEL_PATH=${MODEL_PATH:-"/data/models/Qwen2.5-1.5B-Instruct"}
-TRAIN_DATA=${TRAIN_DATA:-"/data/datasets/gsm8k/train.parquet"}
-VAL_DATA=${VAL_DATA:-"/data/datasets/gsm8k/test.parquet"}
+MODEL_PATH=${MODEL_PATH:-"/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306"}
+TRAIN_DATA=${TRAIN_DATA:-"/data/z00637938/gsm8k/train.parquet"}
+VAL_DATA=${VAL_DATA:-"/data/z00637938/gsm8k/test.parquet"}
 
 # Common training args (matching run_gpu_baseline.sh exactly)
 COMMON_ARGS="
@@ -71,7 +73,7 @@ COMMON_ARGS="
     trainer.logger=console
     trainer.total_epochs=2
     trainer.test_freq=20
-    trainer.save_freq=-1
+    trainer.save_freq=58
     trainer.nnodes=1
     trainer.project_name=noisy_ops_aqn_epoch_aware_test
     trainer.n_gpus_per_node=${N_GPUS}
@@ -93,10 +95,10 @@ echo "  2. Epoch-aware AQN (Option C):"
 echo "     - Epoch 1: sigma 0.05 → 0.01 (exploration)"
 echo "     - Epoch 2: sigma 0.01 → 0.0005 (refinement)"
 echo ""
-echo "Expected outcome:"
+echo "Previous results (re-running with checkpoints for robustness test):"
 echo "  E5 (noise only): 68.16%"
 echo "  E5a (noise + global AQN): 68.76%"
-echo "  E5b (noise + epoch-aware AQN): > 68.76% if Option C helps"
+echo "  E5b (noise + epoch-aware AQN): 70.58% - CONFIRMED"
 echo ""
 
 python3 -m verl.trainer.main_ppo \
@@ -110,6 +112,6 @@ python3 -m verl.trainer.main_ppo \
     ++trainer.noise_injection.sigma_start=0.05 \
     ++trainer.noise_injection.sigma_end=0.0005 \
     ++trainer.noise_injection.stages_per_epoch=5 \
-    trainer.experiment_name=noisy_ops_aqn_epoch_aware_${ERROR_SCALE}
+    trainer.experiment_name=noisy_ops_aqn_epoch_aware_ckpt_${ERROR_SCALE}
 
 echo "=== Test Complete ==="

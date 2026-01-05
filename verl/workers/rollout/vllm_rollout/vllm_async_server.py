@@ -397,13 +397,37 @@ class vLLMHttpServerBase:
             server_args_ns.model = self.model_config.local_path
             server_args_ns.model_tag = self.model_config.local_path
             server_args_ns.subparser = "serve"
-            # Copy all args from the dict
+            # Copy all args from the dict, parsing JSON strings back to dicts
             for k, v in args.items():
+                # Some values are json.dumps'd above for CLI, we need to parse them back
+                if isinstance(v, str) and v.startswith("{") and v.endswith("}"):
+                    try:
+                        v = json.loads(v)
+                    except json.JSONDecodeError:
+                        pass  # Keep as string if not valid JSON
                 setattr(server_args_ns, k.replace("-", "_"), v)
-            # Set commonly needed defaults
+            # Use original dict for override_generation_config (not JSON string)
+            server_args_ns.override_generation_config = override_generation_config
+            # Set commonly needed defaults for vLLM server
             server_args_ns.disable_frontend_multiprocessing = True
             server_args_ns.enable_log_requests = False
             server_args_ns.enable_request_id_headers = False
+            server_args_ns.disable_fastapi_docs = False
+            server_args_ns.return_tokens_as_token_ids = False
+            server_args_ns.served_model_name = None
+            server_args_ns.chat_template = None
+            server_args_ns.lora_modules = None
+            server_args_ns.prompt_adapters = None
+            server_args_ns.api_key = None
+            server_args_ns.ssl_keyfile = None
+            server_args_ns.ssl_certfile = None
+            server_args_ns.ssl_ca_certs = None
+            server_args_ns.ssl_cert_reqs = 0
+            server_args_ns.root_path = None
+            server_args_ns.middleware = []
+            server_args_ns.response_role = "assistant"
+            server_args_ns.host = "0.0.0.0"
+            server_args_ns.port = 8000
             server_args = server_args_ns
 
         # 2. setup distributed executor backend
