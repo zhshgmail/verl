@@ -1,15 +1,41 @@
 # AQN as Diagnostic Probe: Layer-wise Noise Sensitivity Analysis
 
 **Date**: 2026-01-05
-**Status**: Research Complete - Implementation Pending
+**Status**: Research Complete - Implementation In Progress
 **Branch**: `feature/npu-aqn-test`
 
 ---
 
 ## Executive Summary
 
-This document outlines how to use Adaptive Quantization Noise (AQN) as a **self-diagnostic mechanism** to identify where major system noise comes from during training and inference. The approach is:
+This document outlines how to use Adaptive Quantization Noise (AQN) as a **self-diagnostic mechanism** to identify where major system noise comes from during training and inference.
 
+### Core Principle: Closed-Loop Diagnostic → Training Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              AQN CLOSED-LOOP SYSTEM                         │
+│                                                             │
+│   DIAGNOSTIC PHASE              TRAINING PHASE              │
+│   ("Oscilloscope")       →      ("Vaccine")                 │
+│                                                             │
+│   Inject probe noise            Use sensitivity map to:     │
+│   Generate sensitivity map      • WHERE to inject noise     │
+│         │                       • HOW STRONG the noise      │
+│         ▼                              ▲                    │
+│   ┌─────────────────┐                  │                    │
+│   │ Sensitivity Map │──────────────────┘                    │
+│   │ Layer 24: 15%   │                                       │
+│   │ Layer 10: 2%    │  Inverse scaling:                     │
+│   │ MatMul: 8%      │  • Sensitive → LESS noise (protect)   │
+│   │ Softmax: 3%     │  • Robust → MORE noise (regularize)   │
+│   └─────────────────┘                                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Insight**: Diagnostic AQN output becomes Training AQN input.
+
+The approach is:
 1. **Theoretically Sound**: Based on information bottleneck theory and differential sensitivity analysis
 2. **Empirically Validated**: E5b/E7c results show dramatic differences in layer robustness
 3. **Practically Implementable**: Extends existing `noisy_ops.py` with selective injection
@@ -327,3 +353,193 @@ Using AQN as a diagnostic probe is **feasible and valuable**. The approach:
 4. **Represents novel research** (publishable contribution)
 
 **Next step**: Implement `set_selective_layers()` API and run proof-of-concept diagnostic.
+
+---
+
+## 10. Three-Level Diagnostic Methodology (Enhanced)
+
+Based on NPU deployment experience, we extend the diagnostic approach to three levels:
+
+### 10.1 Level 1: Operator-Level Diagnosis
+
+**Goal**: Distinguish compute-intensive (MatMul) vs memory-intensive (Softmax/Norm) error sources.
+
+```python
+# Experiment A: MatMul/Linear only
+set_selective_op_types(['matmul', 'linear'])
+accuracy_A = evaluate(model, test_data)
+
+# Experiment B: Attention + Norm only
+set_selective_op_types(['softmax', 'layer_norm', 'silu'])
+accuracy_B = evaluate(model, test_data)
+```
+
+**Diagnosis Logic**:
+
+| Result | Diagnosis | NPU Countermeasure |
+|--------|-----------|-------------------|
+| A crashes more | FP4 accumulator precision issue | Enable FP16/FP32 accumulation |
+| B crashes more | Non-linear approximation error | Use BF16 for Softmax/Norm, FP4 for MatMul |
+
+**Key Insight**: This moves from "Layer X is sensitive" to "Layer X's MatMul has FP4 accumulation issues" - actionable for NPU configuration.
+
+### 10.2 Level 2: Layer-Level Diagnosis ("Sliding Window")
+
+**Goal**: Find the "avalanche point" where errors cascade.
+
+```python
+# Sliding window injection
+for window_start in range(0, num_layers, 10):
+    set_layer_window(window_start, window_start + 10)
+    accuracy = evaluate(model, test_data)
+    sensitivity_by_region[window_start] = (baseline - accuracy) / baseline
+```
+
+**Why Sliding Window > Single Layer**:
+- Captures **inter-layer error propagation**
+- More realistic (real HW errors affect consecutive layers)
+- Identifies **regional patterns** (early/middle/late transformer blocks)
+
+**Typical Sensitivity Pattern**:
+
+| Region | Layers | Expected Sensitivity | Reasoning |
+|--------|--------|---------------------|-----------|
+| Early | 0-8 | Medium (5-8%) | Feature extraction |
+| Middle | 9-19 | Low (2-4%) | High redundancy |
+| Late | 20-27 | **HIGH (10-15%)** | Output formation, critical |
+
+### 10.3 Level 3: Channel-Level Diagnosis (Advanced)
+
+**Goal**: Identify "outlier channels" that carry critical information.
+
+```python
+# Instead of uniform noise across all channels:
+for channel_id in range(hidden_dim):
+    set_selective_channels([channel_id])
+    accuracy = evaluate(model, test_data)
+    channel_sensitivity[channel_id] = (baseline - accuracy) / baseline
+
+# Identify outlier channels (top 5% sensitivity)
+critical_channels = [c for c, s in channel_sensitivity.items() if s > threshold]
+```
+
+**Application**:
+- Keep high precision for critical channels
+- Use aggressive quantization for robust channels
+- Target LoRA on outlier channels
+
+---
+
+## 11. Closed-Loop Training Pipeline
+
+### 11.1 The Complete Workflow
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    AQN CLOSED-LOOP WORKFLOW                      │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  STEP 1: DIAGNOSTIC PHASE                                        │
+│  ─────────────────────────                                       │
+│  Run three-level diagnosis:                                      │
+│    • Operator-level: MatMul vs Softmax/Norm                      │
+│    • Layer-level: Sliding window scan                            │
+│    • (Optional) Channel-level: Outlier detection                 │
+│                                                                  │
+│  Output: sensitivity_map.json                                    │
+│    {                                                             │
+│      "per_layer": {"0": 0.06, "10": 0.02, "24": 0.15},          │
+│      "per_operator": {"matmul": 0.08, "softmax": 0.03},         │
+│      "critical_layers": [24, 25, 26, 27],                       │
+│      "critical_ops": ["matmul"]                                  │
+│    }                                                             │
+│                         │                                        │
+│                         ▼                                        │
+│  STEP 2: TRAINING PHASE                                          │
+│  ─────────────────────────                                       │
+│  Load sensitivity_map.json                                       │
+│  Apply INVERSE noise scaling:                                    │
+│                                                                  │
+│    Layer 10 (2% sensitivity)  → noise_scale × 2.0 (regularize)  │
+│    Layer 24 (15% sensitivity) → noise_scale × 0.5 (protect)     │
+│    MatMul ops (8% sens)       → noise_scale × 1.0 (normal)      │
+│    Softmax ops (3% sens)      → noise_scale × 1.5 (regularize)  │
+│                                                                  │
+│  Result: Efficient noise budget allocation                       │
+│    • Maximum regularization on robust components                 │
+│    • Minimum perturbation on critical components                 │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Configuration Example
+
+```yaml
+# trainer config
+trainer:
+  adaptive_aqn:
+    enabled: true
+    sensitivity_profile: sensitivity_map.json
+
+    # Noise scaling strategy
+    scaling:
+      # Inverse: high sensitivity → low noise, low sensitivity → high noise
+      mode: inverse
+      base_scale: 0.05
+
+      # Sensitivity thresholds
+      robust_threshold: 0.03      # < 3% degradation = robust
+      robust_multiplier: 2.0      # Apply 2x noise
+
+      sensitive_threshold: 0.10   # > 10% degradation = sensitive
+      sensitive_multiplier: 0.3   # Apply 0.3x noise
+
+    # Special handling for critical layers
+    critical_layers:
+      action: lora  # 'reduce_noise', 'disable_noise', 'lora'
+      lora_rank: 8
+      lora_alpha: 16
+```
+
+### 11.3 Expected Improvement
+
+| Strategy | Description | Expected Accuracy |
+|----------|-------------|-------------------|
+| Uniform AQN | Same noise everywhere | 70.58% (baseline) |
+| Inverse AQN | More noise on robust layers | +0.5-1.0% |
+| Inverse + LoRA | + LoRA on critical layers | +1.0-2.0% |
+
+---
+
+## 12. Implementation Status Update
+
+### Completed
+- [x] `set_selective_layers()` - Target specific layers
+- [x] `register_layer_hooks()` - Auto-track current layer
+- [x] `get_layer_injection_stats()` - Per-layer statistics
+- [x] Forward/backward phase control
+
+### In Progress
+- [ ] `set_selective_op_types()` - Target specific operator types
+- [ ] `set_layer_window()` - Sliding window wrapper
+
+### Planned
+- [ ] Diagnostic script with heatmap generation
+- [ ] Adaptive AQN configuration loader
+- [ ] Channel-level sensitivity profiling
+
+---
+
+## 13. Key Takeaway
+
+**The AQN system has dual identity:**
+
+1. **Diagnostic Mode** ("Oscilloscope"): Probe the model to generate sensitivity heatmap
+2. **Training Mode** ("Vaccine"): Use heatmap to guide noise injection
+
+**The diagnostic output IS the training input** - this closed-loop design enables:
+- Efficient noise budget allocation
+- Targeted protection of critical components
+- Maximum regularization benefit with minimum accuracy cost
+
+**From black-box to white-box**: Instead of "NPU results are wrong", we can say "NPU produces 15% systematic bias in Layer 24's MatMul due to FP4 accumulation" and take targeted action.
