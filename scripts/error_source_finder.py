@@ -254,6 +254,206 @@ class ErrorSourceFinder:
             "sorted_candidates": sorted_layers[:10],
         }
 
+    def find_error_source_cross_reference(
+        self,
+        ground_truth_layer: int,
+        prompts: List[str],
+        search_range: Tuple[int, int] = None,
+        num_probe_samples: int = 5,
+    ) -> Dict:
+        """
+        Find error source using Cross-Reference Probe method.
+
+        This is the PRODUCTION-READY method that works when we DON'T know the
+        HW error fingerprint. It uses controllable noise injection as a PROBE.
+
+        Key Insight:
+        - We have reference (GPU) and suspect (NPU) outputs
+        - The observed divergence = NPU - GPU is our "target pattern"
+        - We inject DIFFERENT noise into each layer on GPU to find which
+          layer's noise REPRODUCES a similar divergence pattern
+        - This works because each layer's perturbation produces a characteristic
+          effect on the output distribution
+
+        Algorithm:
+        1. Get clean reference output (GPU)
+        2. Get suspect output (NPU with unknown error) - "observed failure"
+        3. Compute observed divergence pattern = suspect - reference
+        4. For each candidate layer L:
+           - Inject MULTIPLE probe noise samples (different seeds)
+           - Compute average divergence pattern from each
+           - Match pattern STRUCTURE (not exact values) with observed pattern
+        5. Layer whose probe pattern best matches observed pattern is the error source
+
+        Why this works:
+        - The error in layer X affects certain dimensions/tokens more than others
+        - Injecting noise into layer X (even with different random values)
+          will affect the SAME dimensions/tokens
+        - This structural similarity is what we match
+
+        Args:
+            ground_truth_layer: For validation - the actual error layer (unknown in production)
+            prompts: Test prompts
+            search_range: Layer range to search
+            num_probe_samples: Number of different probe noise samples per layer
+        """
+        if search_range is None:
+            search_range = (0, self.num_layers)
+
+        print(f"\n{'='*60}")
+        print("ERROR SOURCE FINDER - Cross-Reference Probe Method")
+        print(f"{'='*60}")
+        print(f"Ground Truth Layer: {ground_truth_layer} (for validation only)")
+        print(f"HW Error Scale: {self.hw_error_scale}")
+        print(f"Probe Scale: {self.diagnostic_scale}")
+        print(f"Search Range: layers {search_range[0]}-{search_range[1]-1}")
+        print(f"Probe samples per layer: {num_probe_samples}")
+        print(f"{'='*60}")
+
+        # IMPORTANT: Use DIFFERENT seed for simulated HW error vs probes
+        HW_ERROR_SEED = 99999  # Unknown in production, different from probe seeds
+        PROBE_BASE_SEED = 12345  # We control probe seeds
+
+        # Step 1: Get clean reference (simulating GPU)
+        print("\n[Step 1] Getting clean reference (simulating GPU)...")
+        disable_noisy_ops()
+        set_selective_layers(None)
+
+        reference_logits = []
+        for prompt in prompts:
+            logits = self.get_output_logits(prompt)
+            reference_logits.append(logits)
+
+        # Step 2: Get suspect output (simulating NPU with HW error)
+        # In production: this comes from actual NPU run
+        # Here: we simulate with noise on ground_truth_layer using DIFFERENT seed
+        print(f"\n[Step 2] Getting suspect output (simulating NPU error on layer {ground_truth_layer})...")
+        torch.manual_seed(HW_ERROR_SEED)
+        np.random.seed(HW_ERROR_SEED)
+        enable_noisy_ops(error_scale=self.hw_error_scale, error_type='relative_gaussian')
+        set_selective_layers([ground_truth_layer])
+
+        suspect_logits = []
+        observed_patterns = []
+        for i, prompt in enumerate(prompts):
+            # Different seed for each prompt (simulating persistent but unknown HW error)
+            torch.manual_seed(HW_ERROR_SEED + i * 1000)
+            np.random.seed(HW_ERROR_SEED + i * 1000)
+            logits = self.get_output_logits(prompt)
+            suspect_logits.append(logits)
+            # Compute observed divergence pattern
+            pattern = self.compute_deviation_pattern(reference_logits[i], logits)
+            observed_patterns.append(pattern)
+
+        disable_noisy_ops()
+
+        # Measure observed divergence magnitude
+        observed_divs = []
+        for i in range(len(prompts)):
+            div = self.compute_kl_divergence(reference_logits[i], suspect_logits[i])
+            observed_divs.append(div)
+        print(f"Observed divergence (reference → suspect): {np.mean(observed_divs):.4f}")
+
+        # Step 3: Probe each layer and match pattern
+        print(f"\n[Step 3] Running cross-reference probe sweep...")
+        print("(Higher pattern similarity = more likely error source)")
+
+        pattern_similarities = {}
+
+        for layer_id in range(search_range[0], search_range[1]):
+            # Run multiple probe samples with DIFFERENT seeds (not the HW error seed)
+            layer_similarities = []
+
+            for sample_idx in range(num_probe_samples):
+                # Use controlled probe seed (different from HW error seed!)
+                probe_seed = PROBE_BASE_SEED + layer_id * 100 + sample_idx * 10
+
+                set_selective_layers([layer_id])
+                enable_noisy_ops(error_scale=self.diagnostic_scale, error_type='relative_gaussian')
+
+                sample_similarities = []
+                for i, prompt in enumerate(prompts):
+                    # Set probe seed for this specific inference
+                    torch.manual_seed(probe_seed + i)
+                    np.random.seed(probe_seed + i)
+
+                    probe_logits = self.get_output_logits(prompt)
+                    probe_pattern = self.compute_deviation_pattern(reference_logits[i], probe_logits)
+
+                    # Compare probe pattern STRUCTURE with observed pattern
+                    # Using cosine similarity to match direction, not magnitude
+                    sim = self.compute_cosine_similarity(observed_patterns[i], probe_pattern)
+                    sample_similarities.append(sim)
+
+                disable_noisy_ops()
+                layer_similarities.append(np.mean(sample_similarities))
+
+            # Average similarity across all probe samples
+            avg_similarity = np.mean(layer_similarities)
+            std_similarity = np.std(layer_similarities)
+            pattern_similarities[layer_id] = {
+                'mean': avg_similarity,
+                'std': std_similarity,
+                'samples': layer_similarities,
+            }
+
+            marker = " <-- GT" if layer_id == ground_truth_layer else ""
+            if (layer_id + 1) % 5 == 0 or layer_id == ground_truth_layer:
+                print(f"  Layer {layer_id:2d}: similarity = {avg_similarity:.4f} ± {std_similarity:.4f}{marker}")
+
+        set_selective_layers(None)
+
+        # Step 4: Identify error source
+        print(f"\n[Step 4] Analyzing results...")
+
+        # Sort by mean similarity (higher = more likely error source)
+        sorted_layers = sorted(
+            [(lid, data['mean']) for lid, data in pattern_similarities.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        print("\nTop 5 candidates (highest pattern similarity):")
+        for rank, (layer_id, sim) in enumerate(sorted_layers[:5], 1):
+            marker = " <-- GROUND TRUTH" if layer_id == ground_truth_layer else ""
+            std = pattern_similarities[layer_id]['std']
+            print(f"  {rank}. Layer {layer_id}: {sim:.4f} ± {std:.4f}{marker}")
+
+        # Diagnosis
+        diagnosed_layer = sorted_layers[0][0]
+
+        print(f"\n{'='*50}")
+        print(f"Ground Truth Layer: {ground_truth_layer}")
+        print(f"Diagnosed Layer:    {diagnosed_layer}")
+
+        # Check result
+        top_3_ids = [l[0] for l in sorted_layers[:3]]
+
+        if diagnosed_layer == ground_truth_layer:
+            result = "EXACT_MATCH"
+            print("Result: ✅ EXACT MATCH")
+        elif ground_truth_layer in top_3_ids:
+            rank = top_3_ids.index(ground_truth_layer) + 1
+            result = f"IN_TOP_3_RANK_{rank}"
+            print(f"Result: ⚠️ In top 3 (rank {rank})")
+        elif abs(diagnosed_layer - ground_truth_layer) <= 2:
+            result = "ADJACENT"
+            print(f"Result: ⚠️ Adjacent layer (within 2)")
+        else:
+            result = "MISMATCH"
+            print(f"Result: ❌ MISMATCH")
+
+        print(f"{'='*50}")
+
+        return {
+            "ground_truth": ground_truth_layer,
+            "diagnosed": diagnosed_layer,
+            "result": result,
+            "pattern_similarities": pattern_similarities,
+            "sorted_candidates": sorted_layers[:10],
+            "method": "cross_reference_probe",
+        }
+
     def find_error_source_fingerprint(
         self,
         ground_truth_layer: int,
@@ -530,10 +730,14 @@ def main():
                        help="Number of trials for multi-trial mode (1=single trial)")
     parser.add_argument("--seed", type=int, default=None,
                        help="Random seed for reproducibility")
-    parser.add_argument("--method", type=str, default="differential",
-                       choices=["differential", "fingerprint", "both"],
+    parser.add_argument("--method", type=str, default="cross_reference",
+                       choices=["differential", "fingerprint", "cross_reference", "all"],
                        help="Method: differential (least additional divergence), "
-                            "fingerprint (pattern correlation), or both")
+                            "fingerprint (pattern correlation with same seed - validation only), "
+                            "cross_reference (probe with different seed - production ready), "
+                            "or all")
+    parser.add_argument("--num_probe_samples", type=int, default=5,
+                       help="Number of probe samples per layer for cross_reference method")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
 
@@ -573,7 +777,7 @@ def main():
     # Run methods based on selection
     all_results = []
 
-    if args.method in ["differential", "both"]:
+    if args.method in ["differential", "all"]:
         print("\n" + "="*70)
         print("METHOD 1: DIFFERENTIAL SENSITIVITY")
         print("="*70)
@@ -596,9 +800,9 @@ def main():
             results["method"] = "differential"
             all_results.append(results)
 
-    if args.method in ["fingerprint", "both"]:
+    if args.method in ["fingerprint", "all"]:
         print("\n" + "="*70)
-        print("METHOD 2: FINGERPRINT CORRELATION")
+        print("METHOD 2: FINGERPRINT CORRELATION (Validation Only)")
         print("="*70)
         results = finder.find_error_source_fingerprint(
             ground_truth_layer=args.ground_truth_layer,
@@ -607,8 +811,20 @@ def main():
         )
         all_results.append(results)
 
-    # Summary if both methods were run
-    if args.method == "both":
+    if args.method in ["cross_reference", "all"]:
+        print("\n" + "="*70)
+        print("METHOD 3: CROSS-REFERENCE PROBE (Production Ready)")
+        print("="*70)
+        results = finder.find_error_source_cross_reference(
+            ground_truth_layer=args.ground_truth_layer,
+            prompts=prompts,
+            search_range=search_range,
+            num_probe_samples=args.num_probe_samples,
+        )
+        all_results.append(results)
+
+    # Summary if multiple methods were run
+    if args.method == "all":
         print("\n" + "="*70)
         print("COMPARISON SUMMARY")
         print("="*70)
@@ -616,7 +832,7 @@ def main():
             method = r.get("method", "unknown")
             diagnosed = r.get("diagnosed") or r.get("final_diagnosed")
             result = r.get("result") or r.get("final_result")
-            print(f"  {method:20s}: Diagnosed layer {diagnosed}, {result}")
+            print(f"  {method:25s}: Diagnosed layer {diagnosed}, {result}")
 
     # Exit code based on results
     success = False
