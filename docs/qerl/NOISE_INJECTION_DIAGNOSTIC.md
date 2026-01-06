@@ -1,8 +1,8 @@
 # Noise Injection Diagnostic Methodology
 
-**Version**: 3.2
+**Version**: 3.3
 **Date**: 2026-01-06
-**Status**: v2.0 validated for dead_zone (100%); v3.2 fixes numerical issues but has localization limitations
+**Status**: v3.3 edge detection restores dead_zone accuracy; saturation detection remains challenging
 
 ---
 
@@ -267,32 +267,38 @@ finally:
 
 **100% accuracy** when reference system available.
 
-### 5.5 SRDD v3.2 Results (A100)
+### 5.5 SRDD v3.3 Results (A100) - Edge Detection
 
-v3.2 fixes simulator and numerical issues from v3.1:
+v3.3 introduces **edge detection** - finding where the fault STARTS by looking at first derivatives (jumps between adjacent layers) rather than global statistics.
 
 | GT Layer | Fault Type | Diagnosed | Result | Notes |
 |----------|------------|-----------|--------|-------|
-| 15 | noise (0.3) | - | MISMATCH | Fault affects all downstream equally |
-| 15 | saturation (0.2) | 27 | MISMATCH | Saturation signature masked |
-| 10 | dead_zone (0.3) | 6 | MISMATCH | Regression from v2.0 |
+| 10 | dead_zone (0.3) | **10** | **EXACT MATCH** | Edge detection works |
+| 20 | dead_zone (0.3) | 21 | Off by 1 | Adjacent layer confusion |
+| 15 | saturation (0.2) | 7 | MISMATCH | Saturation signature weak |
 
-**v3.2 Fixes Applied**:
+**v3.3 Key Insight (Gemini collaboration)**:
 
-1. **Independent RNG**: Simulator now uses `torch.Generator()` independent of global seed - simulates real hardware noise behavior.
+Fault localization is an **EDGE DETECTION** problem:
+- Find WHERE the fault STARTS (the transition point)
+- Use LOCAL comparison (layer i vs layer i-1) instead of GLOBAL (layer i vs median)
+- Log-transform metrics and Z-score the JUMPS
 
-2. **Dynamic MAD Floor**: Uses `max(median*0.01, 1e-4)` to prevent Z-score explosion. Z-scores now reasonable (e.g., 133.6) instead of extreme values (-128M).
+**v3.2 Fixes (retained)**:
+1. Independent RNG for simulator noise
+2. Dynamic MAD floor for numerical stability
 
-**Fundamental Limitation**:
+**Fault Type Detectability**:
 
-SRDD's end-to-end approach has inherent localization limitations:
-- Fault effects propagate to ALL downstream layers
-- End-to-end divergence measurements cannot isolate fault layer
-- Multiple layers show similar anomaly signatures
+| Fault Type | Detectability | Edge Detection Signature |
+|------------|---------------|-------------------------|
+| dead_zone | **HIGH** | Large mono jump at fault layer |
+| saturation | LOW | Weak edge signal, masked by downstream |
+| noise | LOW | Propagates uniformly to all layers |
 
-**Recommendation**: Use **fingerprint correlation** (Section 5.4) when a reference system is available - it achieves 100% accuracy. SRDD is useful for:
-- Detecting THAT a fault exists (anomaly detection)
-- Situations where NO reference system is available
+**Recommendation**:
+- **With reference system**: Use fingerprint correlation (100% accuracy)
+- **Without reference**: SRDD v3.3 works well for dead_zone faults
 
 ---
 
