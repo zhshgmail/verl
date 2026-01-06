@@ -813,6 +813,22 @@ compression_ratio = actual_response / expected_response
 # Saturated layer: compression_ratio << 1
 ```
 
+#### SRDD v2.0 Validation Results (2026-01-06)
+
+| GT Layer | v1 Diagnosed | v1 GT Rank | v2 Diagnosed | v2 GT Rank | Change |
+|----------|--------------|------------|--------------|------------|--------|
+| 5 | 6 | 2 | 6 | 2 | Same |
+| 10 | 2 | 4 | 2 | **3** | ✅ Improved |
+| 15 | 2 | 4 | 2 | 4 | Same |
+| 20 | **27** | 4 | 2 | **3** | ✅ L27 fixed |
+
+**Key Achievement**: Log-space transformation fixed "Last Layer Dominance" - L27 no longer dominates for GT=20.
+
+**Remaining Limitations**:
+- Saturation fault still hard to detect (needs stronger fault or different approach)
+- Diagnosed layer often adjacent to GT (e.g., GT=5 → diagnosed=6)
+- Top-5 accuracy, not exact match
+
 ### 8.7 Next Steps
 
 1. **Real HW error testing**: Apply methodology to actual GPU/NPU divergence cases
