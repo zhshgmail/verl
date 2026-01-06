@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v3.2 - Robust & Efficient
+Self-Referential Differential Diagnosis (SRDD) v3.3 - Edge Detection
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 It uses controllable noise injection as a probe to detect ANOMALOUS layer behavior.
 
-v3.2 Fixes (Gemini collaboration):
+v3.3 Key Insight (Gemini collaboration):
+- Fault localization is an EDGE DETECTION problem, not just anomaly detection
+- We need to find WHERE the fault STARTS (the transition/edge), not just which layers look bad
+- Use LOCAL comparison (layer i vs i-1) instead of GLOBAL comparison (layer i vs median)
+- First derivative (jump) in metrics pinpoints the fault onset
+
+v3.2 Fixes:
 1. Independent RNG: Simulator noise uses separate Generator, not affected by global seed
 2. Dynamic MAD Floor: Use max(median*0.01, 1e-4) to prevent Z-score explosion
 
@@ -14,12 +20,6 @@ v3.1 Improvements:
 2. Trial Instability Probe: Detect Gaussian noise faults via non-determinism
 3. High-Energy Concavity Probe: Detect saturation via extended noise scales [0.05-1.0]
 4. MAD Statistics: Use Median Absolute Deviation for outlier-robust Z-scores
-5. Decoupled Probing: Efficiency - instability (5 trials @ 1 scale) + dynamics (1 trial @ 5 scales)
-
-Key Insight:
-- Gaussian noise fault: Non-deterministic even with fixed probe seed
-- Saturation fault: Amplification factor drops at high noise scales (concave curve)
-- Dead zone fault: Non-monotonic response, low sensitivity
 """
 
 import os
@@ -46,10 +46,10 @@ from verl.utils.noisy_ops import (
 
 class SRDDErrorFinder:
     """
-    Self-Referential Differential Diagnosis v3.2 for finding hardware error sources.
+    Self-Referential Differential Diagnosis v3.3 for finding hardware error sources.
 
-    Works WITHOUT a reference system - uses statistical anomaly detection
-    to find layers with abnormal response to controlled noise injection.
+    Works WITHOUT a reference system - uses edge detection to find
+    where fault behavior STARTS (the transition point).
     """
 
     def __init__(
@@ -70,8 +70,8 @@ class SRDDErrorFinder:
 
         # Register layer hooks
         self.num_hooks = register_layer_hooks(model)
-        print(f"[SRDD v3.2] Registered {self.num_hooks} layer hooks")
-        print(f"[SRDD v3.2] Model has {self.num_layers} layers")
+        print(f"[SRDD v3.3] Registered {self.num_hooks} layer hooks")
+        print(f"[SRDD v3.3] Model has {self.num_layers} layers")
 
     def get_output_logits(self, prompt: str) -> torch.Tensor:
         """Get model output logits for a prompt."""
@@ -270,13 +270,14 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Aggregate results and diagnose fault type using MAD-based Z-scores.
+        Aggregate results and diagnose fault type using EDGE DETECTION.
 
-        v3.1 IMPROVEMENT: Use Median Absolute Deviation (MAD) instead of StdDev
-        for outlier-robust Z-score calculation.
+        v3.3 KEY INSIGHT: Find where the fault STARTS (the edge/transition),
+        not just which layers look abnormal. Use first derivative (jump from
+        previous layer) to detect the onset of fault behavior.
         """
         print(f"\n{'='*60}")
-        print("DIAGNOSIS REPORT (v3.2 MAD-based)")
+        print("DIAGNOSIS REPORT (v3.3 Edge Detection)")
         print(f"{'='*60}")
 
         # Collect metrics
@@ -300,56 +301,90 @@ class SRDDErrorFinder:
 
         # MAD-based Z-score (robust to outliers)
         def mad_zscore(values, x):
-            """Calculate Z-score using Median Absolute Deviation.
-
-            v3.2 FIX: Use dynamic floor to prevent Z-score explosion
-            when MAD approaches zero (all values nearly identical).
-            """
+            """Calculate Z-score using Median Absolute Deviation."""
             med = np.median(values)
             abs_diff = np.abs(values - med)
             mad = np.median(abs_diff)
-
-            # v3.2 FIX: Dynamic floor based on median value
-            # Prevents division by near-zero when all values are similar
             min_mad = max(abs(med) * 0.01, 1e-4)
             effective_mad = max(mad, min_mad)
-
-            # 1.4826 scales MAD to Sigma for normal distribution
             return (x - med) / (effective_mad * 1.4826)
+
+        def mad_zscore_array(values):
+            """Calculate Z-scores for entire array."""
+            return np.array([mad_zscore(values, v) for v in values])
+
+        # ============================================================
+        # v3.3 EDGE DETECTION: Calculate JUMPS (first derivative)
+        # The fault ONSET creates a sharp transition in metrics
+        # ============================================================
+
+        # Log-transform for scale-invariant comparison (handles magnitude differences)
+        log_mono = np.log(monotonicities + 1e-9)
+        log_amp = np.log(amp_factors + 1e-4)
+        log_sens = np.log(sensitivities_low + 1e-9)
+
+        # First derivative: jump from previous layer
+        # Prepend first value so array length matches
+        mono_jumps = np.diff(log_mono, prepend=log_mono[0])
+        amp_jumps = np.diff(log_amp, prepend=log_amp[0])
+        sens_jumps = np.diff(log_sens, prepend=log_sens[0])
+
+        # Z-score the JUMPS to find anomalous transitions
+        z_mono_jump = mad_zscore_array(mono_jumps)
+        z_amp_jump = mad_zscore_array(amp_jumps)
+        z_sens_jump = mad_zscore_array(sens_jumps)
 
         # Print statistics
         print(f"\nStatistics:")
-        print(f"  Instability: median={np.median(instabilities):.6f}, MAD={np.median(np.abs(instabilities - np.median(instabilities))):.6f}")
-        print(f"  Amplification: median={np.median(amp_factors):.1f}, MAD={np.median(np.abs(amp_factors - np.median(amp_factors))):.1f}")
+        print(f"  Monotonicity: median={np.median(monotonicities):.4f}")
+        print(f"  Amplification: median={np.median(amp_factors):.1f}")
+        print(f"  Mono Jump Z: max={np.max(np.abs(z_mono_jump)):.2f} at L{np.argmax(np.abs(z_mono_jump))}")
+        print(f"  Amp Jump Z: max={np.max(np.abs(z_amp_jump)):.2f} at L{np.argmax(np.abs(z_amp_jump))}")
 
         # Classify each layer
         candidates = []
 
         for lid in range(self.num_layers):
+            # Global Z-scores (for reference)
             z_inst = mad_zscore(instabilities, instabilities[lid])
             z_amp = mad_zscore(amp_factors, amp_factors[lid])
             z_mono = mad_zscore(monotonicities, monotonicities[lid])
 
+            # v3.3: Local EDGE scores (jump from previous layer)
+            edge_mono = abs(z_mono_jump[lid])  # Sudden drop in monotonicity
+            edge_amp = abs(z_amp_jump[lid])    # Sudden change in amplification
+            edge_sens = abs(z_sens_jump[lid])  # Sudden change in sensitivity
+
             score = 0
             reasons = []
 
-            # 1. NOISE FAULT: High Instability (z > 3)
+            # v3.3 PRIMARY: Edge Detection (where fault STARTS)
+            # A large negative jump in monotonicity indicates fault onset
+            if z_mono_jump[lid] < -2.0:  # Sudden DROP in monotonicity
+                edge_score = abs(z_mono_jump[lid]) * 2.0
+                score += edge_score
+                reasons.append(f"EDGE(mono_drop={z_mono_jump[lid]:.1f})")
+
+            # Large jump in amplification (saturation onset)
+            if abs(z_amp_jump[lid]) > 2.0:
+                edge_score = abs(z_amp_jump[lid]) * 1.5
+                score += edge_score
+                reasons.append(f"EDGE(amp={z_amp_jump[lid]:.1f})")
+
+            # v3.2 SECONDARY: Global anomaly detection (backup)
+            # 1. NOISE FAULT: High Instability
             if z_inst > 3.0:
-                score += z_inst * 2.0  # High weight
+                score += z_inst * 1.0  # Reduced weight vs edge detection
                 reasons.append(f"UNSTABLE(z={z_inst:.1f})")
 
-            # 2. SATURATION FAULT: Low Amplification (z < -2) but not dead
+            # 2. SATURATION FAULT: Low Amplification
             if z_amp < -2.0 and sensitivities_low[lid] > 1e-4:
-                score += abs(z_amp) * 1.5
+                score += abs(z_amp) * 0.5  # Reduced weight
                 reasons.append(f"SATURATED(z={z_amp:.1f})")
 
-            # 3. DEAD ZONE FAULT: Low Monotonicity or very low sensitivity
-            if z_mono < -2.0:
-                score += abs(z_mono) * 1.5
-                reasons.append(f"NON-MONO(z={z_mono:.1f})")
-
+            # 3. DEAD ZONE: Very low sensitivity
             if sensitivities_low[lid] < 1e-5:
-                score += 5.0  # High penalty for dead layers
+                score += 5.0
                 reasons.append("DEAD")
 
             # Store results
@@ -360,6 +395,8 @@ class SRDDErrorFinder:
                 'z_inst': z_inst,
                 'z_amp': z_amp,
                 'z_mono': z_mono,
+                'z_mono_jump': z_mono_jump[lid],
+                'z_amp_jump': z_amp_jump[lid],
                 'instability': instabilities[lid],
                 'amp_factor': amp_factors[lid],
                 'monotonicity': monotonicities[lid],
@@ -368,14 +405,14 @@ class SRDDErrorFinder:
         # Sort by score
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
-        # Print results
-        print(f"\n{'Layer':<6}{'Score':<8}{'Z_Inst':<10}{'Z_Amp':<10}{'Z_Mono':<10}{'Diagnosis'}")
-        print("-" * 70)
+        # Print results with edge detection columns
+        print(f"\n{'Layer':<6}{'Score':<8}{'MonoJump':<10}{'AmpJump':<10}{'Z_Mono':<10}{'Diagnosis'}")
+        print("-" * 75)
 
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['z_inst']:<10.2f}{c['z_amp']:<10.2f}{c['z_mono']:<10.2f}{diagnosis}{marker}")
+            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['z_mono_jump']:<10.2f}{c['z_amp_jump']:<10.2f}{c['z_mono']:<10.2f}{diagnosis}{marker}")
 
         # Final diagnosis
         top_suspect = candidates[0] if candidates[0]['score'] > 0 else None
@@ -418,10 +455,10 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run complete v3.2 diagnosis pipeline.
+        Run complete v3.3 diagnosis pipeline with edge detection.
         """
         print(f"\n{'='*70}")
-        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v3.2)")
+        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v3.3)")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -578,7 +615,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v3.2")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v3.3 (Edge Detection)")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
