@@ -1544,17 +1544,23 @@ class HardwareFaultSimulator:
     """
 
     def __init__(self, model, fault_layer: int, fault_type: str = "saturation",
-                 fault_magnitude: float = 0.1, sparsity: float = 1.0):
+                 fault_magnitude: float = 0.1, sparsity: float = 1.0,
+                 absolute_saturation: bool = False):
         self.model = model
         self.fault_layer = fault_layer
         self.fault_type = fault_type
         self.fault_magnitude = fault_magnitude
         self.sparsity = sparsity  # v5.3: Fraction of elements affected (1.0 = all)
+        self.absolute_saturation = absolute_saturation  # v7.1: Use fixed threshold
         self.hook_handle = None
 
         # v6.0: Fixed sparse mask (created lazily on first forward pass)
         # This ensures the SAME neurons are always affected (deterministic fault)
         self._fixed_sparse_mask = None
+
+        # v7.1: Absolute saturation threshold (computed once, cached)
+        # Tests hypothesis: dynamic threshold defeats detection methods
+        self._absolute_threshold = None
 
         # Find the target layer
         if hasattr(model, 'model') and hasattr(model.model, 'layers'):
@@ -1603,7 +1609,16 @@ class HardwareFaultSimulator:
 
         if self.fault_type == "saturation":
             # Clamp values to simulate FP overflow/saturation
-            max_val = hidden_states.abs().max() * (1.0 - self.fault_magnitude)
+            if self.absolute_saturation:
+                # v7.1: Absolute saturation - compute threshold ONCE and cache
+                # This tests hypothesis: dynamic threshold defeats detection
+                if self._absolute_threshold is None:
+                    self._absolute_threshold = hidden_states.abs().max().item() * (1.0 - self.fault_magnitude)
+                    print(f"  [ABSOLUTE SAT] Fixed threshold: {self._absolute_threshold:.4f}")
+                max_val = self._absolute_threshold
+            else:
+                # Default: Dynamic threshold (70% of current max)
+                max_val = hidden_states.abs().max() * (1.0 - self.fault_magnitude)
             hidden_states = hidden_states.clamp(-max_val, max_val)
 
         elif self.fault_type == "bias":
@@ -1673,6 +1688,8 @@ def main():
                        help="Magnitude of simulated fault (0.0-1.0)")
     parser.add_argument("--sparsity", type=float, default=1.0,
                        help="v5.3: Fraction of elements affected by fault (1.0=dense, 0.01=1%% sparse)")
+    parser.add_argument("--absolute_saturation", action="store_true",
+                       help="v7.1: Use fixed saturation threshold (tests dynamic threshold hypothesis)")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
     parser.add_argument("--local-scan", action="store_true",
@@ -1709,6 +1726,8 @@ def main():
         print(f"Fault magnitude: {args.fault_magnitude}")
         if args.sparsity < 1.0:
             print(f"Sparsity: {args.sparsity*100:.1f}% of elements affected (SPARSE FAULT)")
+        if args.absolute_saturation:
+            print(f"[v7.1] Using ABSOLUTE saturation threshold (tests dynamic threshold hypothesis)")
 
         fault_simulator = HardwareFaultSimulator(
             model=model,
@@ -1716,6 +1735,7 @@ def main():
             fault_type=args.fault_type,
             fault_magnitude=args.fault_magnitude,
             sparsity=args.sparsity,
+            absolute_saturation=args.absolute_saturation,
         )
         fault_simulator.enable()
 
