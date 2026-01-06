@@ -534,6 +534,8 @@ A:
 
 **Full Documentation**: [NOISE_INJECTION_DIAGNOSTIC_METHODOLOGY.md](NOISE_INJECTION_DIAGNOSTIC_METHODOLOGY.md)
 
+**Verification Plan**: [DIAGNOSTIC_VERIFICATION_PLAN.md](DIAGNOSTIC_VERIFICATION_PLAN.md)
+
 **Implementation Issues**: Check `verl/utils/noisy_ops.py` source code
 
 **Questions**: Refer to literature references in full document
