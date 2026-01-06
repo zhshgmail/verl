@@ -1,8 +1,8 @@
 # Hardware Error Source Localization via SRDD
 
-**Version**: 7.0
+**Version**: 8.0
 **Date**: 2026-01-07
-**Status**: Dense faults 100% accurate; Sparse saturation fundamentally undetectable with current approach
+**Status**: Dense faults 100% accurate; Sparse saturation remains undetectable (histogram pile-up only works for dense)
 
 ---
 
@@ -279,6 +279,43 @@ The 30% difference might be detectable in theory, but in practice:
 - **Sparse saturation**: Clips only 10% → extreme tail mostly intact → kurtosis **INCREASES** (σ decreases more than E[(x-μ)⁴])
 
 This explains why kurtosis-based detection fundamentally cannot detect sparse saturation - it's looking for the wrong direction of change!
+
+### v8.0 Experiment: Histogram Pile-up Detection
+
+**Hypothesis** (from Gemini): Saturation creates pile-up at the clamp threshold. Look for histogram spike.
+
+**Implementation**: `local_histogram_scan` - detect edge pile-up in activation histograms.
+
+**CRITICAL FIX over Gemini's proposal**:
+- Gemini looked at top 1% of MAX value (0.99 * max)
+- But saturation pile-up is at THRESHOLD, not MAX
+- With threshold = 30% of max, pile-up is at 0.3*max, not 0.99*max!
+
+v8.0.1 Method:
+- Look at EDGE bins directly (first/last bins of histogram)
+- Compare edge bin count to 3rd/4th neighbor bins
+- Saturation clamps values to threshold → pile-up at histogram max
+
+**Results**:
+
+| Test Case | Pile-up at L10 | Max Value | Result |
+|-----------|----------------|-----------|--------|
+| Dense absolute (30%) | **ratio=3.0** | **2160.0** | **EXACT MATCH** ✓ |
+| 50% sparse absolute | ratio=1.0 | 5760.0 | MISS |
+| 10% sparse absolute | ratio=1.0 | 5216.0 | MISS |
+
+**Why histogram pile-up fails for sparse saturation**:
+1. With sparse mask (10-50%), healthy neurons (50-90%) still exist
+2. Healthy neurons have values > threshold (up to ~7200)
+3. So histogram max = ~7200 (from healthy neurons), not 2160 (threshold)
+4. The pile-up at 2160 is **INSIDE** the histogram, not at the edge
+5. Edge detection looks at wrong location!
+
+**To detect sparse saturation histogram pile-up**:
+- Need to scan **interior** of histogram for unusual peaks
+- Compare each bin to smoothed neighbors
+- Look for spike at ANY location, not just edges
+- Challenge: distinguish saturation spike from natural variation
 
 ### Fundamental Challenge: Sparse Saturation
 
