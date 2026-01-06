@@ -862,6 +862,111 @@ class SRDDErrorFinder:
 
         return layer_results
 
+    def local_histogram_scan(
+        self,
+        prompts: List[str],
+        num_bins: int = 200,
+    ) -> Dict[int, Dict]:
+        """
+        v8.0 Probe: Histogram Pile-up Detection (Sparse/Dense Saturation)
+
+        CRITICAL FIX over Gemini's proposal:
+        - Gemini looks at top 1% of MAX value (0.99 * max)
+        - But saturation pile-up is at THRESHOLD, not MAX
+        - With threshold = 30% of max, pile-up is at 0.3*max, not 0.99*max!
+
+        v8.0 Method:
+        1. Build full histogram over entire value range
+        2. Find peaks by comparing each bin to its neighbors
+        3. Look for unusual peaks in TAIL regions (not center)
+        4. Saturation creates pile-up at threshold value (anywhere in tail)
+
+        Key insight: Normal distribution has smooth exponential tail decay.
+        Saturation creates a spike/pile-up at the clamp threshold.
+        """
+        print(f"\n{'='*60}")
+        print("v8.0 LOCAL SCAN: HISTOGRAM PILE-UP DETECTION")
+        print(f"{'='*60}")
+        print(f"Scanning for unusual peaks in activation histograms...")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        layer_results = {}
+
+        for layer_id in range(self.num_layers):
+            # Capture activations
+            outputs = []
+
+            def capture_output(module, input, output):
+                out = output[0] if isinstance(output, tuple) else output
+                outputs.append(out.detach().float().cpu().numpy().flatten())
+
+            hook = self.layers[layer_id].register_forward_hook(capture_output)
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook.remove()
+
+            if not outputs:
+                layer_results[layer_id] = {'max_tail_peak_ratio': 0.0}
+                continue
+
+            data = outputs[0]
+
+            # Handle edge cases
+            if len(data) < 100 or np.std(data) < 1e-6:
+                layer_results[layer_id] = {'max_tail_peak_ratio': 0.0}
+                continue
+
+            # Build histogram over full range
+            hist, bin_edges = np.histogram(data, bins=num_bins)
+
+            # Find peaks: bins with count >> neighbors (local anomaly)
+            # Compare each bin to average of its 4 neighbors
+            peak_ratio = np.zeros(num_bins)
+            for i in range(2, num_bins - 2):
+                local_avg = (hist[i-2] + hist[i-1] + hist[i+1] + hist[i+2]) / 4
+                if local_avg > 10:  # Minimum neighbor count to avoid noise
+                    peak_ratio[i] = hist[i] / local_avg
+
+            # Focus on TAIL regions (saturation pile-up is in tails, not center)
+            # Exclude center 50% where normal distribution peak is
+            tail_boundary = num_bins // 4
+            left_tail_idx = range(2, tail_boundary)
+            right_tail_idx = range(num_bins - tail_boundary, num_bins - 2)
+
+            left_tail_max = np.max(peak_ratio[2:tail_boundary]) if tail_boundary > 2 else 0
+            right_tail_max = np.max(peak_ratio[num_bins - tail_boundary:num_bins - 2]) if tail_boundary > 2 else 0
+            max_tail_peak = max(left_tail_max, right_tail_max)
+
+            # Find location of max peak
+            if max_tail_peak > 1.5:
+                if left_tail_max >= right_tail_max:
+                    peak_idx = np.argmax(peak_ratio[2:tail_boundary]) + 2
+                else:
+                    peak_idx = np.argmax(peak_ratio[num_bins - tail_boundary:num_bins - 2]) + (num_bins - tail_boundary)
+                peak_value = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
+                peak_count = hist[peak_idx]
+            else:
+                peak_value = 0
+                peak_count = 0
+
+            layer_results[layer_id] = {
+                'max_tail_peak_ratio': max_tail_peak,
+                'peak_value': peak_value,
+                'peak_count': peak_count,
+                'data_range': (np.min(data), np.max(data)),
+            }
+
+            # Print significant pile-ups
+            if max_tail_peak > 2.0 or (layer_id + 1) % 7 == 0 or layer_id == 0:
+                marker = " <-- PILE-UP!" if max_tail_peak > 2.0 else ""
+                print(f"  Layer {layer_id:2d}: max_tail_peak_ratio={max_tail_peak:.2f}, peak_at={peak_value:.1f}{marker}")
+
+        return layer_results
+
     def diagnose_local(
         self,
         ambient_results: Dict[int, float],
@@ -869,20 +974,22 @@ class SRDDErrorFinder:
         kurtosis_results: Dict[int, float] = None,
         min_gain_results: Dict[int, float] = None,
         discrete_results: Dict[int, Dict] = None,
+        histogram_results: Dict[int, Dict] = None,
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        v7.0 Diagnosis using Local Scan results.
+        v8.0 Diagnosis using Local Scan results.
 
-        Five detection methods:
+        Six detection methods:
         - Noise: Edge detection on instability (first spike = source)
         - Dead zone: Local gain (gain << 1.0)
         - Dense saturation: Kurtosis drop (spiky distribution flattened)
         - Sparse saturation (v6.0): Min gain drop (weakest link blocked)
         - Sparse saturation (v7.0): Discrete outlier counting (failed neurons)
+        - Sparse saturation (v8.0): Histogram pile-up at saturation threshold
         """
         print(f"\n{'='*60}")
-        print("v7.0 LOCAL DIAGNOSIS")
+        print("v8.0 LOCAL DIAGNOSIS")
         print(f"{'='*60}")
 
         # Convert to arrays
@@ -1005,6 +1112,35 @@ class SRDDErrorFinder:
                     first_discrete_fault_layer = lid
                     break
 
+        # v8.0: Process histogram pile-up results
+        pileup_arr = None
+        z_pileup = None
+        first_pileup_layer = None
+        histogram_valid_range = (2, self.num_layers - 2)
+        if histogram_results:
+            pileup_arr = np.array([
+                histogram_results.get(i, {}).get('max_tail_peak_ratio', 0)
+                for i in range(self.num_layers)
+            ])
+
+            # Z-score on valid range only (exclude boundary layers)
+            valid_s, valid_e = histogram_valid_range
+            valid_pileup = pileup_arr[valid_s:valid_e]
+            z_pileup_valid = mad_zscore(valid_pileup)
+            z_pileup = np.zeros(self.num_layers)
+            z_pileup[valid_s:valid_e] = z_pileup_valid
+
+            # Find FIRST layer with significant pile-up SPIKE
+            pileup_diff = np.diff(pileup_arr, prepend=0)
+            valid_diffs = pileup_diff[valid_s:valid_e]
+            z_diff_valid = mad_zscore(valid_diffs)
+
+            for i, lid in enumerate(range(valid_s, valid_e)):
+                # A spike in pile-up ratio indicates saturation source
+                if z_diff_valid[i] > 2.0 and pileup_arr[lid] > 2.0:  # Ratio > 2 = significant
+                    first_pileup_layer = lid
+                    break
+
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
@@ -1026,6 +1162,13 @@ class SRDDErrorFinder:
             print(f"  Failure Rate: max={np.max(valid_fail)*100:.3f}% at L{max_fail_idx}")
             if first_discrete_fault_layer is not None:
                 print(f"  DISCRETE EDGE: Layer {first_discrete_fault_layer} rate={failure_rate_arr[first_discrete_fault_layer]*100:.3f}%")
+        if pileup_arr is not None:
+            valid_s, valid_e = histogram_valid_range
+            valid_pileup = pileup_arr[valid_s:valid_e]
+            max_pileup_idx = np.argmax(valid_pileup) + valid_s
+            print(f"  Pile-up Ratio: max={np.max(valid_pileup):.2f} at L{max_pileup_idx}")
+            if first_pileup_layer is not None:
+                print(f"  PILEUP EDGE: Layer {first_pileup_layer} ratio={pileup_arr[first_pileup_layer]:.2f}")
 
         # EDGE DETECTION: Find where instability JUMPS (first derivative)
         # Layers before fault have instability ≈ 0
@@ -1108,6 +1251,18 @@ class SRDDErrorFinder:
                     score += failure_rate_arr[lid] * 500  # Scale for scoring
                     reasons.append(f"DISCRETE_PROP(rate={failure_rate_arr[lid]*100:.2f}%)")
 
+            # v8.0: Histogram Pile-up = sparse/dense saturation (values stuck at ceiling)
+            # Looks for unusual peaks in activation histogram at saturation threshold
+            # This is the most direct physical evidence of saturation
+            in_histogram_valid = histogram_valid_range[0] <= lid < histogram_valid_range[1]
+            if not has_dead_zone and not has_noise and pileup_arr is not None and in_histogram_valid:
+                if lid == first_pileup_layer:
+                    score += 100.0  # High score for first layer with pile-up
+                    reasons.append(f"PILEUP_SAT(ratio={pileup_arr[lid]:.2f})")
+                elif pileup_arr[lid] > 3.0:  # Significant pile-up (secondary)
+                    score += pileup_arr[lid] * 10  # Scale for scoring
+                    reasons.append(f"PILEUP_PROP(ratio={pileup_arr[lid]:.2f})")
+
             candidates.append({
                 'layer': lid,
                 'score': score,
@@ -1117,6 +1272,7 @@ class SRDDErrorFinder:
                 'max_gain': max_gain_arr[lid] if max_gain_arr is not None else 1.0,
                 'kurtosis': kurt_arr[lid] if kurt_arr is not None else 0,
                 'failure_rate': failure_rate_arr[lid] if failure_rate_arr is not None else 0,
+                'pileup_ratio': pileup_arr[lid] if pileup_arr is not None else 0,
                 'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
                 'z_max_gain': z_max_gain[lid] if z_max_gain is not None else 0,
@@ -1190,17 +1346,18 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run v7.0 Local Scan diagnosis pipeline.
+        Run v8.0 Local Scan diagnosis pipeline.
 
-        Five detection methods:
+        Six detection methods:
         - Instability Scan: Noise detection (output changes between trials)
         - Gain Scan: Dead zone detection (gain << 1.0)
         - Kurtosis Scan: Dense saturation detection (spiky distribution flattened)
         - Min Gain Scan (v6.0): Sparse saturation detection (weakest link blocked)
         - Discrete Scan (v7.0): Sparse saturation via outlier counting
+        - Histogram Scan (v8.0): Sparse saturation via pile-up detection
         """
         print(f"\n{'='*70}")
-        print("SRDD v7.0 LOCAL SCAN DIAGNOSIS")
+        print("SRDD v8.0 LOCAL SCAN DIAGNOSIS")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -1221,13 +1378,17 @@ class SRDDErrorFinder:
         # Step 5: Discrete scan (sparse saturation via outlier counting) - v7.0
         discrete_results = self.local_discrete_scan(prompts, bias_magnitude=50.0)
 
-        # Step 6: Diagnose with all five methods
+        # Step 6: Histogram scan (sparse saturation via pile-up detection) - v8.0
+        histogram_results = self.local_histogram_scan(prompts)
+
+        # Step 7: Diagnose with all six methods
         results = self.diagnose_local(
             ambient_results=ambient_results,
             gain_results=gain_results,
             kurtosis_results=kurtosis_results,
             min_gain_results=min_gain_results,
             discrete_results=discrete_results,
+            histogram_results=histogram_results,
             ground_truth_layer=ground_truth_layer,
         )
 
