@@ -1,8 +1,8 @@
 # Hardware Error Source Localization via SRDD
 
-**Version**: 8.0
+**Version**: 8.1
 **Date**: 2026-01-07
-**Status**: Dense faults 100% accurate; Sparse saturation remains undetectable (histogram pile-up only works for dense)
+**Status**: Dense faults 100% | Sparse 60% (3/5 fault types: dead_zone, noise, spike detectable at 10%; saturation, bias fail)
 
 ---
 
@@ -155,44 +155,59 @@ if self.sparsity < 1.0:
 
 ### Sparse Fault Detection Results (A100, Qwen2.5-1.5B)
 
-| Fault Type | 100% | 10% | 5% | 1% |
-|-----------|------|-----|-----|-----|
-| **noise** | ✓ EXACT | ✓ EXACT | ✓ EXACT | ✓ EXACT |
-| **dead_zone** | ✓ EXACT | ✓ EXACT | ~33% fail | ✓ EXACT* |
-| **saturation** | ✓ EXACT | ✗ MISS | ~50% fail | ✗ MISS |
+| Fault Type | 100% (Dense) | 10% (Sparse) | Detection Method |
+|-----------|--------------|--------------|------------------|
+| **dead_zone** | ✓ EXACT | ✓ EXACT | Gain Scan (gain << 1.0) + Min Gain |
+| **noise** | ✓ EXACT | ✓ EXACT | Instability Scan (trial variance) |
+| **spike** | ✓ EXACT | ✓ EXACT | Instability Scan (large random values) |
+| **saturation** | ✓ EXACT | ✗ MISS (L2) | Kurtosis + Histogram (dense only) |
+| **bias** | ✓ EXACT | ✗ MISS (L2) | Kurtosis drop (weak signal) |
 
-*Note: 1% dead_zone success may be due to random mask placement
+**Summary**: 3 of 5 fault types detectable at 10% sparsity (60% coverage)
+
+**Key Finding**: Only **saturation** and **bias** fail at sparse levels. These faults don't create instability (deterministic) and don't dramatically change gain (values still flow through).
 
 ### Analysis
 
-**Why noise detection is robust to sparsity:**
+**Why noise/spike detection is robust to sparsity:**
 - Instability scan measures **variance across trials**
-- Even sparse random noise creates detectable trial-to-trial variation
+- Even sparse random noise/spikes create detectable trial-to-trial variation
 - Edge detection finds the FIRST layer with instability spike
+- Spike faults are essentially extreme noise - easily detected
+
+**Why dead_zone detection works at 10% sparsity:**
+- Min Gain scan detects "weakest link" - ANY neurons with gain ≈ 0
+- Discrete scan (v7.0) counts neurons failing to shift by expected amount
+- At 10%, the 154 faulty neurons create a clear 10% failure rate signal
 
 **Why saturation detection fails on sparse faults:**
 - Kurtosis is a **global statistic** (mean of 4th moments)
-- Sparse clipping (1-10% of values) barely affects global kurtosis
-- The signal gets "averaged out" by the 90-99% healthy values
+- Sparse clipping (10% of values) barely affects global kurtosis
+- Histogram pile-up is INSIDE the distribution, not at edges (undetectable)
+- The signal gets "averaged out" by the 90% healthy values
 
-**Why dead_zone is intermediate:**
-- At high sparsity (100%), gain drops dramatically (detected via Local Gain)
-- At low sparsity (<10%), sparse zeroing creates instability (detected via Noise method)
-- At medium sparsity (5%), neither signal is strong enough
+**Why bias detection fails on sparse faults:**
+- Bias adds a systematic offset, but doesn't create instability
+- Doesn't change gain dramatically (values still flow through)
+- Only 10% of neurons affected = negligible kurtosis impact
+- No clear distinguishing signature compared to natural layer variations
 
 ### Detection Threshold Summary
 
 | Fault Type | Reliable Detection | Method Used |
 |-----------|-------------------|-------------|
 | Noise | Down to **1%** sparsity | Instability Scan |
-| Dead Zone | Down to **~7%** sparsity | Local Gain / Instability |
+| Spike | Down to **10%** sparsity | Instability Scan |
+| Dead Zone | Down to **10%** sparsity | Min Gain + Discrete Scan |
 | Saturation | **Dense only** (100%) | Kurtosis Scan |
+| Bias | **Dense only** (100%) | Kurtosis Scan |
 
 ### Known Limitations
 
-1. **Saturation blind spot**: Cannot detect sparse saturation (<10% of neurons)
-2. **Potential fix**: Use L∞ norm (max-error) instead of kurtosis for sparse clipping detection
-3. **ALU bugs**: Deterministic logic errors (e.g., `2*3=5`) are not detected by any current method
+1. **Saturation/Bias blind spot**: Cannot detect sparse saturation/bias (<10% of neurons)
+2. **Root cause**: These faults are deterministic and don't change gain/instability
+3. **Potential fix**: Not yet found - histogram pile-up only works for dense faults
+4. **ALU bugs**: Deterministic logic errors (e.g., `2*3=5`) are not detected by any current method
 
 ### v6.0 Experiment: Max Gain Scan (Attempted Fix)
 
