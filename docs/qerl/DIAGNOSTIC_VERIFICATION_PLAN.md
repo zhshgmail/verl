@@ -675,13 +675,83 @@ python scripts/error_source_finder.py \
     --method fingerprint
 ```
 
-### 8.6 Next Steps
+### 8.6 SRDD: Self-Referential Differential Diagnosis - VALIDATED ⚠️
+
+**Date**: 2026-01-06
+
+Implemented **SRDD** for production scenarios where NO reference system (GPU) is available.
+
+#### Method: Three Probes for Anomaly Detection
+
+| Probe | What It Detects | Metric |
+|-------|-----------------|--------|
+| **Linearity** | Non-linear noise response (saturation, dead zones) | R² of noise_scale vs divergence |
+| **Neighborhood Smoothness** | Discontinuities in sensitivity curve | Second derivative / local anomaly |
+| **Input Invariance** | Data-dependent "neurotic" behavior | Coefficient of Variation (CV) |
+
+**Key Insight** (credit: Gemini):
+- Hardware errors are **DISCRETE** (affect specific layers)
+- Architectural sensitivity is **CONTINUOUS** (smooth across layers)
+- Compare **relative behavior**, not absolute values
+
+#### Validation Results with Simulated Faults
+
+| GT Layer | Fault Type | Diagnosed | GT Rank | Result |
+|----------|------------|-----------|---------|--------|
+| 5 | dead_zone | 6 | 2 | ⚠️ IN_TOP_5 |
+| 10 | dead_zone | 2 | 4 | ⚠️ IN_TOP_5 |
+| 15 | dead_zone | 2 | 4 | ⚠️ IN_TOP_5 |
+| 20 | dead_zone | 27 | 4 | ⚠️ IN_TOP_5 |
+| 10 | saturation | 26 | >5 | ❌ MISMATCH |
+| 10 | spike | 27 | 3 (linearity only) | ❌ MISMATCH |
+| 10 | noise | 27 | >5 | ❌ MISMATCH |
+
+#### Key Findings
+
+1. **dead_zone** fault (simulates FP underflow) is most detectable - GT layer in top 5 for all cases
+2. **saturation** and **noise** faults are harder to detect - signals get diluted
+3. Layer 27 (last layer) has natural high sensitivity that often dominates
+4. Diagnosed layer is often **adjacent** to GT (e.g., GT=5 → diagnosed=6)
+
+#### Fault Types Supported
+
+| Type | Description | Simulates | Detectability |
+|------|-------------|-----------|---------------|
+| `dead_zone` | Small values → 0 | FP underflow | ✅ HIGH |
+| `saturation` | Values clamped | FP overflow | ⚠️ LOW |
+| `bias` | Systematic offset | Computation error | ⚠️ LOW |
+| `noise` | Random perturbation | Numerical instability | ❌ VERY LOW |
+| `spike` | Random large values | Bit flip | ⚠️ LOW |
+
+#### Usage
+
+```bash
+# Production mode (no reference system needed)
+python scripts/srdd_error_finder.py \
+    --model_path /path/to/model
+
+# Validation mode (with simulated fault)
+python scripts/srdd_error_finder.py \
+    --model_path /path/to/model \
+    --ground_truth_layer 10 \
+    --fault_type dead_zone \
+    --fault_magnitude 0.2
+```
+
+#### Limitations & Future Work
+
+1. **Last-layer dominance**: Layer 27 often flags due to natural high sensitivity
+2. **Fault propagation**: Dead zone effects spread to neighboring layers
+3. **Improvement needed**: Better aggregation weights, exclude last 2-3 layers from analysis
+
+### 8.7 Next Steps
 
 1. **Real HW error testing**: Apply methodology to actual GPU/NPU divergence cases
 2. **Sliding window**: For efficiency, use binary search with layer windows
 3. **Channel-level**: After locating layer, drill down to specific channels
+4. **SRDD tuning**: Improve aggregation weights, handle last-layer sensitivity
 
 ---
 
-**Document Status**: Error Source ID Validated, Ready for Production Use
+**Document Status**: SRDD Validated for Reference-Free Diagnosis (top-5 accuracy)
 **Last Updated**: 2026-01-06
