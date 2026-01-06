@@ -724,15 +724,20 @@ class SRDDErrorFinder:
                 reasons.append(f"DEAD_ZONE(z={z_gain[lid]:.1f})")
 
             # v5.2: Kurtosis DROP = saturation (spikes clipped)
-            # Use EDGE detection (first layer with significant kurtosis drop)
-            # Skip L0/L1 which are embedding layers with naturally low kurtosis
-            if lid == first_saturation_layer:
-                score += 100.0  # High score for first saturation layer
-                reasons.append(f"SAT_SOURCE(drop_z={z_kurt_drop[lid]:.1f})")
-            elif z_kurt_drop is not None and lid >= 2 and z_kurt_drop[lid] < -2.0:
-                # Secondary: downstream saturation propagation
-                score += abs(z_kurt_drop[lid]) * 0.5
-                reasons.append(f"SAT_PROP(drop_z={z_kurt_drop[lid]:.1f})")
+            # Only score kurtosis if:
+            # 1. No noise fault found (first_noisy_layer is None)
+            # 2. No dead zone fault found (min gain z > -2)
+            # This prevents kurtosis from interfering with primary detection methods
+            has_dead_zone = np.min(z_gain) < -2.0
+            has_noise = first_noisy_layer is not None
+
+            if not has_dead_zone and not has_noise and z_kurt_drop is not None and lid >= 2:
+                if lid == first_saturation_layer:
+                    score += 100.0  # High score for first saturation layer
+                    reasons.append(f"SAT_SOURCE(drop_z={z_kurt_drop[lid]:.1f})")
+                elif z_kurt_drop[lid] < -5.0:  # Higher threshold for secondary
+                    score += abs(z_kurt_drop[lid]) * 0.3
+                    reasons.append(f"SAT_PROP(drop_z={z_kurt_drop[lid]:.1f})")
 
             candidates.append({
                 'layer': lid,
