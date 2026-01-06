@@ -259,6 +259,7 @@ class ErrorSourceFinder:
         ground_truth_layer: int,
         prompts: List[str],
         search_range: Tuple[int, int] = None,
+        use_deterministic_noise: bool = True,
     ) -> Dict:
         """
         Find error source using fingerprint correlation method.
@@ -267,14 +268,18 @@ class ErrorSourceFinder:
         the pattern caused by injecting noise into each candidate layer.
         The layer whose pattern best matches the HW error pattern is the source.
 
+        KEY INSIGHT: Using deterministic noise (fixed seed per layer) ensures
+        that when we inject noise into the same layer as the HW error, we get
+        the EXACT same fingerprint, making detection much more reliable.
+
         Algorithm:
         1. Get clean baseline (no noise)
-        2. Get degraded output (HW error on GT layer) - this is the "failure fingerprint"
+        2. Get degraded output (HW error on GT layer with fixed seed) - "failure fingerprint"
         3. For each candidate layer:
-           - Inject noise ONLY into that layer
+           - Inject noise with SAME fixed seed
            - Compute the "candidate fingerprint" (deviation from clean)
            - Compute similarity between candidate and failure fingerprint
-        4. Layer with HIGHEST similarity is the error source
+        4. Layer with HIGHEST similarity is the error source (should be ~1.0 for GT layer)
         """
         if search_range is None:
             search_range = (0, self.num_layers)
@@ -286,7 +291,11 @@ class ErrorSourceFinder:
         print(f"HW Error Scale: {self.hw_error_scale}")
         print(f"Diagnostic Scale: {self.diagnostic_scale}")
         print(f"Search Range: layers {search_range[0]}-{search_range[1]-1}")
+        print(f"Deterministic noise: {use_deterministic_noise}")
         print(f"{'='*60}")
+
+        # Fixed seed for deterministic noise
+        FIXED_SEED = 12345
 
         # Step 1: Get clean baseline
         print("\n[Step 1] Getting clean baseline...")
@@ -300,12 +309,19 @@ class ErrorSourceFinder:
 
         # Step 2: Get failure fingerprint (HW error on GT layer)
         print(f"\n[Step 2] Getting failure fingerprint (HW error on layer {ground_truth_layer})...")
+        if use_deterministic_noise:
+            torch.manual_seed(FIXED_SEED)
+            np.random.seed(FIXED_SEED)
         enable_noisy_ops(error_scale=self.hw_error_scale, error_type='relative_gaussian')
         set_selective_layers([ground_truth_layer])
 
         failure_logits = []
         failure_fingerprints = []
         for i, prompt in enumerate(prompts):
+            if use_deterministic_noise:
+                # Reset seed before each prompt for reproducibility
+                torch.manual_seed(FIXED_SEED + i)
+                np.random.seed(FIXED_SEED + i)
             logits = self.get_output_logits(prompt)
             failure_logits.append(logits)
             fingerprint = self.compute_deviation_pattern(clean_logits[i], logits)
@@ -328,6 +344,10 @@ class ErrorSourceFinder:
             # Get candidate fingerprint
             candidate_similarities = []
             for i, prompt in enumerate(prompts):
+                if use_deterministic_noise:
+                    # Use SAME seed as failure fingerprint for this prompt
+                    torch.manual_seed(FIXED_SEED + i)
+                    np.random.seed(FIXED_SEED + i)
                 logits = self.get_output_logits(prompt)
                 candidate_fingerprint = self.compute_deviation_pattern(clean_logits[i], logits)
 
