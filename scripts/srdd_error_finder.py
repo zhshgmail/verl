@@ -746,25 +746,143 @@ class SRDDErrorFinder:
 
         return layer_min_gains
 
+    def local_discrete_scan(
+        self,
+        prompts: List[str],
+        bias_magnitude: float = 50.0,
+        threshold_ratio: float = 0.85,
+    ) -> Dict[int, Dict]:
+        """
+        v7.0 Probe: Discrete Outlier Counting (Sparse Fault Detection)
+
+        PARADIGM SHIFT: Stop measuring statistics, start counting failures.
+
+        Why previous methods failed:
+        - Kurtosis/percentiles aggregate data - sparse faults get averaged out
+        - Looking at 99.9th percentile still selects a HEALTHY neuron
+
+        v7.0 Method:
+        1. Inject DC Bias (+50)
+        2. Calculate per-neuron shift
+        3. Determine expected shift (median of layer)
+        4. COUNT neurons shifting < 85% of median (outliers)
+
+        Key insight: Even 1 stuck neuron gives count=1, not gain=0.9999
+        """
+        print(f"\n{'='*60}")
+        print("v7.0 LOCAL SCAN: DISCRETE OUTLIER COUNT")
+        print(f"{'='*60}")
+        print(f"Bias: {bias_magnitude}, Threshold ratio: {threshold_ratio}")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        layer_results = {}
+
+        for layer_id in range(self.num_layers):
+            # Step 1: Capture baseline output
+            baseline_outputs = []
+
+            def capture_baseline(module, input, output):
+                out = output[0] if isinstance(output, tuple) else output
+                baseline_outputs.append(out.detach().clone())
+
+            hook_base = self.layers[layer_id].register_forward_hook(capture_baseline)
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook_base.remove()
+
+            if not baseline_outputs:
+                layer_results[layer_id] = {'failure_rate': 0.0, 'failures': 0, 'median_shift': 0.0}
+                continue
+
+            # Step 2: Inject DC bias and capture output
+            biased_outputs = []
+
+            def bias_input(module, args):
+                if isinstance(args, tuple) and len(args) > 0:
+                    return (args[0] + bias_magnitude,) + args[1:]
+                return args
+
+            def capture_biased(module, input, output):
+                out = output[0] if isinstance(output, tuple) else output
+                biased_outputs.append(out.detach().clone())
+
+            hook_pre = self.layers[layer_id].register_forward_pre_hook(bias_input)
+            hook_post = self.layers[layer_id].register_forward_hook(capture_biased)
+
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook_pre.remove()
+                hook_post.remove()
+
+            if not biased_outputs:
+                layer_results[layer_id] = {'failure_rate': 0.0, 'failures': 0, 'median_shift': 0.0}
+                continue
+
+            # Step 3: Calculate per-neuron shift
+            shift = biased_outputs[0] - baseline_outputs[0]
+            flat_shift = shift.float().flatten()
+
+            # Step 4: Determine expected shift (median - robust to outliers)
+            median_shift = torch.median(flat_shift).item()
+
+            # Skip unresponsive layers (dead or heavily normalized)
+            if abs(median_shift) < bias_magnitude * 0.1:
+                layer_results[layer_id] = {
+                    'failure_rate': 0.0,
+                    'failures': 0,
+                    'median_shift': median_shift,
+                    'note': 'unresponsive'
+                }
+                continue
+
+            # Step 5: COUNT OUTLIERS
+            # Neurons shifting significantly LESS than expected
+            cutoff = median_shift * threshold_ratio
+            failures = (flat_shift < cutoff).sum().item()
+            total_neurons = flat_shift.numel()
+            failure_rate = failures / total_neurons
+
+            layer_results[layer_id] = {
+                'failure_rate': failure_rate,
+                'failures': int(failures),
+                'total': total_neurons,
+                'median_shift': median_shift,
+                'cutoff': cutoff,
+            }
+
+            # Print layers with failures or periodic updates
+            if failure_rate > 0.001 or (layer_id + 1) % 5 == 0 or layer_id == 0:
+                marker = " <-- OUTLIERS!" if failure_rate > 0.001 else ""
+                print(f"  Layer {layer_id:2d}: median_shift={median_shift:.1f}, failures={failures}/{total_neurons} ({failure_rate*100:.3f}%){marker}")
+
+        return layer_results
+
     def diagnose_local(
         self,
         ambient_results: Dict[int, float],
         gain_results: Dict[int, float],
         kurtosis_results: Dict[int, float] = None,
         min_gain_results: Dict[int, float] = None,
+        discrete_results: Dict[int, Dict] = None,
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        v6.0 Diagnosis using Local Scan results.
+        v7.0 Diagnosis using Local Scan results.
 
-        Four detection methods:
+        Five detection methods:
         - Noise: Edge detection on instability (first spike = source)
         - Dead zone: Local gain (gain << 1.0)
         - Dense saturation: Kurtosis drop (spiky distribution flattened)
-        - Sparse saturation: Min gain drop (weakest link blocked)
+        - Sparse saturation (v6.0): Min gain drop (weakest link blocked)
+        - Sparse saturation (v7.0): Discrete outlier counting (failed neurons)
         """
         print(f"\n{'='*60}")
-        print("v6.0 LOCAL DIAGNOSIS")
+        print("v7.0 LOCAL DIAGNOSIS")
         print(f"{'='*60}")
 
         # Convert to arrays
@@ -857,6 +975,36 @@ class SRDDErrorFinder:
             z_min_gain_drop = np.zeros(self.num_layers)
             z_min_gain_drop[valid_start:valid_end] = z_min_diff_valid
 
+        # v7.0: Process discrete counting results
+        failure_rate_arr = None
+        z_failure = None
+        first_discrete_fault_layer = None
+        discrete_valid_range = (2, self.num_layers - 2)
+        if discrete_results:
+            failure_rate_arr = np.array([
+                discrete_results.get(i, {}).get('failure_rate', 0)
+                for i in range(self.num_layers)
+            ])
+
+            # Z-score on valid range only (exclude boundary layers)
+            valid_s, valid_e = discrete_valid_range
+            valid_failures = failure_rate_arr[valid_s:valid_e]
+            z_failure_valid = mad_zscore(valid_failures)
+            z_failure = np.zeros(self.num_layers)
+            z_failure[valid_s:valid_e] = z_failure_valid
+
+            # Find FIRST layer with significant failure rate SPIKE
+            # Using edge detection on failure_rate
+            failure_diff = np.diff(failure_rate_arr, prepend=0)
+            valid_diffs = failure_diff[valid_s:valid_e]
+            z_diff_valid = mad_zscore(valid_diffs)
+
+            for i, lid in enumerate(range(valid_s, valid_e)):
+                # A spike in failure rate indicates fault source
+                if z_diff_valid[i] > 2.0 and failure_rate_arr[lid] > 0.001:  # >0.1% failures
+                    first_discrete_fault_layer = lid
+                    break
+
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
@@ -871,6 +1019,13 @@ class SRDDErrorFinder:
             print(f"  Kurtosis: min={np.min(kurt_arr[2:]):.2f} at L{np.argmin(kurt_arr[2:])+2}, median={np.median(kurt_arr[2:]):.2f}")
             if first_saturation_layer is not None:
                 print(f"  KURTOSIS EDGE: Layer {first_saturation_layer} drop_z={z_kurt_drop[first_saturation_layer]:.2f}")
+        if failure_rate_arr is not None:
+            valid_s, valid_e = discrete_valid_range
+            valid_fail = failure_rate_arr[valid_s:valid_e]
+            max_fail_idx = np.argmax(valid_fail) + valid_s
+            print(f"  Failure Rate: max={np.max(valid_fail)*100:.3f}% at L{max_fail_idx}")
+            if first_discrete_fault_layer is not None:
+                print(f"  DISCRETE EDGE: Layer {first_discrete_fault_layer} rate={failure_rate_arr[first_discrete_fault_layer]*100:.3f}%")
 
         # EDGE DETECTION: Find where instability JUMPS (first derivative)
         # Layers before fault have instability ≈ 0
@@ -941,6 +1096,18 @@ class SRDDErrorFinder:
                     score += abs(z_max_gain[lid]) * 1.5
                     reasons.append(f"SPARSE_SAT_PROP(z={z_max_gain[lid]:.1f})")
 
+            # v7.0: Discrete Outlier Counting = sparse saturation (failed neurons)
+            # COUNT neurons failing to shift - works even with sparse faults
+            # Uses same exclusion rules: no dead zone, no noise, valid range
+            in_discrete_valid = discrete_valid_range[0] <= lid < discrete_valid_range[1]
+            if not has_dead_zone and not has_noise and failure_rate_arr is not None and in_discrete_valid:
+                if lid == first_discrete_fault_layer:
+                    score += 100.0  # High score for first layer with significant failures
+                    reasons.append(f"DISCRETE_SAT(rate={failure_rate_arr[lid]*100:.2f}%)")
+                elif failure_rate_arr[lid] > 0.01:  # >1% failure rate (secondary)
+                    score += failure_rate_arr[lid] * 500  # Scale for scoring
+                    reasons.append(f"DISCRETE_PROP(rate={failure_rate_arr[lid]*100:.2f}%)")
+
             candidates.append({
                 'layer': lid,
                 'score': score,
@@ -949,6 +1116,7 @@ class SRDDErrorFinder:
                 'gain': gain_arr[lid],
                 'max_gain': max_gain_arr[lid] if max_gain_arr is not None else 1.0,
                 'kurtosis': kurt_arr[lid] if kurt_arr is not None else 0,
+                'failure_rate': failure_rate_arr[lid] if failure_rate_arr is not None else 0,
                 'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
                 'z_max_gain': z_max_gain[lid] if z_max_gain is not None else 0,
@@ -1022,16 +1190,17 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run v6.0 Local Scan diagnosis pipeline.
+        Run v7.0 Local Scan diagnosis pipeline.
 
-        Four detection methods:
+        Five detection methods:
         - Instability Scan: Noise detection (output changes between trials)
         - Gain Scan: Dead zone detection (gain << 1.0)
         - Kurtosis Scan: Dense saturation detection (spiky distribution flattened)
-        - Min Gain Scan: Sparse saturation detection (weakest link blocked)
+        - Min Gain Scan (v6.0): Sparse saturation detection (weakest link blocked)
+        - Discrete Scan (v7.0): Sparse saturation via outlier counting
         """
         print(f"\n{'='*70}")
-        print("SRDD v6.0 LOCAL SCAN DIAGNOSIS")
+        print("SRDD v7.0 LOCAL SCAN DIAGNOSIS")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -1049,12 +1218,16 @@ class SRDDErrorFinder:
         # Step 4: Min Gain scan (sparse saturation detection) - v6.0
         min_gain_results = self.local_min_gain_scan(prompts, bias_magnitude=50.0)
 
-        # Step 5: Diagnose with all four methods
+        # Step 5: Discrete scan (sparse saturation via outlier counting) - v7.0
+        discrete_results = self.local_discrete_scan(prompts, bias_magnitude=50.0)
+
+        # Step 6: Diagnose with all five methods
         results = self.diagnose_local(
             ambient_results=ambient_results,
             gain_results=gain_results,
             kurtosis_results=kurtosis_results,
             min_gain_results=min_gain_results,
+            discrete_results=discrete_results,
             ground_truth_layer=ground_truth_layer,
         )
 
