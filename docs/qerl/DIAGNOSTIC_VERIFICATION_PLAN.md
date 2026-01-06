@@ -744,6 +744,75 @@ python scripts/srdd_error_finder.py \
 2. **Fault propagation**: Dead zone effects spread to neighboring layers
 3. **Improvement needed**: Better aggregation weights, exclude last 2-3 layers from analysis
 
+### 8.6.1 SRDD v2.0: Root Cause Analysis & Improvements
+
+**Date**: 2026-01-06
+
+#### Root Cause Analysis (Credit: Gemini)
+
+**Problem A: Last Layer Dominance (L27 always flagged)**
+
+Current smoothness probe uses **absolute difference**:
+```
+L10→L11: |0.003 - 0.002| = 0.001
+L26→L27: |0.900 - 0.800| = 0.100  ← 100x larger!
+```
+
+Even though L27's *relative* change is normal, its *absolute* magnitude dominates.
+
+**Solution**: Use **log-space difference** or **relative ratio**:
+```python
+# Instead of: |S[i] - S[i-1]|
+# Use: |log(S[i]) - log(S[i-1])|
+# Or: |S[i] / ((S[i-1] + S[i+1]) / 2) - 1|
+```
+
+**Problem B: Saturation (Overflow) Missed**
+
+Current probes look for "divergence increases" but saturation causes **variance collapse**:
+- Output clamped to MAX_VAL
+- Adding noise has NO effect (already at ceiling)
+- Output becomes "stable" (wrongly)
+- Current probes see this as "normal"
+
+**Solution**: Detect **Noise Compression Ratio**:
+```python
+compression_ratio = output_variance / input_noise_variance
+# Normal layer: ratio ≈ expected amplification
+# Saturated layer: ratio << expected (noise is "absorbed")
+```
+
+#### SRDD v2.0 Algorithm Upgrades
+
+| Upgrade | Description | Fixes |
+|---------|-------------|-------|
+| **Log-Space Smoothness** | Compute 2nd derivative in log space | L27 dominance |
+| **Detrending** | Fit exponential baseline, analyze residuals | Natural trend bias |
+| **Variance Compression** | Detect unusually LOW noise response | Saturation detection |
+
+#### Mathematical Formulation
+
+**1. Log-Space Smoothness**:
+```
+log_sens[i] = log(sensitivity[i] + ε)
+smoothness_score[i] = |log_sens[i] - (log_sens[i-1] + log_sens[i+1])/2|
+```
+
+**2. Detrending**:
+```
+baseline[i] = exponential_fit(sensitivities)
+residual[i] = sensitivity[i] - baseline[i]
+anomaly_score[i] = |residual[i]| / std(residuals)
+```
+
+**3. Variance Compression Detection**:
+```
+expected_response = noise_scale * layer_amplification_factor
+actual_response = measured_output_variance
+compression_ratio = actual_response / expected_response
+# Saturated layer: compression_ratio << 1
+```
+
 ### 8.7 Next Steps
 
 1. **Real HW error testing**: Apply methodology to actual GPU/NPU divergence cases

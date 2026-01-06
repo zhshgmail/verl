@@ -214,12 +214,17 @@ class SRDDErrorFinder:
         linearity_results: Dict[int, Dict] = None,
         prompts: List[str] = None,
         noise_scale: float = 0.05,
+        use_log_space: bool = True,
     ) -> Dict[int, Dict]:
         """
-        Probe B: Neighborhood Smoothness Test
+        Probe B: Neighborhood Smoothness Test (v2.0 with Log-Space)
 
         Detects discontinuities in the sensitivity curve across layers.
         Uses second derivative to find "spikes" that indicate hardware faults.
+
+        v2.0 IMPROVEMENT: Use LOG-SPACE to fix "Last Layer Dominance" problem.
+        - In absolute space: L27 (0.9) vs L10 (0.002) → L27 always dominates
+        - In log space: log(0.9) vs log(0.002) → fair comparison of relative changes
 
         - Hardware errors are DISCRETE (affect specific layers)
         - Architectural sensitivity is CONTINUOUS (smooth across layers)
@@ -229,18 +234,19 @@ class SRDDErrorFinder:
             linearity_results: Results from probe_linearity (reuse sensitivity data)
             prompts: Test prompts (only needed if linearity_results not provided)
             noise_scale: Noise scale for sensitivity measurement
+            use_log_space: If True, compute smoothness in log space (v2.0 fix)
 
         Returns:
             Dict mapping layer_id to {local_anomaly, second_derivative, is_spike}
         """
         print(f"\n{'='*60}")
-        print("PROBE B: NEIGHBORHOOD SMOOTHNESS TEST")
+        print("PROBE B: NEIGHBORHOOD SMOOTHNESS TEST" + (" (LOG-SPACE v2.0)" if use_log_space else ""))
         print(f"{'='*60}")
 
         # Get sensitivity values
         if linearity_results:
             print("Using sensitivity data from Linearity Probe...")
-            sensitivities = [linearity_results[i]['mean_sensitivity'] for i in range(self.num_layers)]
+            sensitivities = np.array([linearity_results[i]['mean_sensitivity'] for i in range(self.num_layers)])
         else:
             # Compute sensitivities if not provided
             print(f"Computing sensitivities at scale {noise_scale}...")
@@ -267,57 +273,88 @@ class SRDDErrorFinder:
                 disable_noisy_ops()
 
             set_selective_layers(None)
+            sensitivities = np.array(sensitivities)
 
         print(f"Analyzing smoothness across {len(sensitivities)} layers...")
 
-        # Compute second derivative (local anomaly)
-        # Local anomaly = |S[i] - (S[i-1] + S[i+1])/2|
-        # This measures how much layer i deviates from the linear interpolation of its neighbors
+        # v2.0: Transform to log space to fix Last Layer Dominance
+        if use_log_space:
+            # Add small epsilon to avoid log(0)
+            log_sens = np.log(sensitivities + 1e-9)
+            analysis_values = log_sens
+            print("  Using LOG-SPACE transformation to normalize magnitude differences")
+        else:
+            analysis_values = sensitivities
 
+        # Compute local anomaly using convolution kernel [-0.5, 1, -0.5]
+        # This computes: value[i] - (value[i-1] + value[i+1]) / 2
         layer_results = {}
         local_anomalies = []
 
         for i in range(self.num_layers):
             if i == 0:
-                # First layer: compare with next two
-                local_anomaly = abs(sensitivities[i] - sensitivities[i+1])
+                # First layer: compare with next
+                local_anomaly = abs(analysis_values[i] - analysis_values[i+1])
             elif i == self.num_layers - 1:
-                # Last layer: compare with previous two
-                local_anomaly = abs(sensitivities[i] - sensitivities[i-1])
+                # Last layer: compare with previous
+                local_anomaly = abs(analysis_values[i] - analysis_values[i-1])
             else:
                 # Middle layers: second derivative
-                expected = (sensitivities[i-1] + sensitivities[i+1]) / 2
-                local_anomaly = abs(sensitivities[i] - expected)
+                expected = (analysis_values[i-1] + analysis_values[i+1]) / 2
+                local_anomaly = abs(analysis_values[i] - expected)
 
             local_anomalies.append(local_anomaly)
             layer_results[i] = {
                 'sensitivity': sensitivities[i],
+                'log_sensitivity': analysis_values[i] if use_log_space else np.log(sensitivities[i] + 1e-9),
                 'local_anomaly': local_anomaly,
             }
 
-        # Compute second derivative more formally
-        first_derivative = np.diff(sensitivities)
-        second_derivative = np.diff(first_derivative)
+        local_anomalies = np.array(local_anomalies)
 
-        # Pad to match layer count
-        second_derivative = np.concatenate([[0], second_derivative, [0]])
+        # v2.0: Detrending - fit exponential baseline and analyze residuals
+        # This removes the natural trend of increasing sensitivity
+        try:
+            layer_indices = np.arange(self.num_layers)
+            # Fit linear trend in log space (equivalent to exponential in original space)
+            coeffs = np.polyfit(layer_indices, analysis_values, deg=1)
+            baseline = np.polyval(coeffs, layer_indices)
+            residuals = analysis_values - baseline
 
-        for i in range(self.num_layers):
-            layer_results[i]['second_derivative'] = abs(second_derivative[i])
+            # Detrended anomaly: deviation from trend
+            detrended_anomalies = np.abs(residuals)
 
-        # Detect spikes using Z-score
-        anomaly_mean = np.mean(local_anomalies)
-        anomaly_std = np.std(local_anomalies)
+            for i in range(self.num_layers):
+                layer_results[i]['baseline'] = baseline[i]
+                layer_results[i]['residual'] = residuals[i]
+                layer_results[i]['detrended_anomaly'] = detrended_anomalies[i]
 
-        print("\n[Analysis] Local anomaly statistics:")
+            print(f"  Fitted linear trend in log-space: slope={coeffs[0]:.4f}, intercept={coeffs[1]:.4f}")
+        except Exception as e:
+            print(f"  Warning: Detrending failed: {e}")
+            for i in range(self.num_layers):
+                layer_results[i]['detrended_anomaly'] = local_anomalies[i]
+
+        # Detect spikes using Z-score (exclude boundary layers)
+        # v2.0: Use detrended anomalies for spike detection
+        inner_anomalies = local_anomalies[1:-1]  # Exclude first and last layer
+        anomaly_mean = np.mean(inner_anomalies)
+        anomaly_std = np.std(inner_anomalies)
+
+        print("\n[Analysis] Local anomaly statistics (log-space, excluding boundaries):")
         print(f"  Mean: {anomaly_mean:.6f}")
         print(f"  Std:  {anomaly_std:.6f}")
 
         for i, result in layer_results.items():
-            z_score = (result['local_anomaly'] - anomaly_mean) / (anomaly_std + 1e-10)
-            result['z_score'] = z_score
-            # Spike: significantly higher local anomaly (z > 2)
-            result['is_spike'] = z_score > 2.0
+            if i == 0 or i == self.num_layers - 1:
+                # Boundary layers: set z_score to 0 to avoid false positives
+                result['z_score'] = 0.0
+                result['is_spike'] = False
+            else:
+                z_score = (result['local_anomaly'] - anomaly_mean) / (anomaly_std + 1e-10)
+                result['z_score'] = z_score
+                # Spike: significantly higher local anomaly (z > 2)
+                result['is_spike'] = z_score > 2.0
 
         # Report spikes
         spikes = [(lid, r) for lid, r in layer_results.items() if r['is_spike']]
@@ -328,9 +365,13 @@ class SRDDErrorFinder:
         else:
             print("\n  No significant smoothness spikes detected.")
 
-        # Rank by local anomaly (highest = most suspicious)
-        sorted_by_anomaly = sorted(layer_results.items(), key=lambda x: x[1]['local_anomaly'], reverse=True)
-        print("\n  Top 5 most suspicious layers (highest local anomaly):")
+        # Rank by local anomaly (highest = most suspicious), excluding boundaries
+        sorted_by_anomaly = sorted(
+            [(lid, r) for lid, r in layer_results.items() if lid not in [0, self.num_layers - 1]],
+            key=lambda x: x[1]['local_anomaly'],
+            reverse=True
+        )
+        print("\n  Top 5 most suspicious layers (highest local anomaly, excluding boundaries):")
         for rank, (lid, r) in enumerate(sorted_by_anomaly[:5], 1):
             print(f"    {rank}. Layer {lid}: anomaly = {r['local_anomaly']:.6f}")
 
@@ -446,27 +487,172 @@ class SRDDErrorFinder:
 
         return layer_results
 
+    def probe_variance_compression(
+        self,
+        prompts: List[str],
+        noise_scales: List[float] = [0.02, 0.05, 0.10],
+        num_trials: int = 3,
+    ) -> Dict[int, Dict]:
+        """
+        Probe D: Variance Compression Test (v2.0 for Saturation Detection)
+
+        Detects SATURATION faults where output is clamped/clipped.
+        Normal layers amplify noise proportionally; saturated layers "absorb" noise.
+
+        Key Insight (Gemini):
+        - Normal layer: output_variance ∝ input_noise_variance
+        - Saturated layer: output_variance << expected (noise is "compressed")
+        - We detect layers with unusually LOW noise response
+
+        Metric: Noise Compression Ratio = actual_response / expected_response
+        - Normal: ratio ≈ 1.0
+        - Saturated: ratio << 1.0 (noise absorbed by clamping)
+
+        Args:
+            prompts: Test prompts
+            noise_scales: Multiple noise scales to test amplification
+            num_trials: Trials per scale for variance estimation
+
+        Returns:
+            Dict mapping layer_id to {compression_ratio, amplification_slope, is_compressed}
+        """
+        print(f"\n{'='*60}")
+        print("PROBE D: VARIANCE COMPRESSION TEST (v2.0 Saturation Detection)")
+        print(f"{'='*60}")
+        print(f"Noise scales: {noise_scales}")
+        print(f"Trials per scale: {num_trials}")
+
+        # Step 1: Get baseline
+        print("\n[Step 1] Getting baseline outputs...")
+        disable_noisy_ops()
+        set_selective_layers(None)
+
+        baseline_logits = []
+        for prompt in prompts:
+            logits = self.get_output_logits(prompt)
+            baseline_logits.append(logits)
+
+        # Step 2: For each layer, measure response at different noise scales
+        print("\n[Step 2] Measuring noise amplification for each layer...")
+
+        layer_results = {}
+
+        for layer_id in range(self.num_layers):
+            scale_responses = []  # (noise_scale, mean_divergence)
+
+            for scale in noise_scales:
+                trial_divergences = []
+
+                for trial in range(num_trials):
+                    set_selective_layers([layer_id])
+                    enable_noisy_ops(error_scale=scale, error_type='relative_gaussian')
+                    torch.manual_seed(42 + layer_id * 1000 + int(scale * 1000) + trial)
+
+                    prompt_divs = []
+                    for i, prompt in enumerate(prompts):
+                        noisy_logits = self.get_output_logits(prompt)
+                        div = self.compute_kl_divergence(baseline_logits[i], noisy_logits)
+                        prompt_divs.append(div)
+
+                    trial_divergences.append(np.mean(prompt_divs))
+                    disable_noisy_ops()
+
+                scale_responses.append((scale, np.mean(trial_divergences)))
+
+            # Compute amplification slope: how much does divergence increase per unit noise?
+            # For a normal layer: divergence ∝ noise_scale^2 (roughly)
+            # For a saturated layer: divergence plateaus (slope → 0)
+            scales = np.array([sr[0] for sr in scale_responses])
+            responses = np.array([sr[1] for sr in scale_responses])
+
+            # Fit linear regression to get slope
+            if len(scales) > 1 and np.std(scales) > 0:
+                slope, intercept = np.polyfit(scales, responses, 1)
+            else:
+                slope = 0.0
+                intercept = responses[0] if len(responses) > 0 else 0.0
+
+            # Compute compression ratio: actual response / expected response
+            # Expected response at max scale based on linear fit from smaller scales
+            expected_at_max = slope * noise_scales[-1] + intercept
+            actual_at_max = responses[-1]
+
+            if expected_at_max > 1e-10:
+                compression_ratio = actual_at_max / expected_at_max
+            else:
+                compression_ratio = 1.0  # Avoid division by zero
+
+            # Also compute response-to-scale ratio (how much output per unit input)
+            response_efficiency = np.mean(responses) / np.mean(scales) if np.mean(scales) > 0 else 0
+
+            layer_results[layer_id] = {
+                'scale_responses': scale_responses,
+                'amplification_slope': slope,
+                'compression_ratio': min(compression_ratio, 2.0),  # Cap at 2.0 to avoid outliers
+                'response_efficiency': response_efficiency,
+                'mean_response': np.mean(responses),
+            }
+
+            if (layer_id + 1) % 5 == 0 or layer_id == 0:
+                print(f"  Layer {layer_id:2d}: slope = {slope:.4f}, compression = {compression_ratio:.4f}")
+
+        set_selective_layers(None)
+
+        # Step 3: Detect compressed layers (unusually LOW response)
+        print("\n[Step 3] Detecting compressed/saturated layers...")
+
+        # A saturated layer has LOW amplification slope compared to neighbors
+        slopes = np.array([layer_results[i]['amplification_slope'] for i in range(self.num_layers)])
+        slope_mean = np.mean(slopes)
+        slope_std = np.std(slopes)
+
+        for layer_id, result in layer_results.items():
+            # Z-score for slope (negative z = lower than average = possibly saturated)
+            z_score = (result['amplification_slope'] - slope_mean) / (slope_std + 1e-10)
+            result['z_score'] = z_score
+            # Compressed: significantly lower slope than average (z < -2)
+            result['is_compressed'] = z_score < -2.0
+
+        # Report compressed layers
+        compressed = [(lid, r) for lid, r in layer_results.items() if r['is_compressed']]
+        if compressed:
+            print(f"\n  Found {len(compressed)} compressed/saturated layers:")
+            for lid, r in sorted(compressed, key=lambda x: x[1]['amplification_slope']):
+                print(f"    Layer {lid}: slope = {r['amplification_slope']:.4f} (z = {r['z_score']:.2f})")
+        else:
+            print("\n  No significantly compressed layers detected.")
+
+        # Rank by slope (lowest = most suspicious for saturation)
+        sorted_by_slope = sorted(layer_results.items(), key=lambda x: x[1]['amplification_slope'])
+        print("\n  Top 5 most suspicious layers (lowest amplification slope):")
+        for rank, (lid, r) in enumerate(sorted_by_slope[:5], 1):
+            print(f"    {rank}. Layer {lid}: slope = {r['amplification_slope']:.4f}")
+
+        return layer_results
+
     def run_full_diagnosis(
         self,
         prompts: List[str],
         diverse_prompts: List[str] = None,
         noise_scales: List[float] = [0.01, 0.02, 0.05, 0.10, 0.15],
         ground_truth_layer: int = None,  # For validation only
+        run_compression_probe: bool = True,  # v2.0: Include saturation detection
     ) -> Dict:
         """
-        Run all three probes and aggregate results.
+        Run all probes and aggregate results (v2.0 with 4 probes).
 
         Args:
             prompts: Basic test prompts
             diverse_prompts: Diverse prompts for input invariance test (optional)
             noise_scales: Noise scales for linearity test
             ground_truth_layer: If provided, used to validate results (simulation mode)
+            run_compression_probe: If True, run Probe D for saturation detection
 
         Returns:
             Aggregated diagnosis results with ranked suspects
         """
         print(f"\n{'='*70}")
-        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD)")
+        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v2.0)")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -482,9 +668,10 @@ class SRDDErrorFinder:
             noise_scales=noise_scales,
         )
 
-        # Run Probe B: Neighborhood Smoothness
+        # Run Probe B: Neighborhood Smoothness (v2.0: Log-Space)
         smoothness_results = self.probe_neighborhood_smoothness(
             linearity_results=linearity_results,
+            use_log_space=True,  # v2.0: Fix last layer dominance
         )
 
         # Run Probe C: Input Invariance
@@ -492,9 +679,16 @@ class SRDDErrorFinder:
             diverse_prompts=diverse_prompts,
         )
 
+        # Run Probe D: Variance Compression (v2.0: Saturation Detection)
+        compression_results = None
+        if run_compression_probe:
+            compression_results = self.probe_variance_compression(
+                prompts=prompts,
+            )
+
         # Aggregate results using weighted voting
         print(f"\n{'='*60}")
-        print("AGGREGATED DIAGNOSIS")
+        print("AGGREGATED DIAGNOSIS (v2.0)")
         print(f"{'='*60}")
 
         layer_scores = {}
@@ -510,16 +704,25 @@ class SRDDErrorFinder:
             inv_neurotic = invariance_results[layer_id]['is_neurotic']
             inv_z = invariance_results[layer_id]['z_score']
 
-            # Composite score: weighted sum of Z-scores (inverted for linearity since low is bad)
+            # v2.0: Include compression probe results
+            if compression_results:
+                comp_compressed = compression_results[layer_id]['is_compressed']
+                comp_z = compression_results[layer_id]['z_score']
+            else:
+                comp_compressed = False
+                comp_z = 0.0
+
+            # v2.0: Updated composite score with log-space smoothness and compression
             # Higher composite score = more suspicious
             composite_score = (
-                max(0, -lin_z) * 1.0 +  # Linearity: lower is worse, so invert
-                max(0, smooth_z) * 1.5 +  # Smoothness: higher anomaly is worse
-                max(0, inv_z) * 1.0  # Invariance: higher CV is worse
+                max(0, -lin_z) * 1.0 +  # Linearity: lower R² is worse, so invert z
+                max(0, smooth_z) * 1.5 +  # Smoothness: higher anomaly is worse (now in log-space)
+                max(0, inv_z) * 1.0 +  # Invariance: higher CV is worse
+                max(0, -comp_z) * 1.5  # Compression: lower slope is worse (saturation), so invert
             )
 
             # Count how many probes flagged this layer
-            flags = sum([lin_anomaly, smooth_spike, inv_neurotic])
+            flags = sum([lin_anomaly, smooth_spike, inv_neurotic, comp_compressed])
 
             layer_scores[layer_id] = {
                 'composite_score': composite_score,
@@ -527,9 +730,10 @@ class SRDDErrorFinder:
                 'linearity_r2': linearity_results[layer_id]['linearity_r2'],
                 'local_anomaly': smoothness_results[layer_id]['local_anomaly'],
                 'cv': invariance_results[layer_id]['cv'],
+                'amp_slope': compression_results[layer_id]['amplification_slope'] if compression_results else 0.0,
             }
 
-        # Sort by composite score
+        # Sort by composite score (primary: flags, secondary: score)
         sorted_layers = sorted(
             layer_scores.items(),
             key=lambda x: (x[1]['flags'], x[1]['composite_score']),
@@ -537,15 +741,15 @@ class SRDDErrorFinder:
         )
 
         print("\nTop 10 suspicious layers (by composite score):")
-        print("-" * 70)
-        print(f"{'Rank':<6}{'Layer':<8}{'Flags':<7}{'Score':<10}{'R²':<10}{'LocalAnom':<12}{'CV':<10}")
-        print("-" * 70)
+        print("-" * 85)
+        print(f"{'Rank':<6}{'Layer':<8}{'Flags':<7}{'Score':<10}{'R²':<10}{'LogAnom':<12}{'CV':<10}{'AmpSlope':<10}")
+        print("-" * 85)
 
         for rank, (lid, scores) in enumerate(sorted_layers[:10], 1):
             marker = " <-- GT" if lid == ground_truth_layer else ""
             print(f"{rank:<6}{lid:<8}{scores['flags']:<7}{scores['composite_score']:<10.3f}"
                   f"{scores['linearity_r2']:<10.4f}{scores['local_anomaly']:<12.6f}"
-                  f"{scores['cv']:<10.4f}{marker}")
+                  f"{scores['cv']:<10.4f}{scores['amp_slope']:<10.4f}{marker}")
 
         # Final diagnosis
         diagnosed_layer = sorted_layers[0][0]
@@ -578,6 +782,7 @@ class SRDDErrorFinder:
             'linearity_results': linearity_results,
             'smoothness_results': smoothness_results,
             'invariance_results': invariance_results,
+            'compression_results': compression_results,  # v2.0
         }
 
 
