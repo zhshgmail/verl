@@ -596,12 +596,18 @@ class SRDDErrorFinder:
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
 
-        # Find FIRST layer with significant instability (noise source)
-        # Noise propagates downstream, so first spike is the source
+        # EDGE DETECTION: Find where instability JUMPS (first derivative)
+        # Layers before fault have instability ≈ 0
+        # Fault layer has sudden spike in instability
+        instability_jumps = np.diff(instability_arr, prepend=0)
+        z_inst_jump = mad_zscore(instability_jumps)
+
+        # Find first layer with significant instability JUMP (edge detection)
         first_noisy_layer = None
         for lid in range(self.num_layers):
-            if z_instability[lid] > 1.5:  # Lower threshold for first detection
+            if z_inst_jump[lid] > 2.0 and instability_arr[lid] > 0.1:
                 first_noisy_layer = lid
+                print(f"  NOISE EDGE: Layer {lid} jump_z={z_inst_jump[lid]:.2f}, instab={instability_arr[lid]:.4f}")
                 break
 
         # Find layer with lowest gain (saturation/dead zone source)
