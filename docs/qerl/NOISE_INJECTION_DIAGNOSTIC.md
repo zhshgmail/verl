@@ -204,10 +204,27 @@ if self.sparsity < 1.0:
 
 ### Known Limitations
 
-1. **Saturation/Bias blind spot**: Cannot detect sparse saturation/bias (<10% of neurons)
-2. **Root cause**: These faults are deterministic and don't change gain/instability
-3. **Potential fix**: Not yet found - histogram pile-up only works for dense faults
-4. **ALU bugs**: Deterministic logic errors (e.g., `2*3=5`) are not detected by any current method
+#### Theoretical Limitation (The "Variance-Gain Theorem")
+
+SRDD is a **reference-free** method relying on behavioral anomalies. It can only detect faults that violate one of two properties:
+
+| Property | Violation | Detection Method |
+|----------|-----------|------------------|
+| **Determinism** | Output varies across trials | Instability Scan |
+| **Linear Transfer** | Gain ≠ 1.0 (signal lost or amplified) | Gain Scan |
+
+Faults that **preserve both properties** are mathematically indistinguishable from valid weight configurations:
+
+- **Sparse Bias**: `y = x + c` → Gain = 1.0, deterministic (looks like learned bias)
+- **Sparse Saturation**: `y = clamp(x)` → For 90% of inputs, Gain ≈ 1.0 (rare peaks clipped)
+
+**For these specific fault types, Fingerprint Correlation (requiring a reference GPU) remains the only viable detection method.**
+
+#### Practical Limitations
+
+1. **Sparse saturation/bias**: Undetectable at <10% neuron coverage
+2. **ALU logic bugs**: Deterministic errors (e.g., `2*3=5`) don't trigger any probe
+3. **Boundary layers**: L0/L1 and L26/L27 excluded due to natural embedding anomalies
 
 ### v6.0 Experiment: Max Gain Scan (Attempted Fix)
 
