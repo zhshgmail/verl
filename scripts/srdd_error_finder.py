@@ -445,7 +445,8 @@ class SRDDErrorFinder:
 
             layer_instabilities[layer_id] = instability
 
-            if (layer_id + 1) % 7 == 0 or layer_id == 0:
+            # Print every 5th layer or layer 10 specifically for debugging
+            if (layer_id + 1) % 5 == 0 or layer_id == 0 or layer_id == 10:
                 print(f"  Layer {layer_id:2d}: instability = {instability:.6f}")
 
         return layer_instabilities
@@ -552,7 +553,8 @@ class SRDDErrorFinder:
 
             layer_gains[layer_id] = gain
 
-            if (layer_id + 1) % 7 == 0 or layer_id == 0:
+            # Print every 5th layer or layer 10/15 specifically for debugging
+            if (layer_id + 1) % 5 == 0 or layer_id == 0 or layer_id in [10, 15]:
                 print(f"  Layer {layer_id:2d}: in_noise={input_noise_std:.4f}, out_change={output_change_std:.4f}, gain={gain:.4f}")
 
         return layer_gains
