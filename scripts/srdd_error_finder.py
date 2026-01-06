@@ -658,18 +658,33 @@ class SRDDErrorFinder:
         # v5.2: Process kurtosis if available
         z_kurt = None
         kurt_arr = None
+        z_kurt_drop = None
+        first_saturation_layer = None
         if kurtosis_results:
             kurt_arr = np.array([kurtosis_results.get(i, 0) for i in range(self.num_layers)])
             # Log-space helps because kurtosis varies by orders of magnitude
             log_kurt = np.log(np.maximum(kurt_arr, 1e-4))
             z_kurt = mad_zscore(log_kurt)
 
+            # EDGE DETECTION: Find where kurtosis DROPS (first derivative)
+            # Saturation at layer i causes kurtosis DROP at layer i and propagates downstream
+            kurt_diff = np.diff(log_kurt, prepend=log_kurt[0])
+            z_kurt_drop = mad_zscore(kurt_diff)
+
+            # Find FIRST layer with significant kurtosis DROP (excluding L0/L1 which are embedding layers)
+            for lid in range(2, self.num_layers):
+                if z_kurt_drop[lid] < -2.0:  # Negative = DROP
+                    first_saturation_layer = lid
+                    break
+
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
         if kurt_arr is not None:
-            print(f"  Kurtosis: min={np.min(kurt_arr):.2f} at L{np.argmin(kurt_arr)}, median={np.median(kurt_arr):.2f}")
+            print(f"  Kurtosis: min={np.min(kurt_arr[2:]):.2f} at L{np.argmin(kurt_arr[2:])+2}, median={np.median(kurt_arr[2:]):.2f}")
+            if first_saturation_layer is not None:
+                print(f"  KURTOSIS EDGE: Layer {first_saturation_layer} drop_z={z_kurt_drop[first_saturation_layer]:.2f}")
 
         # EDGE DETECTION: Find where instability JUMPS (first derivative)
         # Layers before fault have instability ≈ 0
@@ -708,12 +723,16 @@ class SRDDErrorFinder:
                 score += abs(z_gain[lid]) * 2.0
                 reasons.append(f"DEAD_ZONE(z={z_gain[lid]:.1f})")
 
-            # v5.2: Low kurtosis = saturation (spikes clipped)
-            # LLM activations are normally spiky (high kurtosis)
-            # Clamping flattens the distribution (low kurtosis)
-            if z_kurt is not None and z_kurt[lid] < -3.0:
-                score += abs(z_kurt[lid]) * 3.0  # High confidence signature
-                reasons.append(f"SATURATED(kurt_z={z_kurt[lid]:.1f})")
+            # v5.2: Kurtosis DROP = saturation (spikes clipped)
+            # Use EDGE detection (first layer with significant kurtosis drop)
+            # Skip L0/L1 which are embedding layers with naturally low kurtosis
+            if lid == first_saturation_layer:
+                score += 100.0  # High score for first saturation layer
+                reasons.append(f"SAT_SOURCE(drop_z={z_kurt_drop[lid]:.1f})")
+            elif z_kurt_drop is not None and lid >= 2 and z_kurt_drop[lid] < -2.0:
+                # Secondary: downstream saturation propagation
+                score += abs(z_kurt_drop[lid]) * 0.5
+                reasons.append(f"SAT_PROP(drop_z={z_kurt_drop[lid]:.1f})")
 
             candidates.append({
                 'layer': lid,
