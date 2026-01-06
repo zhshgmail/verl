@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v3.1 - Robust & Efficient
+Self-Referential Differential Diagnosis (SRDD) v3.2 - Robust & Efficient
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 It uses controllable noise injection as a probe to detect ANOMALOUS layer behavior.
 
-v3.1 Improvements (Gemini collaboration):
+v3.2 Fixes (Gemini collaboration):
+1. Independent RNG: Simulator noise uses separate Generator, not affected by global seed
+2. Dynamic MAD Floor: Use max(median*0.01, 1e-4) to prevent Z-score explosion
+
+v3.1 Improvements:
 1. Ambient Instability: Measure baseline noise to avoid "noisy baseline" trap
 2. Trial Instability Probe: Detect Gaussian noise faults via non-determinism
 3. High-Energy Concavity Probe: Detect saturation via extended noise scales [0.05-1.0]
@@ -42,7 +46,7 @@ from verl.utils.noisy_ops import (
 
 class SRDDErrorFinder:
     """
-    Self-Referential Differential Diagnosis v3.1 for finding hardware error sources.
+    Self-Referential Differential Diagnosis v3.2 for finding hardware error sources.
 
     Works WITHOUT a reference system - uses statistical anomaly detection
     to find layers with abnormal response to controlled noise injection.
@@ -66,8 +70,8 @@ class SRDDErrorFinder:
 
         # Register layer hooks
         self.num_hooks = register_layer_hooks(model)
-        print(f"[SRDD v3.1] Registered {self.num_hooks} layer hooks")
-        print(f"[SRDD v3.1] Model has {self.num_layers} layers")
+        print(f"[SRDD v3.2] Registered {self.num_hooks} layer hooks")
+        print(f"[SRDD v3.2] Model has {self.num_layers} layers")
 
     def get_output_logits(self, prompt: str) -> torch.Tensor:
         """Get model output logits for a prompt."""
@@ -272,7 +276,7 @@ class SRDDErrorFinder:
         for outlier-robust Z-score calculation.
         """
         print(f"\n{'='*60}")
-        print("DIAGNOSIS REPORT (v3.1 MAD-based)")
+        print("DIAGNOSIS REPORT (v3.2 MAD-based)")
         print(f"{'='*60}")
 
         # Collect metrics
@@ -296,13 +300,22 @@ class SRDDErrorFinder:
 
         # MAD-based Z-score (robust to outliers)
         def mad_zscore(values, x):
-            """Calculate Z-score using Median Absolute Deviation."""
+            """Calculate Z-score using Median Absolute Deviation.
+
+            v3.2 FIX: Use dynamic floor to prevent Z-score explosion
+            when MAD approaches zero (all values nearly identical).
+            """
             med = np.median(values)
-            mad = np.median(np.abs(values - med))
-            if mad == 0:
-                mad = 1e-9
+            abs_diff = np.abs(values - med)
+            mad = np.median(abs_diff)
+
+            # v3.2 FIX: Dynamic floor based on median value
+            # Prevents division by near-zero when all values are similar
+            min_mad = max(abs(med) * 0.01, 1e-4)
+            effective_mad = max(mad, min_mad)
+
             # 1.4826 scales MAD to Sigma for normal distribution
-            return (x - med) / (mad * 1.4826)
+            return (x - med) / (effective_mad * 1.4826)
 
         # Print statistics
         print(f"\nStatistics:")
@@ -405,10 +418,10 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run complete v3.1 diagnosis pipeline.
+        Run complete v3.2 diagnosis pipeline.
         """
         print(f"\n{'='*70}")
-        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v3.1)")
+        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v3.2)")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -495,6 +508,12 @@ class HardwareFaultSimulator:
         else:
             raise ValueError(f"Cannot find layer {fault_layer} in model")
 
+        # v3.2 FIX: Create independent Generator for "physical" randomness
+        # This Generator is NOT affected by global torch.manual_seed()
+        # Real hardware noise is independent of software seeds
+        self.rng = torch.Generator(device=model.device)
+        self.rng.seed()  # Seed from system entropy
+
     def _fault_hook(self, module, input, output):
         """Hook that injects the fault into layer output."""
         if isinstance(output, tuple):
@@ -515,8 +534,14 @@ class HardwareFaultSimulator:
             hidden_states = hidden_states + bias
 
         elif self.fault_type == "noise":
-            # Add random noise (NON-DETERMINISTIC - key for v3.1 detection)
-            noise = torch.randn_like(hidden_states) * hidden_states.abs().mean() * self.fault_magnitude
+            # v3.2 FIX: Use independent RNG for "physical" noise
+            # Even when main program resets global seed, this noise stays random
+            noise = torch.randn(
+                hidden_states.size(),
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,  # Independent of global seed
+            ) * hidden_states.abs().mean() * self.fault_magnitude
             hidden_states = hidden_states + noise
 
         elif self.fault_type == "dead_zone":
@@ -553,7 +578,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v3.1")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v3.2")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
