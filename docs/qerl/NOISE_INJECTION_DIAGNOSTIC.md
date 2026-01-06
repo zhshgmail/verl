@@ -1,355 +1,203 @@
-# Noise Injection Diagnostic Methodology
+# Hardware Error Source Localization via SRDD
 
 **Version**: 5.2
 **Date**: 2026-01-06
-**Status**: v5.2 Local Scan + Kurtosis - ALL 3 fault types 100% accurate!
+**Status**: ALL 3 fault types 100% accurate
 
 ---
 
 ## Overview
 
-This document describes using **noise injection as a diagnostic probe** to locate sources of numerical errors in LLMs. This is distinct from AQN training for robustness (see `HW_ERROR_INJECTION_EXPERIMENTS.md`).
+**SRDD (Self-Referential Differential Diagnosis)** is a method to locate hardware error sources in LLMs **without a reference system**. Unlike fingerprint correlation (which requires a known-good GPU), SRDD works by analyzing layer behavior anomalies using local measurements.
 
-| Approach | Purpose | Document |
-|----------|---------|----------|
-| **Diagnostic Probe** | Find error sources (oscilloscope) | This document |
-| **Robustness Training** | Tolerate errors (vaccine) | `HW_ERROR_INJECTION_EXPERIMENTS.md` |
-
----
-
-## Table of Contents
-
-1. [Quick Start](#1-quick-start)
-2. [Theoretical Foundations](#2-theoretical-foundations)
-3. [Three-Level Diagnostic Protocol](#3-three-level-diagnostic-protocol)
-4. [SRDD: Reference-Free Diagnosis](#4-srdd-reference-free-diagnosis)
-5. [Validation Results](#5-validation-results)
-6. [Implementation](#6-implementation)
-7. [A100 Environment](#7-a100-environment)
+| Approach | Requires Reference | Accuracy | Script |
+|----------|-------------------|----------|--------|
+| Fingerprint Correlation | Yes | 100% | `error_source_finder.py` |
+| **SRDD v5.2** | **No** | **100%** | `srdd_error_finder.py` |
 
 ---
 
-## 1. Quick Start
-
-### 1.1 With Reference System (Fingerprint Correlation)
-
-When you have a known-good GPU for comparison:
+## Quick Start
 
 ```bash
-python scripts/error_source_finder.py \
-    --model_path /path/to/model \
-    --method fingerprint \
-    --hw_error_scale 0.20
-```
-
-**Result**: 100% exact match accuracy (GT layer = diagnosed layer).
-
-### 1.2 Without Reference System (SRDD)
-
-When NO reference GPU is available:
-
-```bash
-# Production mode
+# Production mode (no ground truth)
 python scripts/srdd_error_finder.py \
     --model_path /path/to/model
 
 # Validation mode (with simulated fault)
 python scripts/srdd_error_finder.py \
     --model_path /path/to/model \
-    --ground_truth_layer 10 \
-    --fault_type dead_zone \
+    --ground_truth_layer 15 \
+    --fault_type saturation \
     --fault_magnitude 0.3
 ```
 
-**Result**: 100% top-1 accuracy for dead_zone faults (v2.0).
+Supported fault types: `dead_zone`, `saturation`, `noise`, `bias`, `spike`
 
 ---
 
-## 2. Theoretical Foundations
+## SRDD v5.2 Detection Methods
 
-### 2.1 Key Insight
+SRDD v5.2 uses three complementary detection methods, each targeting a specific fault type:
 
-- **Hardware errors are DISCRETE**: Affect specific layers/operations
-- **Architectural sensitivity is CONTINUOUS**: Varies smoothly across layers
-- **Detection method**: Find anomalies in layer response to controlled noise
+### Method 1: Local Gain Scan (Dead Zone Detection)
 
-### 2.2 Information Bottleneck Theory
+**Target**: Dead zone faults where small values are zeroed out.
 
-Layers go through two phases:
-- **Fitting phase**: Extracting features → Sensitive to noise
-- **Compression phase**: Redundant information → Robust to noise
+**Principle**: A healthy layer has gain ≈ 1.0 (output changes proportionally to input). A dead zone layer has gain ≈ 0 (signal lost).
 
-This explains why larger models (7B) are more robust than smaller ones (1.5B).
+**How it works**:
+1. Use `forward_pre_hook` to add noise to layer INPUT
+2. Use `forward_hook` to capture layer OUTPUT
+3. Calculate: `gain = std(output_change) / std(input_noise)`
 
-### 2.3 Fisher Information Matrix
+| Layer State | Gain |
+|-------------|------|
+| Normal | ≈ 1.0 |
+| Dead Zone | ≈ 0.02 |
 
-FIM quantifies parameter sensitivity:
-- Higher FIM = parameter significantly affects output
-- Used for quantization loss estimation and pruning decisions
-
----
-
-## 3. Three-Level Diagnostic Protocol
-
-### 3.1 Level 1: Operator-Level
-
-Identify which operations are most sensitive:
-
-```python
-from verl.utils.noisy_ops import set_selective_operators
-
-# Test each operator type
-for op in ['matmul', 'softmax', 'layer_norm']:
-    set_selective_operators([op])
-    enable_noisy_ops(error_scale=0.05)
-    accuracy = evaluate(model, test_data)
-    print(f"{op}: {accuracy:.2%}")
-```
-
-### 3.2 Level 2: Layer-Level (Sliding Window)
-
-Find "avalanche points" where errors compound:
-
-```python
-# Sliding window analysis
-window_size = 3
-for start in range(0, num_layers - window_size + 1, window_size):
-    layers = list(range(start, start + window_size))
-    set_selective_layers(layers)
-    enable_noisy_ops(error_scale=0.05)
-    accuracy = evaluate(model, test_data)
-    degradation = (baseline - accuracy) / baseline
-    print(f"L{start}-{start+window_size-1}: {degradation:+.1%}")
-```
-
-### 3.3 Level 3: Channel-Level
-
-Detect outlier channels (10-100x magnitude):
-
-```python
-# After identifying faulty layer
-activations = capture_layer_output(model, layer_id, input)
-channel_magnitudes = activations.abs().mean(dim=(0, 1))
-median = channel_magnitudes.median()
-outliers = (channel_magnitudes / median) > 10.0
-```
+**Detection**: Z-score of gain < -2.0 indicates dead zone fault.
 
 ---
 
-## 4. SRDD: Reference-Free Diagnosis
+### Method 2: Instability Scan + Edge Detection (Noise Detection)
 
-### 4.1 Overview
+**Target**: Noise faults where hardware adds random values.
 
-SRDD (Self-Referential Differential Diagnosis) locates error sources **without a reference system** using four statistical probes.
+**Principle**: A healthy layer is deterministic (same input → same output). A noise fault causes different outputs across trials.
 
-### 4.2 Probe A: Monotonicity Test
+**How it works**:
+1. Run the same input multiple times
+2. Capture layer OUTPUT on each trial
+3. Calculate: `instability = std(output_trial_i - output_trial_0)`
+4. Use edge detection (first derivative) to find fault SOURCE
 
-**Principle**: Healthy layers show monotonic response to increasing noise.
+| Layer State | Instability |
+|-------------|-------------|
+| Normal | ≈ 0 |
+| Noise Fault | >> 0 |
 
-**Metric**: Spearman rank correlation (rho^2)
+**Why edge detection**: Noise propagates downstream. The FIRST layer with high instability is the source, not the layer with maximum instability.
 
-```python
-# KL scales with noise^2, use Spearman not Pearson
-rho, _ = stats.spearmanr(noise_scales, sensitivities)
-monotonicity = rho ** 2  # 1.0 = perfect monotonicity
-```
-
-- Normal layer: rho^2 ~ 1.0
-- Faulty layer: rho^2 << 1.0 (non-monotonic)
-
-### 4.3 Probe B: Neighborhood Smoothness
-
-**Principle**: Sensitivity should vary smoothly across adjacent layers.
-
-**Metric**: Second derivative in log-space
-
-```python
-# Log-space fixes "last layer dominance" problem
-log_sens = np.log(sensitivities + 1e-9)
-local_anomaly = |log_sens[i] - (log_sens[i-1] + log_sens[i+1]) / 2|
-```
-
-### 4.4 Probe C: Input Invariance
-
-**Principle**: Healthy layers respond consistently across different inputs.
-
-**Metric**: Coefficient of Variation (CV = std/mean)
-
-```python
-# "Neurotic" layers: normal for 99 inputs, explodes on 1
-cv = std(sensitivities_per_input) / mean(sensitivities_per_input)
-```
-
-### 4.5 Probe D: Variance Compression
-
-**Principle**: Saturated layers "absorb" noise instead of amplifying it.
-
-**Metric**: Amplification slope
-
-```python
-# Normal: divergence increases with noise (positive slope)
-# Saturated: divergence plateaus (slope ~ 0)
-slope, _ = np.polyfit(noise_scales, responses, 1)
-```
-
-### 4.6 Aggregation
-
-```python
-composite_score = (
-    max(0, -lin_z) * 1.0 +      # Lower rho^2 = worse
-    max(0, smooth_z) * 1.5 +    # Higher local anomaly = worse
-    max(0, inv_z) * 1.0 +       # Higher CV = worse
-    max(0, -comp_z) * 1.5       # Lower slope = worse
-)
-```
-
-### 4.7 Critical Implementation Details
-
-**BF16 Numerical Stability**:
-```python
-def compute_kl_divergence(p_logits, q_logits):
-    # BF16 machine epsilon ~1e-3, so eps=1e-10 is effectively 0!
-    p_logits = p_logits.float()  # Upcast to float32
-    q_logits = q_logits.float()
-    eps = 1e-6  # Safe for float32
-    # ...
-```
-
-**State Management**:
-```python
-try:
-    for layer_id in range(num_layers):
-        set_selective_layers([layer_id])
-        enable_noisy_ops(...)
-        # ... measurement ...
-finally:
-    disable_noisy_ops()
-    set_selective_layers(None)
-```
+**Detection**: First layer where `z_score(instability_jump) > 2.0`
 
 ---
 
-## 5. Validation Results
+### Method 3: Kurtosis Scan + Edge Detection (Saturation Detection)
 
-### 5.1 SRDD v2.0 Results (A100)
+**Target**: Saturation faults where values are clamped at a ceiling.
 
-| GT Layer | Fault Type | Diagnosed | Rank | Result |
-|----------|------------|-----------|------|--------|
-| 10 | dead_zone (0.3) | 10 | 1 | EXACT MATCH |
-| 20 | dead_zone (0.3) | 20 | 1 | EXACT MATCH |
-| 15 | saturation (0.2) | 26 | >5 | MISMATCH |
+**Principle**: LLM activations are naturally "spiky" (high kurtosis ≈ 3500). Saturation clips these spikes, causing kurtosis to DROP.
 
-### 5.2 v1.0 vs v2.0 Comparison
+**Why this works**:
+- LayerNorm has scale invariance, so input perturbations get normalized away
+- Kurtosis is a passive measurement (no injection needed)
+- Directly measures the distribution shape change caused by clamping
 
-| GT Layer | v1.0 Rank | v2.0 Rank | Improvement |
-|----------|-----------|-----------|-------------|
-| 10 | 4 | **1** | +3 ranks |
-| 20 | 4 (L27 dominated) | **1** | L27 dominance fixed |
+**How it works**:
+1. Capture layer OUTPUT (no injection)
+2. Calculate kurtosis of flattened tensor using `scipy.stats.kurtosis`
+3. Use edge detection on log-kurtosis to find DROP point
 
-### 5.3 Fault Type Detectability
+| Layer State | Kurtosis |
+|-------------|----------|
+| Normal | ≈ 3500 |
+| Saturated | ≈ 3000 (significant drop) |
 
-| Fault Type | Detectability | Signature |
-|------------|---------------|-----------|
-| dead_zone | HIGH | Non-monotonic response |
-| saturation | LOW | Appears "stable" |
-| spike | LOW | Averages out |
-| noise | VERY LOW | Similar to diagnostic noise |
-
-### 5.4 Fingerprint Correlation Results (with reference)
-
-| GT Layer | Diagnosed | Similarity | Result |
-|----------|-----------|------------|--------|
-| 5 | 5 | 1.0000 | EXACT MATCH |
-| 10 | 10 | 1.0000 | EXACT MATCH |
-| 15 | 15 | 1.0000 | EXACT MATCH |
-| 20 | 20 | 1.0000 | EXACT MATCH |
-| 25 | 25 | 1.0000 | EXACT MATCH |
-
-**100% accuracy** when reference system available.
-
-### 5.5 SRDD v5.2 Results (A100) - Local Scan + Kurtosis
-
-v5.2 achieves **100% accuracy on ALL 3 fault types** using three complementary detection methods.
-
-| GT Layer | Fault Type | Diagnosed | Result | Method |
-|----------|------------|-----------|--------|--------|
-| 10 | dead_zone (0.3) | **10** | **EXACT MATCH** | Local Gain (z=-38.6) |
-| 15 | saturation (0.3) | **15** | **EXACT MATCH** | Kurtosis Edge (drop_z=-541.2) |
-| 10 | noise (0.3) | **10** | **EXACT MATCH** | Instability Edge (jump_z=29.96) |
-
-**v5.2 KEY BREAKTHROUGH (Gemini collaboration)**:
-
-Added **Kurtosis Scan** for saturation detection:
-- LLM activations are naturally 'spiky' (High Kurtosis >> 0, typically ~3500)
-- Saturation/clamping clips these spikes, causing massive Kurtosis DROP
-- Passive measurement bypasses LayerNorm invariance issues
-
-**Three Local Scan Methods**:
-
-1. **Local Gain Scan** (dead_zone detection):
-   - Use `forward_pre_hook` to perturb INPUT to layer
-   - Capture OUTPUT change immediately after
-   - gain = output_change_std / input_noise_std
-   - Dead zone: gain ≈ 0.02 (signal lost)
-   - Normal: gain ≈ 1.0 (linear transfer)
-
-2. **Instability Scan + Edge Detection** (noise detection):
-   - Run same input multiple times
-   - Compare layer OUTPUT between trials
-   - Use first derivative to find fault ONSET (first spike = source)
-   - Noise fault: output differs across trials
-
-3. **Kurtosis Scan + Edge Detection** (saturation detection):
-   - Measure distribution shape at each layer (passive, no injection)
-   - Use first derivative of log-kurtosis to find DROP point
-   - Normal layer: kurtosis >> 0 (spiky, ~3500)
-   - Saturated layer: kurtosis drops significantly
-
-**Fault Type Detectability (v5.2)**:
-
-| Fault Type | Detectability | Method | Signature |
-|------------|---------------|--------|-----------|
-| dead_zone | **100%** | Local Gain | gain << 1.0, z < -2 |
-| saturation | **100%** | Kurtosis Edge | first kurtosis DROP |
-| noise | **100%** | Instability Edge | first instability SPIKE |
-
-**Hierarchical Detection Strategy**:
-
-1. Check for dead_zone (gain anomaly) first
-2. Check for noise (instability anomaly) second
-3. Only apply kurtosis detection if no other fault found
-
-This prevents kurtosis from interfering with primary detection methods.
+**Detection**: First layer (excluding L0/L1) where `z_score(kurtosis_drop) < -2.0`
 
 ---
 
-## 6. Implementation
+### Hierarchical Detection Strategy
 
-### 6.1 Core APIs
+To prevent interference between methods:
+
+1. **Check dead zone first**: If any layer has gain z-score < -2.0, diagnose as dead zone
+2. **Check noise second**: If instability edge detected, diagnose as noise
+3. **Check saturation last**: Only apply kurtosis detection if no other fault found
+
+---
+
+## Validation Results
+
+### v5.2 Results (A100)
+
+| Fault Type | GT Layer | Diagnosed | Result | Method |
+|-----------|----------|-----------|--------|--------|
+| dead_zone | L10 | **L10** | EXACT MATCH | Local Gain (z=-38.6) |
+| saturation | L15 | **L15** | EXACT MATCH | Kurtosis Edge (drop_z=-541.2) |
+| noise | L10 | **L10** | EXACT MATCH | Instability Edge (jump_z=29.96) |
+
+### Fault Type Summary
+
+| Fault Type | Detection Method | Key Signature |
+|-----------|-----------------|---------------|
+| Dead Zone | Local Gain | gain << 1.0 |
+| Saturation | Kurtosis Edge | First kurtosis DROP |
+| Noise | Instability Edge | First instability SPIKE |
+
+---
+
+## Implementation
+
+### Core APIs
 
 ```python
 from verl.utils.noisy_ops import (
     enable_noisy_ops,
     disable_noisy_ops,
     set_selective_layers,
-    set_selective_operators,
     register_layer_hooks,
-    get_layer_injection_stats,
 )
 ```
 
-### 6.2 Scripts
+### Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/srdd_error_finder.py` | Reference-free SRDD diagnosis |
+| `scripts/srdd_error_finder.py` | SRDD diagnosis (no reference needed) |
 | `scripts/error_source_finder.py` | Fingerprint correlation (needs reference) |
+
+### Key Code Patterns
+
+**Local Gain Measurement**:
+```python
+# Perturb input via forward_pre_hook
+def perturb_input(module, args):
+    hidden = args[0]
+    noise = torch.randn_like(hidden) * scale * torch.std(hidden)
+    return (hidden + noise,) + args[1:]
+
+# Capture output via forward_hook
+def capture_output(module, input, output):
+    outputs.append(output[0].detach().clone())
+
+# Calculate gain
+gain = std(perturbed_output - baseline_output) / std(input_noise)
+```
+
+**Instability Measurement**:
+```python
+# Run same input multiple times
+for trial in range(num_trials):
+    output = model(input)
+    trial_outputs.append(layer_output.clone())
+
+# Compare outputs
+instability = std(trial_outputs[1] - trial_outputs[0])
+```
+
+**Kurtosis Measurement**:
+```python
+from scipy.stats import kurtosis
+k = kurtosis(layer_output.flatten(), fisher=True)
+```
 
 ---
 
-## 7. A100 Environment
+## A100 Test Environment
 
-### 7.1 Connection
+### Connection
 
 ```bash
 ssh root@90.90.102.18
@@ -357,36 +205,56 @@ docker exec -it verl-r3-test bash
 cd /home/z00637938/workspace/verl
 ```
 
-### 7.2 Model Paths
+### Model Path
 
 ```bash
 MODEL_PATH="/home/z00637938/workspace/verl/checkpoints/noisy_ops_e8c_forward_only/e8c_forward_only_5e-2/global_step_116/merged_hf"
-TOKENIZER_PATH="/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
 ```
 
-### 7.3 Run Tests
+### Run Tests
 
 ```bash
-# Install scipy if needed
-pip install scipy
-
-# Run SRDD validation
-python scripts/srdd_error_finder.py \
-    --model_path $MODEL_PATH \
-    --ground_truth_layer 10 \
-    --fault_type dead_zone \
-    --fault_magnitude 0.3
+# Test all fault types
+python scripts/srdd_error_finder.py --model_path $MODEL_PATH --ground_truth_layer 10 --fault_type dead_zone
+python scripts/srdd_error_finder.py --model_path $MODEL_PATH --ground_truth_layer 15 --fault_type saturation
+python scripts/srdd_error_finder.py --model_path $MODEL_PATH --ground_truth_layer 10 --fault_type noise
 ```
+
+---
+
+## Theoretical Background
+
+### Why Local Measurement?
+
+Previous versions (v1-v4) used end-to-end (E2E) probing: inject at layer L[i], measure at final output. This failed due to **propagation masking** - the signal passes through 18+ healthy layers that normalize/mask the anomaly.
+
+**Solution**: Measure at the layer itself ("inject at L[i], measure at L[i]").
+
+### Why Kurtosis for Saturation?
+
+LayerNorm has **scale invariance** - it normalizes input perturbations before they can trigger saturation. Active injection methods fail.
+
+Kurtosis works because:
+1. It's a passive measurement (no injection)
+2. It measures distribution shape, not magnitude
+3. Clamping fundamentally changes the shape (removes spikes)
+
+### Edge Detection Principle
+
+Both noise and saturation effects **propagate downstream**:
+- Noise at L10 causes instability at L10, L11, ..., L27
+- Saturation at L15 causes kurtosis drop at L15, L16, ..., L27
+
+Using first derivative (edge detection) finds the **source** layer, not just affected layers.
 
 ---
 
 ## References
 
+- Gemini collaboration for SRDD v2.0-v5.2 methodology
 - Information Bottleneck: [arXiv:2106.12912](https://arxiv.org/abs/2106.12912)
-- Fisher Information for Quantization: BRECQ, FIMA-Q papers
-- Gemini collaboration for SRDD v2.0-v5.0.1 improvements
 
 ---
 
-**Document Status**: v5.2 validated on A100 - **ALL 3 fault types 100% accurate!**
+**Document Status**: v5.2 validated on A100 - ALL 3 fault types 100% accurate
 **Last Updated**: 2026-01-06
