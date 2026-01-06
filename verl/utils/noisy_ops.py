@@ -72,6 +72,10 @@ _CURRENT_PHASE = 'unknown'  # 'rollout', 'actor_forward', 'actor_backward', 'unk
 _SELECTIVE_LAYERS = None  # None = all layers, set() = specific layer IDs only
 _CURRENT_LAYER_ID = None  # Current layer being processed (set via hooks)
 _LAYER_INJECTION_STATS = {}  # Per-layer injection counts: {layer_id: {'forward': N, 'backward': M}}
+
+# Selective operator injection (for fine-grained diagnostic probing)
+_SELECTIVE_OPERATORS = None  # None = all operators, set() = specific operator types only
+# Supported operator types: 'matmul', 'bmm', 'linear', 'softmax', 'silu', 'gelu', 'layer_norm'
 _INJECTION_COUNT = {
     'rollout_forward': 0,
     'rollout_backward': 0,
@@ -319,6 +323,82 @@ def reset_layer_injection_stats() -> None:
     _LAYER_INJECTION_STATS = {}
 
 
+# ============================================================================
+# Selective Operator Injection API (for Fine-Grained Diagnostic Probing)
+# ============================================================================
+
+_VALID_OPERATOR_TYPES = {'matmul', 'bmm', 'linear', 'softmax', 'silu', 'gelu', 'layer_norm'}
+
+
+def set_selective_operators(op_types: list = None) -> None:
+    """
+    Enable noise injection only for specific operator types (for diagnostic probing).
+
+    This allows testing which operators are most sensitive to noise, enabling:
+    1. Operator-wise sensitivity profiling
+    2. Hardware error localization (which ops cause GPU/NPU divergence)
+    3. Fine-grained AQN targeting (apply noise to specific ops)
+
+    Args:
+        op_types: List of operator types to inject noise into.
+                  None = all operators (default behavior)
+                  [] = no operators (effectively disables noise)
+                  ['matmul', 'softmax'] = only matmul and softmax ops
+
+    Valid operator types:
+        'matmul', 'bmm', 'linear', 'softmax', 'silu', 'gelu', 'layer_norm'
+
+    Example:
+        # Test sensitivity of attention (softmax) vs MLP (silu/gelu)
+        set_selective_operators(['softmax'])
+        accuracy_attention = evaluate(model, test_data)
+
+        set_selective_operators(['silu', 'gelu'])
+        accuracy_mlp = evaluate(model, test_data)
+
+        # Combine with layer selection for fine-grained diagnosis
+        set_selective_layers([10])
+        set_selective_operators(['softmax'])
+        # Now noise only affects softmax in layer 10
+    """
+    global _SELECTIVE_OPERATORS
+    with _NOISE_CONFIG_LOCK:
+        if op_types is None:
+            _SELECTIVE_OPERATORS = None
+            logger.info("[NoisyOps] Selective operators: ALL (disabled filtering)")
+            print("[NoisyOps] Selective operators: ALL")
+        else:
+            # Validate operator types
+            op_set = set(op_types)
+            invalid_ops = op_set - _VALID_OPERATOR_TYPES
+            if invalid_ops:
+                raise ValueError(f"Invalid operator types: {invalid_ops}. "
+                               f"Valid types: {_VALID_OPERATOR_TYPES}")
+            _SELECTIVE_OPERATORS = op_set
+            logger.info(f"[NoisyOps] Selective operators: {sorted(_SELECTIVE_OPERATORS)}")
+            print(f"[NoisyOps] Selective operators: {sorted(_SELECTIVE_OPERATORS)}")
+
+
+def get_selective_operators() -> set:
+    """Get current selective operator configuration."""
+    return _SELECTIVE_OPERATORS
+
+
+def should_inject_for_operator(op_type: str) -> bool:
+    """
+    Check if noise should be injected for the given operator type.
+
+    Args:
+        op_type: Operator type to check (e.g., 'matmul', 'softmax')
+
+    Returns:
+        True if noise should be injected, False otherwise.
+    """
+    if _SELECTIVE_OPERATORS is None:
+        return True  # All operators
+    return op_type in _SELECTIVE_OPERATORS
+
+
 def register_layer_hooks(model, layer_pattern: str = '.layers.') -> int:
     """
     Register forward hooks to track current layer during forward pass.
@@ -410,7 +490,8 @@ class NoisyMatMul(torch.autograd.Function):
         # Use original matmul to avoid recursion
         result = _ORIGINAL_MATMUL(a, b)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('matmul')):
             error = _compute_error(result)
             result = result + error
 
@@ -438,7 +519,8 @@ class NoisyMatMul(torch.autograd.Function):
         grad_a = _ORIGINAL_MATMUL(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_MATMUL(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('matmul')):
             # Inject error into gradients too
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
@@ -468,7 +550,8 @@ class NoisyBMM(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_BMM(a, b)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('bmm')):
             error = _compute_error(result)
             result = result + error
 
@@ -490,7 +573,8 @@ class NoisyBMM(torch.autograd.Function):
         grad_a = _ORIGINAL_BMM(grad_output, b.transpose(-1, -2))
         grad_b = _ORIGINAL_BMM(a.transpose(-1, -2), grad_output)
 
-        if _NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('bmm')):
             error_a = _compute_error(grad_a)
             error_b = _compute_error(grad_b)
             grad_a = grad_a + error_a
@@ -514,7 +598,8 @@ class NoisySoftmax(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SOFTMAX(input, dim=dim)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('softmax')):
             error = _compute_error(result)
             result = result + error
             # Re-normalize to keep it a valid probability distribution
@@ -542,7 +627,8 @@ class NoisySoftmax(torch.autograd.Function):
         sum_term = (grad_output * result).sum(dim=dim, keepdim=True)
         grad_input = result * (grad_output - sum_term)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('softmax')):
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -564,7 +650,8 @@ class NoisySiLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_SILU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('silu')):
             error = _compute_error(result)
             result = result + error
 
@@ -587,7 +674,8 @@ class NoisySiLU(torch.autograd.Function):
         sigmoid_x = torch.sigmoid(input)
         grad_input = grad_output * sigmoid_x * (1 + input * (1 - sigmoid_x))
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('silu')):
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -609,7 +697,8 @@ class NoisyGeLU(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_GELU(input)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('gelu')):
             error = _compute_error(result)
             result = result + error
 
@@ -638,7 +727,8 @@ class NoisyGeLU(torch.autograd.Function):
         inner_deriv = sqrt_2_over_pi * (1 + 3 * coeff * input.pow(2))
         grad_input = grad_output * 0.5 * (1 + tanh_inner + input * sech2_inner * inner_deriv)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('gelu')):
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -660,7 +750,8 @@ class NoisyLayerNorm(torch.autograd.Function):
         global _INJECTION_COUNT
         result = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, bias, eps)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_FORWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('layer_norm')):
             error = _compute_error(result)
             result = result + error
 
@@ -690,7 +781,8 @@ class NoisyLayerNorm(torch.autograd.Function):
             output = _ORIGINAL_LAYER_NORM(input, normalized_shape, weight, None, eps)
             grad_input, = torch.autograd.grad(output, input, grad_output, retain_graph=False)
 
-        if _NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED and should_inject_for_layer():
+        if (_NOISY_OPS_ENABLED and _ALL_OPS_MODE and _NOISY_OPS_BACKWARD_ENABLED
+                and should_inject_for_layer() and should_inject_for_operator('layer_norm')):
             error = _compute_error(grad_input)
             grad_input = grad_input + error
 
@@ -726,8 +818,26 @@ def _noisy_bmm_impl(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def _noisy_linear_impl(input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """Implementation of noisy linear - called only when noisy ops is enabled."""
-    output = NoisyMatMul.apply(input, weight.t())
+    """Implementation of noisy linear - called only when noisy ops is enabled.
+
+    Note: Linear uses matmul internally. We check for 'linear' operator type here,
+    but the actual noise injection happens in NoisyMatMul which checks for 'matmul'.
+    To inject noise specifically for linear ops (not standalone matmuls), use:
+        set_selective_operators(['linear'])  # This is treated as ['matmul'] for injection
+    """
+    # If 'linear' is in selective operators but 'matmul' is not, we need special handling
+    # For now, linear is implemented via matmul, so they share the same noise injection
+    if _SELECTIVE_OPERATORS is not None and 'linear' in _SELECTIVE_OPERATORS:
+        # Temporarily allow matmul for this linear operation
+        old_ops = _SELECTIVE_OPERATORS.copy()
+        _SELECTIVE_OPERATORS.add('matmul')
+        try:
+            output = NoisyMatMul.apply(input, weight.t())
+        finally:
+            _SELECTIVE_OPERATORS.clear()
+            _SELECTIVE_OPERATORS.update(old_ops)
+    else:
+        output = NoisyMatMul.apply(input, weight.t())
     if bias is not None:
         output = output + bias
     return output
@@ -1033,6 +1143,10 @@ __all__ = [
     'register_layer_hooks',
     'get_layer_injection_stats',
     'reset_layer_injection_stats',
+    # Selective operator injection (fine-grained diagnostic probing)
+    'set_selective_operators',
+    'get_selective_operators',
+    'should_inject_for_operator',
     # Statistics
     'get_injection_stats',
     'print_injection_summary',
