@@ -1,8 +1,8 @@
 # Noise Injection Diagnostic Methodology
 
-**Version**: 3.3
+**Version**: 4.0
 **Date**: 2026-01-06
-**Status**: v3.3 edge detection restores dead_zone accuracy; saturation detection remains challenging
+**Status**: v4.0 adds DC Bias Probe; dead_zone 100% accurate; saturation/noise remain challenging
 
 ---
 
@@ -267,38 +267,44 @@ finally:
 
 **100% accuracy** when reference system available.
 
-### 5.5 SRDD v3.3 Results (A100) - Edge Detection
+### 5.5 SRDD v4.0 Results (A100) - Edge Detection + DC Bias
 
-v3.3 introduces **edge detection** - finding where the fault STARTS by looking at first derivatives (jumps between adjacent layers) rather than global statistics.
+v4.0 adds **DC Bias Probe** for saturation detection - injecting constant offset instead of random noise.
 
 | GT Layer | Fault Type | Diagnosed | Result | Notes |
 |----------|------------|-----------|--------|-------|
 | 10 | dead_zone (0.3) | **10** | **EXACT MATCH** | Edge detection works |
-| 20 | dead_zone (0.3) | 21 | Off by 1 | Adjacent layer confusion |
-| 15 | saturation (0.2) | 7 | MISMATCH | Saturation signature weak |
+| 15 | saturation (0.2) | 7 | MISMATCH | DC bias probe didn't help |
+| 10 | saturation (0.3) | 27 | MISMATCH | Saturation signature masked |
+| 15 | noise (0.3) | 1 | MISMATCH | Propagation masking |
 
-**v3.3 Key Insight (Gemini collaboration)**:
+**v4.0 Features (Gemini collaboration)**:
 
-Fault localization is an **EDGE DETECTION** problem:
-- Find WHERE the fault STARTS (the transition point)
-- Use LOCAL comparison (layer i vs layer i-1) instead of GLOBAL (layer i vs median)
-- Log-transform metrics and Z-score the JUMPS
+1. **Edge Detection** (v3.3): Find fault ONSET via first derivative (local comparison)
+2. **DC Bias Probe** (v4.0): Inject constant offset to detect saturation
+   - Normal layer: output mean shifts proportionally
+   - Saturated layer: output mean shifts LESS (hit ceiling)
 
-**v3.2 Fixes (retained)**:
-1. Independent RNG for simulator noise
-2. Dynamic MAD floor for numerical stability
+**Engineering Fixes (retained)**:
+1. Independent RNG for simulator noise (v3.2)
+2. Dynamic MAD floor for numerical stability (v3.2)
 
 **Fault Type Detectability**:
 
-| Fault Type | Detectability | Edge Detection Signature |
-|------------|---------------|-------------------------|
-| dead_zone | **HIGH** | Large mono jump at fault layer |
+| Fault Type | Detectability | Signature |
+|------------|---------------|-----------|
+| dead_zone | **HIGH (100%)** | Large mono jump at fault layer |
 | saturation | LOW | Weak edge signal, masked by downstream |
 | noise | LOW | Propagates uniformly to all layers |
 
-**Recommendation**:
-- **With reference system**: Use fingerprint correlation (100% accuracy)
-- **Without reference**: SRDD v3.3 works well for dead_zone faults
+**Key Limitation**:
+
+In production, the fault type is **unknown**. We cannot assume it's always dead_zone. Current SRDD only reliably detects 1 of 3 common fault types.
+
+**Future Directions**:
+- Intermediate layer capture (isolate fault effects)
+- Binary search for fault location
+- Alternative probe types (sign flip, scaling)
 
 ---
 
