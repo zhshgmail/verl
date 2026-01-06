@@ -258,6 +258,28 @@ The 30% difference might be detectable in theory, but in practice:
 - Residual connections complicate the shift propagation
 - Baseline noise at high layers (L21-27) masks any sparse fault signal
 
+### v7.1 Experiment: Absolute Saturation Threshold
+
+**Hypothesis**: The dynamic threshold defeats detection. Test with FIXED threshold.
+
+**Implementation**: `--absolute_saturation` flag computes threshold ONCE and caches.
+
+**Results**: Tested absolute saturation at different thresholds:
+
+| Test Case | Threshold | Kurtosis Change | Detection |
+|-----------|-----------|-----------------|-----------|
+| Dense, absolute 70% | 5040 | L10: 3580→2996 (DROP) | L10 rank 2 ✓ |
+| Dense, absolute 30% | 2160 | L10: 3580→1506 (DROP) | L10 rank 2 ✓ |
+| **Sparse 10%, absolute 30%** | 2160 | L10: 3580→**4110** (INCREASE!) | MISS |
+| Sparse 10%, dynamic 70% | varies | L10: 3580→3580 (unchanged) | MISS |
+
+**Critical discovery**: Sparse and dense saturation have **OPPOSITE** kurtosis effects:
+
+- **Dense saturation**: Clips many values → extreme tail removed → kurtosis **DROPS**
+- **Sparse saturation**: Clips only 10% → extreme tail mostly intact → kurtosis **INCREASES** (σ decreases more than E[(x-μ)⁴])
+
+This explains why kurtosis-based detection fundamentally cannot detect sparse saturation - it's looking for the wrong direction of change!
+
 ### Fundamental Challenge: Sparse Saturation
 
 **Why sparse saturation is hard to detect**:
@@ -269,15 +291,24 @@ The 30% difference might be detectable in theory, but in practice:
 3. **Activation-dependent**: Saturation only affects neurons that EXCEED the clamp threshold. Many neurons may not reach it.
 
 **Potential approaches (not yet implemented)**:
-- Histogram analysis: Look for a "spike" at the saturation ceiling
-- Per-neuron tracking: Compare activation distributions before/after layer
-- Synthetic probe: Generate inputs designed to trigger specific neuron ranges
+
+1. **Histogram spike detection**: Saturated neurons all have the SAME clamped value, creating a visible spike in the output distribution. Look for histogram peaks at specific values.
+
+2. **Bidirectional kurtosis change**: Instead of looking only for kurtosis DROP, check for ANY significant change (up or down). Sparse saturation causes INCREASE, dense causes DECREASE.
+
+3. **Range compression**: Compare (max - min) range before/after suspected layer. Saturation reduces the range.
+
+4. **Per-neuron tracking**: Run multiple different inputs and track which neurons consistently hit the same ceiling value.
+
+5. **Gradient-based probing**: In training scenarios, saturated neurons will have zero gradient. This is detectable without reference.
 
 ### Future Work
 
-- Investigate histogram-based saturation detection
+- Implement histogram-based saturation detection (spike at ceiling)
+- Add bidirectional kurtosis change detection
 - Add structured fault patterns (row/column dead, addressing errors)
 - Investigate deterministic ALU bug detection
+- Explore gradient-based fault detection for training scenarios
 
 ---
 
