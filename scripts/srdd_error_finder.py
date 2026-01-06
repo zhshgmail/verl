@@ -725,17 +725,24 @@ class SRDDErrorFinder:
             # Normalize by the injected bias
             element_gains = shift / bias_magnitude
 
-            # THE KEY: Look at the 0.1th percentile (minimum) gain
-            # - Dense normal layer: min_gain ≈ 1.0
-            # - Sparse saturated layer: min_gain ≈ 0.0 (the blocked neurons)
-            # Use quantile(0.001) to be robust against numerical glitches
-            min_gain = torch.quantile(element_gains.float().flatten(), 0.001).item()
+            # THE KEY: Look at BOTH low and high percentile gains
+            # Saturation affects HIGH values (clips them), so saturated neurons
+            # will have LOWER gain at high percentiles (output can't increase past ceiling)
+            #
+            # - min_gain (0.1%): affected by dead zone (small values zeroed)
+            # - max_gain (99.9%): affected by saturation (large values clipped)
+            flat_gains = element_gains.float().flatten()
+            min_gain = torch.quantile(flat_gains, 0.001).item()
+            max_gain = torch.quantile(flat_gains, 0.999).item()
 
-            layer_min_gains[layer_id] = min_gain
+            layer_min_gains[layer_id] = {
+                'min': min_gain,
+                'max': max_gain,
+                'mean': flat_gains.mean().item(),
+            }
 
             if (layer_id + 1) % 5 == 0 or layer_id == 0 or layer_id in [10, 15]:
-                mean_gain = element_gains.float().mean().item()
-                print(f"  Layer {layer_id:2d}: min_gain={min_gain:.4f}, mean_gain={mean_gain:.4f}")
+                print(f"  Layer {layer_id:2d}: min_gain={min_gain:.4f}, max_gain={max_gain:.4f}")
 
         return layer_min_gains
 
@@ -797,47 +804,69 @@ class SRDDErrorFinder:
                     first_saturation_layer = lid
                     break
 
-        # v6.0: Process min_gain if available (sparse saturation detection)
+        # v6.0: Process min/max_gain if available (sparse fault detection)
         # IMPORTANT: Exclude boundary layers (L0, L1, L26, L27) due to natural anomalies
+        # - min_gain: for dead zone detection (small values zeroed)
+        # - max_gain: for saturation detection (large values clipped)
         min_gain_arr = None
+        max_gain_arr = None
         z_min_gain = None
+        z_max_gain = None
         first_sparse_sat_layer = None
         min_gain_valid_range = (2, self.num_layers - 2)  # Exclude first/last 2 layers
-        if min_gain_results:
-            min_gain_arr = np.array([min_gain_results.get(i, 1.0) for i in range(self.num_layers)])
+        z_min_gain_drop = None
+        z_max_gain_drop = None
 
-            # Only compute z-scores on valid range (exclude boundary layers)
+        if min_gain_results:
+            # Extract min and max gains from dictionary
+            min_gain_arr = np.array([min_gain_results.get(i, {'min': 1.0})['min'] if isinstance(min_gain_results.get(i), dict) else min_gain_results.get(i, 1.0) for i in range(self.num_layers)])
+            max_gain_arr = np.array([min_gain_results.get(i, {'max': 1.0})['max'] if isinstance(min_gain_results.get(i), dict) else 1.0 for i in range(self.num_layers)])
+
             valid_start, valid_end = min_gain_valid_range
+
+            # Z-scores for min_gain (dead zone detection)
             valid_min_gains = min_gain_arr[valid_start:valid_end]
             z_min_gain_valid = mad_zscore(valid_min_gains)
-
-            # Create full array with zeros for invalid layers
             z_min_gain = np.zeros(self.num_layers)
             z_min_gain[valid_start:valid_end] = z_min_gain_valid
 
-            # EDGE DETECTION: Find where min_gain DROPS (only in valid range)
-            min_gain_diff = np.diff(min_gain_arr, prepend=min_gain_arr[0])
-            valid_diffs = min_gain_diff[valid_start:valid_end]
-            z_diff_valid = mad_zscore(valid_diffs)
+            # Z-scores for max_gain (saturation detection) - LOW max_gain = saturation
+            valid_max_gains = max_gain_arr[valid_start:valid_end]
+            z_max_gain_valid = mad_zscore(valid_max_gains)
+            z_max_gain = np.zeros(self.num_layers)
+            z_max_gain[valid_start:valid_end] = z_max_gain_valid
 
-            # Store z-score of drop for printing
-            z_min_gain_drop = np.zeros(self.num_layers)
-            z_min_gain_drop[valid_start:valid_end] = z_diff_valid
+            # EDGE DETECTION for max_gain: Find where max_gain DROPS (saturation)
+            max_gain_diff = np.diff(max_gain_arr, prepend=max_gain_arr[0])
+            valid_max_diffs = max_gain_diff[valid_start:valid_end]
+            z_max_diff_valid = mad_zscore(valid_max_diffs)
 
-            # Find FIRST layer with significant min_gain DROP
+            z_max_gain_drop = np.zeros(self.num_layers)
+            z_max_gain_drop[valid_start:valid_end] = z_max_diff_valid
+
+            # Find FIRST layer with significant max_gain DROP (sparse saturation)
             for i, lid in enumerate(range(valid_start, valid_end)):
-                if z_diff_valid[i] < -2.0:  # Negative = DROP
+                if z_max_diff_valid[i] < -2.0:  # Negative = DROP in max_gain
                     first_sparse_sat_layer = lid
                     break
+
+            # Also compute min_gain edge for debugging
+            min_gain_diff = np.diff(min_gain_arr, prepend=min_gain_arr[0])
+            valid_min_diffs = min_gain_diff[valid_start:valid_end]
+            z_min_diff_valid = mad_zscore(valid_min_diffs)
+            z_min_gain_drop = np.zeros(self.num_layers)
+            z_min_gain_drop[valid_start:valid_end] = z_min_diff_valid
 
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
-        if min_gain_arr is not None:
-            print(f"  Min Gain: min={np.min(min_gain_arr[2:]):.4f} at L{np.argmin(min_gain_arr[2:])+2}, median={np.median(min_gain_arr[2:]):.4f}")
+        if max_gain_arr is not None:
+            valid_s, valid_e = min_gain_valid_range
+            valid_max = max_gain_arr[valid_s:valid_e]
+            print(f"  Max Gain: min={np.min(valid_max):.4f} at L{np.argmin(valid_max)+valid_s}, median={np.median(valid_max):.4f}")
             if first_sparse_sat_layer is not None:
-                print(f"  MIN_GAIN EDGE: Layer {first_sparse_sat_layer} drop_z={z_min_gain_drop[first_sparse_sat_layer]:.2f}")
+                print(f"  MAX_GAIN EDGE: Layer {first_sparse_sat_layer} drop_z={z_max_gain_drop[first_sparse_sat_layer]:.2f}")
         if kurt_arr is not None:
             print(f"  Kurtosis: min={np.min(kurt_arr[2:]):.2f} at L{np.argmin(kurt_arr[2:])+2}, median={np.median(kurt_arr[2:]):.2f}")
             if first_saturation_layer is not None:
@@ -899,17 +928,18 @@ class SRDDErrorFinder:
                     score += abs(z_kurt_drop[lid]) * 0.3
                     reasons.append(f"SAT_PROP(drop_z={z_kurt_drop[lid]:.1f})")
 
-            # v6.0: Min Gain DROP = sparse saturation (weakest link blocked)
+            # v6.0: Max Gain DROP = sparse saturation (high values clipped)
             # This detects sparse faults that kurtosis misses
+            # Saturation clips HIGH values, so max_gain drops at saturated layers
             # Only apply to valid range (exclude boundary layers with natural anomalies)
             in_valid_range = min_gain_valid_range[0] <= lid < min_gain_valid_range[1]
-            if not has_dead_zone and not has_noise and z_min_gain is not None and in_valid_range:
+            if not has_dead_zone and not has_noise and z_max_gain is not None and in_valid_range:
                 if lid == first_sparse_sat_layer:
                     score += 100.0  # High score for first sparse saturation layer
-                    reasons.append(f"SPARSE_SAT(min_g={min_gain_arr[lid]:.3f})")
-                elif z_min_gain[lid] < -3.0:  # Low min gain = some neurons blocked
-                    score += abs(z_min_gain[lid]) * 1.5
-                    reasons.append(f"SPARSE_SAT_PROP(z={z_min_gain[lid]:.1f})")
+                    reasons.append(f"SPARSE_SAT(max_g={max_gain_arr[lid]:.3f})")
+                elif z_max_gain[lid] < -3.0:  # Low max gain = high values clipped
+                    score += abs(z_max_gain[lid]) * 1.5
+                    reasons.append(f"SPARSE_SAT_PROP(z={z_max_gain[lid]:.1f})")
 
             candidates.append({
                 'layer': lid,
@@ -917,11 +947,11 @@ class SRDDErrorFinder:
                 'reasons': reasons,
                 'instability': instability_arr[lid],
                 'gain': gain_arr[lid],
-                'min_gain': min_gain_arr[lid] if min_gain_arr is not None else 1.0,
+                'max_gain': max_gain_arr[lid] if max_gain_arr is not None else 1.0,
                 'kurtosis': kurt_arr[lid] if kurt_arr is not None else 0,
                 'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
-                'z_min_gain': z_min_gain[lid] if z_min_gain is not None else 0,
+                'z_max_gain': z_max_gain[lid] if z_max_gain is not None else 0,
                 'z_kurt': z_kurt[lid] if z_kurt is not None else 0,
             })
 
@@ -929,8 +959,8 @@ class SRDDErrorFinder:
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
         # Print results
-        if min_gain_arr is not None:
-            print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'MinGain':<10}{'Diagnosis'}")
+        if max_gain_arr is not None:
+            print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'MaxGain':<10}{'Diagnosis'}")
             print("-" * 75)
         elif kurt_arr is not None:
             print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'Kurt':<10}{'Diagnosis'}")
@@ -942,8 +972,8 @@ class SRDDErrorFinder:
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            if min_gain_arr is not None:
-                print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['min_gain']:<10.4f}{diagnosis}{marker}")
+            if max_gain_arr is not None:
+                print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['max_gain']:<10.4f}{diagnosis}{marker}")
             elif kurt_arr is not None:
                 print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['kurtosis']:<10.2f}{diagnosis}{marker}")
             else:
