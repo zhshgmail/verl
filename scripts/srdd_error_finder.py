@@ -568,9 +568,9 @@ class SRDDErrorFinder:
         """
         v5.0.1 Diagnosis using Local Scan results.
 
-        Much simpler than v4.0 - just find the layer with:
-        - Highest instability (noise fault) - output changes between trials
-        - Lowest gain (saturation/dead zone fault) - output doesn't respond to input
+        Key insight: Find the FIRST layer with significant anomaly, not the max.
+        - Noise faults propagate downstream, so first spike = source
+        - Saturation/dead zone: lowest gain = source
         """
         print(f"\n{'='*60}")
         print("v5.0.1 LOCAL DIAGNOSIS")
@@ -596,16 +596,31 @@ class SRDDErrorFinder:
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
 
+        # Find FIRST layer with significant instability (noise source)
+        # Noise propagates downstream, so first spike is the source
+        first_noisy_layer = None
+        for lid in range(self.num_layers):
+            if z_instability[lid] > 1.5:  # Lower threshold for first detection
+                first_noisy_layer = lid
+                break
+
+        # Find layer with lowest gain (saturation/dead zone source)
+        min_gain_layer = int(np.argmin(gain_arr))
+
         # Score each layer
         candidates = []
         for lid in range(self.num_layers):
             score = 0
             reasons = []
 
-            # High instability = noise fault (output changes between trials)
-            if z_instability[lid] > 2.0:
-                score += z_instability[lid] * 2.0
-                reasons.append(f"NOISE(z={z_instability[lid]:.1f})")
+            # FIRST layer with high instability = noise source
+            if lid == first_noisy_layer:
+                score += 100.0  # High score for first noisy layer
+                reasons.append(f"NOISE_SOURCE(z={z_instability[lid]:.1f})")
+            elif z_instability[lid] > 2.0:
+                # Secondary: downstream noise propagation
+                score += z_instability[lid] * 0.5  # Lower score for downstream
+                reasons.append(f"NOISE_PROP(z={z_instability[lid]:.1f})")
 
             # Low gain = saturation/dead zone
             if z_gain[lid] < -2.0:
