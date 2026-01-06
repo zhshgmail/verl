@@ -1314,6 +1314,11 @@ class HardwareFaultSimulator:
     v5.3 NEW: Sparsity parameter for simulating local/sparse faults.
     - sparsity=1.0: Dense fault (affects ALL elements) - default
     - sparsity=0.01: Sparse fault (affects only 1% of elements)
+
+    v6.0 FIX: Fixed sparse mask (deterministic)
+    - Real hardware faults are deterministic (same neurons always affected)
+    - The sparse mask is generated once and reused across all forward passes
+    - This prevents false "noise" detection from changing sparse patterns
     """
 
     def __init__(self, model, fault_layer: int, fault_type: str = "saturation",
@@ -1324,6 +1329,10 @@ class HardwareFaultSimulator:
         self.fault_magnitude = fault_magnitude
         self.sparsity = sparsity  # v5.3: Fraction of elements affected (1.0 = all)
         self.hook_handle = None
+
+        # v6.0: Fixed sparse mask (created lazily on first forward pass)
+        # This ensures the SAME neurons are always affected (deterministic fault)
+        self._fixed_sparse_mask = None
 
         # Find the target layer
         if hasattr(model, 'model') and hasattr(model.model, 'layers'):
@@ -1346,14 +1355,24 @@ class HardwareFaultSimulator:
             hidden_states = output
             rest = None
 
-        # v5.3: Create sparsity mask if not 100% dense
-        # This simulates local hardware faults (e.g., single bad core affecting 1% of neurons)
+        # v6.0: Use FIXED sparsity mask for deterministic sparse faults
+        # Real hardware faults affect the SAME neurons every time
         if self.sparsity < 1.0:
-            sparse_mask = torch.rand(
-                hidden_states.size(),
-                device=hidden_states.device,
-                generator=self.rng,
-            ) < self.sparsity
+            # Create fixed mask on first forward pass (lazy initialization)
+            # Use only the last dimension (hidden_dim) for the mask - this simulates
+            # "certain neurons are always faulty" regardless of batch/sequence
+            hidden_dim = hidden_states.shape[-1]
+            if self._fixed_sparse_mask is None or self._fixed_sparse_mask.shape[0] != hidden_dim:
+                self._fixed_sparse_mask = torch.rand(
+                    hidden_dim,
+                    device=hidden_states.device,
+                    generator=self.rng,
+                ) < self.sparsity
+                num_faulty = self._fixed_sparse_mask.sum().item()
+                print(f"  [SPARSE FAULT] Created fixed mask: {num_faulty}/{hidden_dim} neurons ({100*num_faulty/hidden_dim:.1f}%) affected")
+
+            # Broadcast mask to match hidden_states shape
+            sparse_mask = self._fixed_sparse_mask.expand_as(hidden_states)
         else:
             sparse_mask = None  # Dense fault - affect all elements
 
