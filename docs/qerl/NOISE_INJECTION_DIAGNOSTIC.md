@@ -1,8 +1,8 @@
 # Hardware Error Source Localization via SRDD
 
-**Version**: 5.3
-**Date**: 2026-01-06
-**Status**: Dense faults 100% accurate; Sparse fault limits identified
+**Version**: 7.0
+**Date**: 2026-01-07
+**Status**: Dense faults 100% accurate; Sparse saturation fundamentally undetectable with current approach
 
 ---
 
@@ -219,6 +219,44 @@ if self.sparsity < 1.0:
 2. Not all neurons exceed the threshold, so not all get clipped
 3. With 10% sparsity AND partial activation, effective affected neurons << 10%
 4. The signal is too weak to distinguish from baseline variation
+
+### v7.0 Experiment: Discrete Outlier Counting (Attempted Fix)
+
+**Hypothesis**: Instead of measuring aggregate statistics (percentiles), COUNT neurons that fail to shift. Even 1 stuck neuron gives count=1, not gain=0.9999.
+
+**Implementation**:
+```python
+# Inject DC bias (+50) to layer input
+# Calculate per-neuron shift
+# Determine expected shift (median of layer)
+# COUNT neurons shifting < 85% of median (outliers)
+```
+
+**Results**: The discrete counting approach also failed to detect sparse saturation.
+
+| Test Case | L10 Failure Rate | L21-27 Failure Rates | Detection |
+|-----------|------------------|---------------------|-----------|
+| **Baseline (no fault)** | 0.000% | 0.24-13.7% | L2 false positive |
+| **10% sparse saturation** | 0.000% | 0.24-13.7% | **IDENTICAL to baseline** |
+
+**Critical finding**: Sparse saturation produces **zero additional signal** above baseline noise.
+
+**Root cause**: The saturation uses a **DYNAMIC threshold** (70% of max output):
+```python
+max_val = hidden_states.abs().max() * (1.0 - magnitude)
+hidden_states = hidden_states.clamp(-max_val, max_val)
+```
+
+When we inject DC bias:
+1. All outputs increase → max increases
+2. Threshold = 0.7 × max also increases
+3. Saturated neurons shift WITH the new threshold (not "stuck")
+4. shift ≈ 0.7 × delta (healthy shift ≈ delta)
+
+The 30% difference might be detectable in theory, but in practice:
+- LayerNorm partially absorbs the DC bias
+- Residual connections complicate the shift propagation
+- Baseline noise at high layers (L21-27) masks any sparse fault signal
 
 ### Fundamental Challenge: Sparse Saturation
 
