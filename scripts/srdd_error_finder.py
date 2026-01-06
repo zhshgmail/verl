@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v5.3 - Sparse Fault Support
+Self-Referential Differential Diagnosis (SRDD) v6.0 - Sparse Saturation Detection
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 
-v5.3 NEW: Sparse Fault Simulation (Gemini collaboration)
+v6.0 NEW: Min Gain Scan for Sparse Saturation (Gemini "Weakest Link" collaboration)
+- Problem: Global stats (kurtosis) average out sparse faults
+- Solution: Inject DC bias, measure MINIMUM element response
+- Normal neuron: min_gain ≈ 1.0 (output shifts proportionally)
+- Saturated neuron: min_gain ≈ 0.0 (output clamped, can't shift)
+- Key advantage: Finds the "weakest link" regardless of healthy neighbors
+
+v5.3: Sparse Fault Simulation (Gemini collaboration)
 - Dense faults affect ALL tensor elements (default, sparsity=1.0)
 - Sparse faults affect only a FRACTION of elements (e.g., sparsity=0.01 = 1%)
 - Simulates local hardware faults (e.g., single bad core, bad memory bank)
 - Use --sparsity flag to test detection limits
 
-v5.2: Kurtosis Scan for Saturation Detection (Gemini collaboration)
+v5.2: Kurtosis Scan for Dense Saturation Detection (Gemini collaboration)
 - Why: LLM activations are naturally 'spiky' (High Kurtosis >> 0)
 - Saturation/clamping cuts off these spikes, causing massive Kurtosis DROP
 - Key advantage: Passive measurement, bypasses LayerNorm invariance issues
+- Limitation: Averages out sparse faults (use Min Gain scan instead)
 
 v5.0.1 FIX: True Local Gain Measurement
 - Use forward_pre_hook to perturb INPUT to layer, measure OUTPUT change
@@ -627,23 +635,129 @@ class SRDDErrorFinder:
 
         return layer_kurtosis
 
+    def local_min_gain_scan(
+        self,
+        prompts: List[str],
+        bias_magnitude: float = 50.0,
+    ) -> Dict[int, float]:
+        """
+        v6.0 Probe: Sparse Saturation Detection (The 'Weakest Link' Scan)
+
+        Why: Global stats (Kurtosis) average out sparse faults.
+        If 1% of neurons are saturated, Mean/Kurtosis barely change.
+
+        Solution: Inject massive bias and check the MINIMUM element response.
+        - Normal neuron: Output shifts by ~bias_magnitude
+        - Saturated neuron: Output shifts by < 1.0 (clamped)
+        - Metric: min(Output_Shift) / Input_Bias
+
+        This finds the "weakest link" in the tensor, regardless of how many
+        healthy neurons surround it.
+        """
+        print(f"\n{'='*60}")
+        print("v6.0 LOCAL SCAN: MINIMUM GAIN (Sparse Saturation)")
+        print(f"{'='*60}")
+        print(f"Bias magnitude: {bias_magnitude}")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        layer_min_gains = {}
+
+        for layer_id in range(self.num_layers):
+            # Step 1: Capture baseline output (no bias)
+            baseline_outputs = []
+
+            def capture_baseline(module, input, output):
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                baseline_outputs.append(out.detach().clone())
+
+            hook_base = self.layers[layer_id].register_forward_hook(capture_baseline)
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook_base.remove()
+
+            if not baseline_outputs:
+                layer_min_gains[layer_id] = 1.0
+                continue
+
+            # Step 2: Inject DC bias to INPUT and capture OUTPUT
+            biased_outputs = []
+
+            def bias_input(module, args):
+                """Forward pre-hook: Add constant DC bias to input."""
+                if isinstance(args, tuple) and len(args) > 0:
+                    hidden_states = args[0]
+                    # Add large DC offset (constant, not random)
+                    biased = hidden_states + bias_magnitude
+                    return (biased,) + args[1:]
+                return args
+
+            def capture_biased(module, input, output):
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                biased_outputs.append(out.detach().clone())
+
+            hook_pre = self.layers[layer_id].register_forward_pre_hook(bias_input)
+            hook_post = self.layers[layer_id].register_forward_hook(capture_biased)
+
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook_pre.remove()
+                hook_post.remove()
+
+            if not biased_outputs:
+                layer_min_gains[layer_id] = 1.0
+                continue
+
+            # Step 3: Calculate per-element gain
+            # Shift = Biased - Baseline (expected to be ~bias_magnitude for healthy neurons)
+            shift = biased_outputs[0] - baseline_outputs[0]
+
+            # Normalize by the injected bias
+            element_gains = shift / bias_magnitude
+
+            # THE KEY: Look at the 0.1th percentile (minimum) gain
+            # - Dense normal layer: min_gain ≈ 1.0
+            # - Sparse saturated layer: min_gain ≈ 0.0 (the blocked neurons)
+            # Use quantile(0.001) to be robust against numerical glitches
+            min_gain = torch.quantile(element_gains.float().flatten(), 0.001).item()
+
+            layer_min_gains[layer_id] = min_gain
+
+            if (layer_id + 1) % 5 == 0 or layer_id == 0 or layer_id in [10, 15]:
+                mean_gain = element_gains.float().mean().item()
+                print(f"  Layer {layer_id:2d}: min_gain={min_gain:.4f}, mean_gain={mean_gain:.4f}")
+
+        return layer_min_gains
+
     def diagnose_local(
         self,
         ambient_results: Dict[int, float],
         gain_results: Dict[int, float],
         kurtosis_results: Dict[int, float] = None,
+        min_gain_results: Dict[int, float] = None,
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        v5.2 Diagnosis using Local Scan results.
+        v6.0 Diagnosis using Local Scan results.
 
-        Three detection methods:
+        Four detection methods:
         - Noise: Edge detection on instability (first spike = source)
         - Dead zone: Local gain (gain << 1.0)
-        - Saturation: Kurtosis drop (spiky distribution flattened)
+        - Dense saturation: Kurtosis drop (spiky distribution flattened)
+        - Sparse saturation: Min gain drop (weakest link blocked)
         """
         print(f"\n{'='*60}")
-        print("v5.2 LOCAL DIAGNOSIS")
+        print("v6.0 LOCAL DIAGNOSIS")
         print(f"{'='*60}")
 
         # Convert to arrays
@@ -683,10 +797,33 @@ class SRDDErrorFinder:
                     first_saturation_layer = lid
                     break
 
+        # v6.0: Process min_gain if available (sparse saturation detection)
+        min_gain_arr = None
+        z_min_gain = None
+        first_sparse_sat_layer = None
+        if min_gain_results:
+            min_gain_arr = np.array([min_gain_results.get(i, 1.0) for i in range(self.num_layers)])
+            z_min_gain = mad_zscore(min_gain_arr)
+
+            # EDGE DETECTION: Find where min_gain DROPS
+            # Sparse saturation at layer i causes min_gain to drop significantly
+            min_gain_diff = np.diff(min_gain_arr, prepend=min_gain_arr[0])
+            z_min_gain_drop = mad_zscore(min_gain_diff)
+
+            # Find FIRST layer with significant min_gain DROP (excluding L0/L1)
+            for lid in range(2, self.num_layers):
+                if z_min_gain_drop[lid] < -2.0:  # Negative = DROP
+                    first_sparse_sat_layer = lid
+                    break
+
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
+        if min_gain_arr is not None:
+            print(f"  Min Gain: min={np.min(min_gain_arr[2:]):.4f} at L{np.argmin(min_gain_arr[2:])+2}, median={np.median(min_gain_arr[2:]):.4f}")
+            if first_sparse_sat_layer is not None:
+                print(f"  MIN_GAIN EDGE: Layer {first_sparse_sat_layer} drop_z={z_min_gain_drop[first_sparse_sat_layer]:.2f}")
         if kurt_arr is not None:
             print(f"  Kurtosis: min={np.min(kurt_arr[2:]):.2f} at L{np.argmin(kurt_arr[2:])+2}, median={np.median(kurt_arr[2:]):.2f}")
             if first_saturation_layer is not None:
@@ -729,7 +866,7 @@ class SRDDErrorFinder:
                 score += abs(z_gain[lid]) * 2.0
                 reasons.append(f"DEAD_ZONE(z={z_gain[lid]:.1f})")
 
-            # v5.2: Kurtosis DROP = saturation (spikes clipped)
+            # v5.2: Kurtosis DROP = dense saturation (spikes clipped)
             # Only score kurtosis if:
             # 1. No noise fault found (first_noisy_layer is None)
             # 2. No dead zone fault found (min gain z > -2)
@@ -745,15 +882,27 @@ class SRDDErrorFinder:
                     score += abs(z_kurt_drop[lid]) * 0.3
                     reasons.append(f"SAT_PROP(drop_z={z_kurt_drop[lid]:.1f})")
 
+            # v6.0: Min Gain DROP = sparse saturation (weakest link blocked)
+            # This detects sparse faults that kurtosis misses
+            if not has_dead_zone and not has_noise and z_min_gain is not None and lid >= 2:
+                if lid == first_sparse_sat_layer:
+                    score += 100.0  # High score for first sparse saturation layer
+                    reasons.append(f"SPARSE_SAT(min_g={min_gain_arr[lid]:.3f})")
+                elif z_min_gain[lid] < -3.0:  # Low min gain = some neurons blocked
+                    score += abs(z_min_gain[lid]) * 1.5
+                    reasons.append(f"SPARSE_SAT_PROP(z={z_min_gain[lid]:.1f})")
+
             candidates.append({
                 'layer': lid,
                 'score': score,
                 'reasons': reasons,
                 'instability': instability_arr[lid],
                 'gain': gain_arr[lid],
+                'min_gain': min_gain_arr[lid] if min_gain_arr is not None else 1.0,
                 'kurtosis': kurt_arr[lid] if kurt_arr is not None else 0,
                 'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
+                'z_min_gain': z_min_gain[lid] if z_min_gain is not None else 0,
                 'z_kurt': z_kurt[lid] if z_kurt is not None else 0,
             })
 
@@ -761,7 +910,10 @@ class SRDDErrorFinder:
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
         # Print results
-        if kurt_arr is not None:
+        if min_gain_arr is not None:
+            print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'MinGain':<10}{'Diagnosis'}")
+            print("-" * 75)
+        elif kurt_arr is not None:
             print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'Kurt':<10}{'Diagnosis'}")
             print("-" * 70)
         else:
@@ -771,7 +923,9 @@ class SRDDErrorFinder:
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            if kurt_arr is not None:
+            if min_gain_arr is not None:
+                print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['min_gain']:<10.4f}{diagnosis}{marker}")
+            elif kurt_arr is not None:
                 print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['kurtosis']:<10.2f}{diagnosis}{marker}")
             else:
                 print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
@@ -819,15 +973,16 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run v5.2 Local Scan diagnosis pipeline.
+        Run v6.0 Local Scan diagnosis pipeline.
 
-        Three detection methods:
+        Four detection methods:
         - Instability Scan: Noise detection (output changes between trials)
         - Gain Scan: Dead zone detection (gain << 1.0)
-        - Kurtosis Scan: Saturation detection (spiky distribution flattened)
+        - Kurtosis Scan: Dense saturation detection (spiky distribution flattened)
+        - Min Gain Scan: Sparse saturation detection (weakest link blocked)
         """
         print(f"\n{'='*70}")
-        print("SRDD v5.2 LOCAL SCAN DIAGNOSIS")
+        print("SRDD v6.0 LOCAL SCAN DIAGNOSIS")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -839,14 +994,18 @@ class SRDDErrorFinder:
         # Step 2: Gain scan (dead zone detection)
         gain_results = self.local_gain_scan(prompts, noise_scale=0.1)
 
-        # Step 3: Kurtosis scan (saturation detection) - v5.2
+        # Step 3: Kurtosis scan (dense saturation detection) - v5.2
         kurtosis_results = self.local_kurtosis_scan(prompts)
 
-        # Step 4: Diagnose with all three methods
+        # Step 4: Min Gain scan (sparse saturation detection) - v6.0
+        min_gain_results = self.local_min_gain_scan(prompts, bias_magnitude=50.0)
+
+        # Step 5: Diagnose with all four methods
         results = self.diagnose_local(
             ambient_results=ambient_results,
             gain_results=gain_results,
             kurtosis_results=kurtosis_results,
+            min_gain_results=min_gain_results,
             ground_truth_layer=ground_truth_layer,
         )
 
@@ -1261,7 +1420,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v5.3 (Sparse Fault Support)")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v6.0 (Sparse Saturation Detection)")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
