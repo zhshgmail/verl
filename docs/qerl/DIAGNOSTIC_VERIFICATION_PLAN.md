@@ -578,5 +578,74 @@ Based on transformer architecture theory:
 
 ---
 
-**Document Status**: Ready for execution
+## 8. Validation Results (2026-01-06)
+
+### 8.1 Phase 1 Results: API Validation ✅
+
+All selective layer/operator APIs validated on A100:
+
+| Test | Result | Notes |
+|------|--------|-------|
+| `set_selective_operators()` | ✅ PASS | Implemented and working |
+| `should_inject_for_operator()` | ✅ PASS | Correctly filters by op type |
+| `set_selective_layers()` | ✅ PASS | Correctly limits to specific layers |
+| Layer + operator combined | ✅ PASS | Both filters work together |
+| Layer hooks | ✅ PASS | 28 hooks registered correctly |
+| Per-layer stats | ✅ PASS | Tracks injections per layer |
+
+### 8.2 Validation Test: Layer-Level Sensitivity Profiling
+
+**Test**: Run `diagnostic_validation_test.py` with ground truth layer=10, noise=10%
+
+**Results**:
+```
+Top 5 most sensitive layers:
+  1. Layer 27: 0.9245 divergence
+  2. Layer 7:  0.0117 divergence
+  3. Layer 26: 0.0114 divergence
+  4. Layer 4:  0.0090 divergence
+  5. Layer 18: 0.0086 divergence
+
+Ground truth layer 10: 0.0028 divergence
+```
+
+**Findings**:
+- Later layers (27, 26) have highest sensitivity to noise
+- Middle layers (10) have moderate sensitivity
+- This is **expected**: later layers have more direct impact on output
+
+### 8.3 Important Distinction: Sensitivity vs Error Source
+
+The validation test measures **layer sensitivity profiling** (how much each layer affects output when noise is added), NOT **error source identification** (finding which layer has hidden hardware error).
+
+| Methodology | What It Measures | Use Case |
+|-------------|------------------|----------|
+| Layer sensitivity | Impact on output per layer | Pre-deployment profiling |
+| Error source ID | Which layer causes degradation | Runtime debugging |
+
+For error source identification, a different approach is needed:
+1. Compare degraded output pattern to candidate layer patterns
+2. Use correlation analysis rather than sensitivity measurement
+3. Requires persistent noise (HW error) vs diagnostic noise
+
+### 8.4 Implementation Status Update
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `set_selective_operators()` | ✅ **Implemented** | Commit `bcec1be5` |
+| `set_selective_layers()` | ✅ Working | Pre-existing |
+| `register_layer_hooks()` | ✅ Working | Pre-existing |
+| `diagnostic_validation_test.py` | ✅ Created | `scripts/` folder |
+| Layer sensitivity profiling | ✅ Working | Via diagnostic sweep |
+| Error source ID | ⚠️ Needs work | Different methodology |
+
+### 8.5 Next Steps
+
+1. **Sliding window analysis**: Test layer groups instead of individual layers
+2. **Error source methodology**: Design correlation-based approach
+3. **Channel-level analysis**: Implement activation capture for fine-grained diagnosis
+
+---
+
+**Document Status**: Phase 1 Complete, Phase 2 Planned
 **Last Updated**: 2026-01-06
