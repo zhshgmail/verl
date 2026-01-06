@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v3.3 - Edge Detection
+Self-Referential Differential Diagnosis (SRDD) v4.0 - DC Bias Probe
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 It uses controllable noise injection as a probe to detect ANOMALOUS layer behavior.
 
-v3.3 Key Insight (Gemini collaboration):
-- Fault localization is an EDGE DETECTION problem, not just anomaly detection
-- We need to find WHERE the fault STARTS (the transition/edge), not just which layers look bad
-- Use LOCAL comparison (layer i vs i-1) instead of GLOBAL comparison (layer i vs median)
+v4.0 New Feature (Gemini collaboration):
+- DC Bias Probe for SATURATION detection
+- Instead of random noise (variance), inject constant DC offset (bias)
+- Normal layer: output mean shifts proportionally
+- Saturated layer: output mean shifts LESS (hit the ceiling)
+
+v3.3 Key Insight:
+- Fault localization is an EDGE DETECTION problem
+- Use LOCAL comparison (layer i vs i-1) instead of GLOBAL (layer i vs median)
 - First derivative (jump) in metrics pinpoints the fault onset
 
 v3.2 Fixes:
 1. Independent RNG: Simulator noise uses separate Generator, not affected by global seed
 2. Dynamic MAD Floor: Use max(median*0.01, 1e-4) to prevent Z-score explosion
-
-v3.1 Improvements:
-1. Ambient Instability: Measure baseline noise to avoid "noisy baseline" trap
-2. Trial Instability Probe: Detect Gaussian noise faults via non-determinism
-3. High-Energy Concavity Probe: Detect saturation via extended noise scales [0.05-1.0]
-4. MAD Statistics: Use Median Absolute Deviation for outlier-robust Z-scores
 """
 
 import os
@@ -46,10 +45,10 @@ from verl.utils.noisy_ops import (
 
 class SRDDErrorFinder:
     """
-    Self-Referential Differential Diagnosis v3.3 for finding hardware error sources.
+    Self-Referential Differential Diagnosis v4.0 for finding hardware error sources.
 
-    Works WITHOUT a reference system - uses edge detection to find
-    where fault behavior STARTS (the transition point).
+    Works WITHOUT a reference system - uses edge detection and DC bias probing
+    to find where fault behavior STARTS (the transition point).
     """
 
     def __init__(
@@ -70,8 +69,8 @@ class SRDDErrorFinder:
 
         # Register layer hooks
         self.num_hooks = register_layer_hooks(model)
-        print(f"[SRDD v3.3] Registered {self.num_hooks} layer hooks")
-        print(f"[SRDD v3.3] Model has {self.num_layers} layers")
+        print(f"[SRDD v4.0] Registered {self.num_hooks} layer hooks")
+        print(f"[SRDD v4.0] Model has {self.num_layers} layers")
 
     def get_output_logits(self, prompt: str) -> torch.Tensor:
         """Get model output logits for a prompt."""
@@ -262,22 +261,123 @@ class SRDDErrorFinder:
 
         return layer_dynamics
 
+    def probe_saturation_dc(
+        self,
+        prompts: List[str],
+        baseline_logits: List[torch.Tensor],
+        bias_scales: List[float] = [1.0, 5.0, 10.0, 20.0, 50.0],
+    ) -> Dict[int, Dict]:
+        """
+        Probe C: DC Bias Test (v4.0 for Saturation Detection)
+
+        Instead of random noise (variance), inject constant DC offset (bias).
+        - Normal layer: output mean shifts proportionally to input bias
+        - Saturated layer: output mean shifts LESS (hit the ceiling)
+
+        Key insight: Saturation is a signal DAMPER, not corruptor.
+        Random noise gets clipped but the effect averages out.
+        DC bias creates a consistent shift that saturated layers absorb.
+        """
+        print(f"\n{'='*60}")
+        print("PROBE C: DC BIAS (Saturation Detection)")
+        print(f"{'='*60}")
+        print(f"Bias scales: {bias_scales}")
+
+        layer_dc_results = {}
+
+        # Get target modules for hook injection
+        if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
+            layers = self.model.model.layers
+        else:
+            print("  Warning: Cannot find model layers for DC bias probe")
+            return {}
+
+        try:
+            for layer_id in range(self.num_layers):
+                bias_responses = []
+                target_module = layers[layer_id]
+
+                for bias_scale in bias_scales:
+                    # Create DC bias hook
+                    def dc_bias_hook(module, input, output, bias=bias_scale):
+                        if isinstance(output, tuple):
+                            hidden_states = output[0]
+                            rest = output[1:]
+                        else:
+                            hidden_states = output
+                            rest = None
+
+                        # Add constant DC bias (scaled by activation magnitude for stability)
+                        dc_offset = bias * hidden_states.abs().mean()
+                        hidden_states = hidden_states + dc_offset
+
+                        if rest is not None:
+                            return (hidden_states,) + rest
+                        return hidden_states
+
+                    # Register hook
+                    hook_handle = target_module.register_forward_hook(dc_bias_hook)
+
+                    try:
+                        # Measure output shift
+                        prompt_shifts = []
+                        for i, prompt in enumerate(prompts):
+                            biased_logits = self.get_output_logits(prompt)
+                            # Measure mean shift in logits
+                            mean_shift = (biased_logits - baseline_logits[i]).abs().mean().item()
+                            prompt_shifts.append(mean_shift)
+
+                        bias_responses.append(np.median(prompt_shifts))
+                    finally:
+                        hook_handle.remove()
+
+                # Analysis: Gain = (response at high bias) / (response at low bias)
+                # Normal: high gain (output scales with input)
+                # Saturated: low gain (output clamped, doesn't scale)
+                resp_low = bias_responses[0]   # bias=1.0
+                resp_high = bias_responses[-1]  # bias=50.0
+
+                if resp_low > 1e-9:
+                    dc_gain = resp_high / resp_low
+                    # Expected gain for linear response: 50.0/1.0 = 50
+                    # Saturated layer: gain << 50
+                    saturation_ratio = dc_gain / (bias_scales[-1] / bias_scales[0])
+                else:
+                    dc_gain = 0.0
+                    saturation_ratio = 0.0
+
+                layer_dc_results[layer_id] = {
+                    'responses': bias_responses,
+                    'dc_gain': dc_gain,
+                    'saturation_ratio': saturation_ratio,  # 1.0 = linear, <1.0 = saturated
+                }
+
+                if (layer_id + 1) % 7 == 0 or layer_id == 0:
+                    print(f"  Layer {layer_id:2d}: dc_gain={dc_gain:.1f}, sat_ratio={saturation_ratio:.3f}")
+
+        except Exception as e:
+            print(f"  Error in DC bias probe: {e}")
+
+        return layer_dc_results
+
     def diagnose(
         self,
         instability_results: Dict[int, float],
         dynamics_results: Dict[int, Dict],
+        dc_results: Dict[int, Dict],
         ambient_noise: float,
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Aggregate results and diagnose fault type using EDGE DETECTION.
+        Aggregate results and diagnose fault type using EDGE DETECTION + DC BIAS.
 
+        v4.0 NEW: DC Bias Probe for saturation detection
         v3.3 KEY INSIGHT: Find where the fault STARTS (the edge/transition),
         not just which layers look abnormal. Use first derivative (jump from
         previous layer) to detect the onset of fault behavior.
         """
         print(f"\n{'='*60}")
-        print("DIAGNOSIS REPORT (v3.3 Edge Detection)")
+        print("DIAGNOSIS REPORT (v4.0 Edge Detection + DC Bias)")
         print(f"{'='*60}")
 
         # Collect metrics
@@ -285,6 +385,7 @@ class SRDDErrorFinder:
         amp_factors = []
         monotonicities = []
         sensitivities_low = []
+        saturation_ratios = []
 
         for lid in range(self.num_layers):
             # Subtract ambient noise from instability
@@ -293,11 +394,17 @@ class SRDDErrorFinder:
             amp_factors.append(dynamics_results[lid]['amp_factor'])
             monotonicities.append(dynamics_results[lid]['monotonicity'])
             sensitivities_low.append(dynamics_results[lid]['sensitivity_low'])
+            # v4.0: DC saturation ratio (1.0 = linear, <1.0 = saturated)
+            if dc_results and lid in dc_results:
+                saturation_ratios.append(dc_results[lid]['saturation_ratio'])
+            else:
+                saturation_ratios.append(1.0)  # Default to linear
 
         instabilities = np.array(instabilities)
         amp_factors = np.array(amp_factors)
         monotonicities = np.array(monotonicities)
         sensitivities_low = np.array(sensitivities_low)
+        saturation_ratios = np.array(saturation_ratios)
 
         # MAD-based Z-score (robust to outliers)
         def mad_zscore(values, x):
@@ -322,24 +429,28 @@ class SRDDErrorFinder:
         log_mono = np.log(monotonicities + 1e-9)
         log_amp = np.log(amp_factors + 1e-4)
         log_sens = np.log(sensitivities_low + 1e-9)
+        log_sat = np.log(saturation_ratios + 1e-9)  # v4.0: DC saturation
 
         # First derivative: jump from previous layer
         # Prepend first value so array length matches
         mono_jumps = np.diff(log_mono, prepend=log_mono[0])
         amp_jumps = np.diff(log_amp, prepend=log_amp[0])
         sens_jumps = np.diff(log_sens, prepend=log_sens[0])
+        sat_jumps = np.diff(log_sat, prepend=log_sat[0])  # v4.0
 
         # Z-score the JUMPS to find anomalous transitions
         z_mono_jump = mad_zscore_array(mono_jumps)
         z_amp_jump = mad_zscore_array(amp_jumps)
         z_sens_jump = mad_zscore_array(sens_jumps)
+        z_sat_jump = mad_zscore_array(sat_jumps)  # v4.0
 
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Monotonicity: median={np.median(monotonicities):.4f}")
         print(f"  Amplification: median={np.median(amp_factors):.1f}")
+        print(f"  DC Saturation Ratio: median={np.median(saturation_ratios):.4f}")
         print(f"  Mono Jump Z: max={np.max(np.abs(z_mono_jump)):.2f} at L{np.argmax(np.abs(z_mono_jump))}")
-        print(f"  Amp Jump Z: max={np.max(np.abs(z_amp_jump)):.2f} at L{np.argmax(np.abs(z_amp_jump))}")
+        print(f"  Sat Jump Z: max={np.max(np.abs(z_sat_jump)):.2f} at L{np.argmax(np.abs(z_sat_jump))}")
 
         # Classify each layer
         candidates = []
@@ -372,16 +483,24 @@ class SRDDErrorFinder:
                 score += edge_score
                 reasons.append(f"EDGE(amp={z_amp_jump[lid]:.1f})")
 
+            # v4.0 NEW: DC Saturation Edge Detection
+            # A sudden DROP in saturation ratio indicates saturation onset
+            if z_sat_jump[lid] < -2.0:  # Negative = DROP in linearity
+                edge_score = abs(z_sat_jump[lid]) * 2.5  # High weight for DC probe
+                score += edge_score
+                reasons.append(f"DC_SAT(z={z_sat_jump[lid]:.1f})")
+
             # v3.2 SECONDARY: Global anomaly detection (backup)
             # 1. NOISE FAULT: High Instability
             if z_inst > 3.0:
                 score += z_inst * 1.0  # Reduced weight vs edge detection
                 reasons.append(f"UNSTABLE(z={z_inst:.1f})")
 
-            # 2. SATURATION FAULT: Low Amplification
-            if z_amp < -2.0 and sensitivities_low[lid] > 1e-4:
-                score += abs(z_amp) * 0.5  # Reduced weight
-                reasons.append(f"SATURATED(z={z_amp:.1f})")
+            # 2. SATURATION FAULT: Low DC Saturation Ratio (v4.0)
+            z_sat = mad_zscore(saturation_ratios, saturation_ratios[lid])
+            if z_sat < -2.0:  # Below median = more saturated
+                score += abs(z_sat) * 1.0
+                reasons.append(f"SAT_RATIO(z={z_sat:.1f})")
 
             # 3. DEAD ZONE: Very low sensitivity
             if sensitivities_low[lid] < 1e-5:
@@ -398,22 +517,24 @@ class SRDDErrorFinder:
                 'z_mono': z_mono,
                 'z_mono_jump': z_mono_jump[lid],
                 'z_amp_jump': z_amp_jump[lid],
+                'z_sat_jump': z_sat_jump[lid],  # v4.0
                 'instability': instabilities[lid],
                 'amp_factor': amp_factors[lid],
                 'monotonicity': monotonicities[lid],
+                'saturation_ratio': saturation_ratios[lid],  # v4.0
             })
 
         # Sort by score
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
-        # Print results with edge detection columns
-        print(f"\n{'Layer':<6}{'Score':<8}{'MonoJump':<10}{'AmpJump':<10}{'Z_Mono':<10}{'Diagnosis'}")
-        print("-" * 75)
+        # Print results with edge detection columns (v4.0: added SatJump)
+        print(f"\n{'Layer':<6}{'Score':<8}{'MonoJump':<10}{'SatJump':<10}{'SatRatio':<10}{'Diagnosis'}")
+        print("-" * 80)
 
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['z_mono_jump']:<10.2f}{c['z_amp_jump']:<10.2f}{c['z_mono']:<10.2f}{diagnosis}{marker}")
+            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['z_mono_jump']:<10.2f}{c['z_sat_jump']:<10.2f}{c['saturation_ratio']:<10.4f}{diagnosis}{marker}")
 
         # Final diagnosis
         top_suspect = candidates[0] if candidates[0]['score'] > 0 else None
@@ -456,10 +577,10 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run complete v3.3 diagnosis pipeline with edge detection.
+        Run complete v4.0 diagnosis pipeline with edge detection + DC bias probe.
         """
         print(f"\n{'='*70}")
-        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v3.3)")
+        print("SELF-REFERENTIAL DIFFERENTIAL DIAGNOSIS (SRDD v4.0)")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -482,17 +603,25 @@ class SRDDErrorFinder:
             num_trials=5,
         )
 
-        # Step 4: Run dynamics probe (for saturation/dead zone detection)
+        # Step 4: Run dynamics probe (for dead zone detection)
         dynamics_results = self.probe_dynamics(
             prompts=prompts,
             baseline_logits=baseline_logits,
             noise_scales=[0.05, 0.10, 0.20, 0.50, 1.00],
         )
 
-        # Step 5: Diagnose
+        # Step 5: v4.0 NEW - Run DC bias probe (for saturation detection)
+        dc_results = self.probe_saturation_dc(
+            prompts=prompts,
+            baseline_logits=baseline_logits,
+            bias_scales=[1.0, 5.0, 10.0, 20.0, 50.0],
+        )
+
+        # Step 6: Diagnose
         results = self.diagnose(
             instability_results=instability_results,
             dynamics_results=dynamics_results,
+            dc_results=dc_results,
             ambient_noise=ambient_noise,
             ground_truth_layer=ground_truth_layer,
         )
@@ -616,7 +745,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v3.3 (Edge Detection)")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v4.0 (Edge Detection + DC Bias)")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
