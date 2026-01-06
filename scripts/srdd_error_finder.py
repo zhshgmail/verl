@@ -359,11 +359,12 @@ class SRDDErrorFinder:
             reasons = []
 
             # v3.3 PRIMARY: Edge Detection (where fault STARTS)
-            # A large negative jump in monotonicity indicates fault onset
-            if z_mono_jump[lid] < -2.0:  # Sudden DROP in monotonicity
+            # A large ABSOLUTE jump in monotonicity indicates fault onset
+            # (can be drop OR rise depending on fault type interaction)
+            if abs(z_mono_jump[lid]) > 2.0:
                 edge_score = abs(z_mono_jump[lid]) * 2.0
                 score += edge_score
-                reasons.append(f"EDGE(mono_drop={z_mono_jump[lid]:.1f})")
+                reasons.append(f"EDGE(mono={z_mono_jump[lid]:.1f})")
 
             # Large jump in amplification (saturation onset)
             if abs(z_amp_jump[lid]) > 2.0:
