@@ -1,8 +1,8 @@
 # Noise Injection Diagnostic Methodology
 
-**Version**: 3.1 (experimental)
+**Version**: 3.2
 **Date**: 2026-01-06
-**Status**: v2.0 validated for dead_zone faults; v3.1 in testing
+**Status**: v2.0 validated for dead_zone (100%); v3.2 fixes numerical issues but has localization limitations
 
 ---
 
@@ -267,24 +267,32 @@ finally:
 
 **100% accuracy** when reference system available.
 
-### 5.5 SRDD v3.1 Experimental Results (A100)
+### 5.5 SRDD v3.2 Results (A100)
 
-v3.1 introduces decoupled probes for noise and saturation detection:
+v3.2 fixes simulator and numerical issues from v3.1:
 
 | GT Layer | Fault Type | Diagnosed | Result | Notes |
 |----------|------------|-----------|--------|-------|
-| 15 | noise (0.3) | - | FAILED | All instability = 0 |
-| 15 | saturation (0.2) | 8 | MISMATCH | MAD numerical instability |
+| 15 | noise (0.3) | - | MISMATCH | Fault affects all downstream equally |
+| 15 | saturation (0.2) | 27 | MISMATCH | Saturation signature masked |
+| 10 | dead_zone (0.3) | 6 | MISMATCH | Regression from v2.0 |
 
-**Known Issues**:
+**v3.2 Fixes Applied**:
 
-1. **Noise Detection**: The fault simulator uses `torch.randn_like()` which is seeded by `torch.manual_seed()`. This makes simulated noise deterministic, unlike real hardware noise which would be independent of software seeds. The instability probe correctly detects no variance across trials because there IS no variance in simulation.
+1. **Independent RNG**: Simulator now uses `torch.Generator()` independent of global seed - simulates real hardware noise behavior.
 
-2. **Saturation Detection**: MAD-based Z-scores show numerical instability (z-scores like -128153244) when the median absolute deviation approaches zero.
+2. **Dynamic MAD Floor**: Uses `max(median*0.01, 1e-4)` to prevent Z-score explosion. Z-scores now reasonable (e.g., 133.6) instead of extreme values (-128M).
 
-**v3.1 Status**: Experimental. The methodology is theoretically sound but requires:
-- Real hardware noise (not simulated) for Probe A validation
-- Robust MAD calculation with minimum deviation floor for Probe B
+**Fundamental Limitation**:
+
+SRDD's end-to-end approach has inherent localization limitations:
+- Fault effects propagate to ALL downstream layers
+- End-to-end divergence measurements cannot isolate fault layer
+- Multiple layers show similar anomaly signatures
+
+**Recommendation**: Use **fingerprint correlation** (Section 5.4) when a reference system is available - it achieves 100% accuracy. SRDD is useful for:
+- Detecting THAT a fault exists (anomaly detection)
+- Situations where NO reference system is available
 
 ---
 
