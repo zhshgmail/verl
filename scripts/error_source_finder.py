@@ -258,6 +258,81 @@ def load_model(model_path: str, device: str = "cuda"):
     return model, tokenizer
 
 
+def run_multi_trial(
+    finder: ErrorSourceFinder,
+    ground_truth_layer: int,
+    prompts: List[str],
+    search_range: Tuple[int, int],
+    num_trials: int = 3,
+) -> Dict:
+    """Run multiple trials and aggregate results using voting."""
+    print(f"\n{'='*60}")
+    print(f"MULTI-TRIAL ERROR SOURCE FINDER ({num_trials} trials)")
+    print(f"{'='*60}")
+
+    all_results = []
+    layer_votes = {}
+
+    for trial in range(num_trials):
+        print(f"\n>>> Trial {trial + 1}/{num_trials}")
+        # Set different seed for each trial
+        torch.manual_seed(42 + trial * 100)
+        np.random.seed(42 + trial * 100)
+
+        result = finder.find_error_source(
+            ground_truth_layer=ground_truth_layer,
+            prompts=prompts,
+            search_range=search_range,
+        )
+        all_results.append(result)
+
+        # Count votes for top 3 candidates
+        for rank, (layer_id, div) in enumerate(result["sorted_candidates"][:3]):
+            weight = 3 - rank  # Rank 1 gets 3 votes, rank 2 gets 2, rank 3 gets 1
+            layer_votes[layer_id] = layer_votes.get(layer_id, 0) + weight
+
+    # Final decision based on voting
+    sorted_votes = sorted(layer_votes.items(), key=lambda x: x[1], reverse=True)
+
+    print(f"\n{'='*60}")
+    print("MULTI-TRIAL AGGREGATED RESULTS")
+    print(f"{'='*60}")
+    print(f"Ground Truth Layer: {ground_truth_layer}")
+    print(f"\nVoting results (weighted by rank):")
+    for layer_id, votes in sorted_votes[:5]:
+        marker = " <-- GROUND TRUTH" if layer_id == ground_truth_layer else ""
+        print(f"  Layer {layer_id}: {votes} votes{marker}")
+
+    final_diagnosed = sorted_votes[0][0]
+    print(f"\nFinal Diagnosis: Layer {final_diagnosed}")
+
+    # Check result
+    top_3_ids = [l[0] for l in sorted_votes[:3]]
+    if final_diagnosed == ground_truth_layer:
+        final_result = "EXACT_MATCH"
+        print("Result: EXACT MATCH")
+    elif ground_truth_layer in top_3_ids:
+        rank = top_3_ids.index(ground_truth_layer) + 1
+        final_result = f"IN_TOP_3_RANK_{rank}"
+        print(f"Result: In top 3 (rank {rank})")
+    elif abs(final_diagnosed - ground_truth_layer) <= 2:
+        final_result = "ADJACENT"
+        print(f"Result: Adjacent layer (within 2)")
+    else:
+        final_result = "MISMATCH"
+        print(f"Result: MISMATCH")
+
+    print(f"{'='*60}")
+
+    return {
+        "ground_truth": ground_truth_layer,
+        "final_diagnosed": final_diagnosed,
+        "final_result": final_result,
+        "voting_results": sorted_votes,
+        "all_trial_results": all_results,
+    }
+
+
 def main():
     import argparse
 
@@ -274,10 +349,20 @@ def main():
                        help="Start layer for search")
     parser.add_argument("--search_end", type=int, default=None,
                        help="End layer for search (exclusive)")
+    parser.add_argument("--num_trials", type=int, default=1,
+                       help="Number of trials for multi-trial mode (1=single trial)")
+    parser.add_argument("--seed", type=int, default=None,
+                       help="Random seed for reproducibility")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
 
     args = parser.parse_args()
+
+    # Set seed if provided
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"Random seed set to {args.seed}")
 
     # Load model
     model, tokenizer = load_model(args.model_path, args.device)
@@ -304,15 +389,26 @@ def main():
     search_end = args.search_end if args.search_end else finder.num_layers
     search_range = (args.search_start, search_end)
 
-    # Find error source
-    results = finder.find_error_source(
-        ground_truth_layer=args.ground_truth_layer,
-        prompts=prompts,
-        search_range=search_range,
-    )
+    # Run single trial or multi-trial
+    if args.num_trials > 1:
+        results = run_multi_trial(
+            finder=finder,
+            ground_truth_layer=args.ground_truth_layer,
+            prompts=prompts,
+            search_range=search_range,
+            num_trials=args.num_trials,
+        )
+        final_result = results["final_result"]
+    else:
+        results = finder.find_error_source(
+            ground_truth_layer=args.ground_truth_layer,
+            prompts=prompts,
+            search_range=search_range,
+        )
+        final_result = results["result"]
 
     # Exit code based on result
-    if results["result"] in ["EXACT_MATCH", "IN_TOP_3_RANK_1", "IN_TOP_3_RANK_2", "IN_TOP_3_RANK_3"]:
+    if final_result in ["EXACT_MATCH", "IN_TOP_3_RANK_1", "IN_TOP_3_RANK_2", "IN_TOP_3_RANK_3"]:
         sys.exit(0)
     else:
         sys.exit(1)
