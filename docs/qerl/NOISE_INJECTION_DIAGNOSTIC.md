@@ -194,9 +194,50 @@ if self.sparsity < 1.0:
 2. **Potential fix**: Use L∞ norm (max-error) instead of kurtosis for sparse clipping detection
 3. **ALU bugs**: Deterministic logic errors (e.g., `2*3=5`) are not detected by any current method
 
+### v6.0 Experiment: Max Gain Scan (Attempted Fix)
+
+**Hypothesis**: Saturation clips HIGH values, so we should look at max_gain (99.9th percentile) instead of min_gain (0.1th percentile).
+
+**Implementation**:
+```python
+# Inject DC bias (+50) to layer input
+# Measure per-element output shift
+# Look at max_gain = quantile(shift/bias, 0.999)
+# Saturated neurons can't shift as much (hit ceiling)
+```
+
+**Results**: The max_gain approach also failed to detect sparse saturation.
+
+| Sparsity | GT Layer | Diagnosed | Result |
+|----------|----------|-----------|--------|
+| 100% | L10 | L2 | Rank 2 |
+| 10% | L10 | L2 | MISS |
+| 5% | L10 | L2 | MISS |
+
+**Analysis**: The DC bias test doesn't work because:
+1. Saturation clips values ABOVE a threshold
+2. Not all neurons exceed the threshold, so not all get clipped
+3. With 10% sparsity AND partial activation, effective affected neurons << 10%
+4. The signal is too weak to distinguish from baseline variation
+
+### Fundamental Challenge: Sparse Saturation
+
+**Why sparse saturation is hard to detect**:
+
+1. **Global statistics fail**: Kurtosis, min_gain, max_gain all measure aggregate behavior. When 99% of neurons are healthy, the aggregate looks normal.
+
+2. **The "needle in haystack" problem**: We're looking for 1-10% anomalous neurons among millions.
+
+3. **Activation-dependent**: Saturation only affects neurons that EXCEED the clamp threshold. Many neurons may not reach it.
+
+**Potential approaches (not yet implemented)**:
+- Histogram analysis: Look for a "spike" at the saturation ceiling
+- Per-neuron tracking: Compare activation distributions before/after layer
+- Synthetic probe: Generate inputs designed to trigger specific neuron ranges
+
 ### Future Work
 
-- Implement L∞ norm scan for sparse saturation detection
+- Investigate histogram-based saturation detection
 - Add structured fault patterns (row/column dead, addressing errors)
 - Investigate deterministic ALU bug detection
 
