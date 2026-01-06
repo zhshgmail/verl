@@ -884,11 +884,14 @@ class SRDDErrorFinder:
             # Only score kurtosis if:
             # 1. No noise fault found (first_noisy_layer is None)
             # 2. No dead zone fault found (min gain z > -2)
+            # 3. Within valid range (exclude boundary layers L0/L1 and L26/L27)
             # This prevents kurtosis from interfering with primary detection methods
             has_dead_zone = np.min(z_gain) < -2.0
             has_noise = first_noisy_layer is not None
+            kurt_valid_range = (2, self.num_layers - 2)  # Exclude first/last 2 layers
 
-            if not has_dead_zone and not has_noise and z_kurt_drop is not None and lid >= 2:
+            in_kurt_valid = kurt_valid_range[0] <= lid < kurt_valid_range[1]
+            if not has_dead_zone and not has_noise and z_kurt_drop is not None and in_kurt_valid:
                 if lid == first_saturation_layer:
                     score += 100.0  # High score for first saturation layer
                     reasons.append(f"SAT_SOURCE(drop_z={z_kurt_drop[lid]:.1f})")
