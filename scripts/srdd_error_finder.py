@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v5.2 - Local Scan + Kurtosis
+Self-Referential Differential Diagnosis (SRDD) v5.3 - Sparse Fault Support
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 
-v5.2 NEW: Kurtosis Scan for Saturation Detection (Gemini collaboration)
+v5.3 NEW: Sparse Fault Simulation (Gemini collaboration)
+- Dense faults affect ALL tensor elements (default, sparsity=1.0)
+- Sparse faults affect only a FRACTION of elements (e.g., sparsity=0.01 = 1%)
+- Simulates local hardware faults (e.g., single bad core, bad memory bank)
+- Use --sparsity flag to test detection limits
+
+v5.2: Kurtosis Scan for Saturation Detection (Gemini collaboration)
 - Why: LLM activations are naturally 'spiky' (High Kurtosis >> 0)
 - Saturation/clamping cuts off these spikes, causing massive Kurtosis DROP
 - Key advantage: Passive measurement, bypasses LayerNorm invariance issues
@@ -1145,14 +1151,19 @@ class HardwareFaultSimulator:
     - dead_zone: Small values become zero
     - bias: Systematic offset
     - spike: Random large values
+
+    v5.3 NEW: Sparsity parameter for simulating local/sparse faults.
+    - sparsity=1.0: Dense fault (affects ALL elements) - default
+    - sparsity=0.01: Sparse fault (affects only 1% of elements)
     """
 
     def __init__(self, model, fault_layer: int, fault_type: str = "saturation",
-                 fault_magnitude: float = 0.1):
+                 fault_magnitude: float = 0.1, sparsity: float = 1.0):
         self.model = model
         self.fault_layer = fault_layer
         self.fault_type = fault_type
         self.fault_magnitude = fault_magnitude
+        self.sparsity = sparsity  # v5.3: Fraction of elements affected (1.0 = all)
         self.hook_handle = None
 
         # Find the target layer
@@ -1175,6 +1186,20 @@ class HardwareFaultSimulator:
         else:
             hidden_states = output
             rest = None
+
+        # v5.3: Create sparsity mask if not 100% dense
+        # This simulates local hardware faults (e.g., single bad core affecting 1% of neurons)
+        if self.sparsity < 1.0:
+            sparse_mask = torch.rand(
+                hidden_states.size(),
+                device=hidden_states.device,
+                generator=self.rng,
+            ) < self.sparsity
+        else:
+            sparse_mask = None  # Dense fault - affect all elements
+
+        # Store original for sparse blending
+        original_states = hidden_states.clone() if sparse_mask is not None else None
 
         if self.fault_type == "saturation":
             # Clamp values to simulate FP overflow/saturation
@@ -1200,8 +1225,8 @@ class HardwareFaultSimulator:
         elif self.fault_type == "dead_zone":
             # Small values become zero (simulates underflow)
             threshold = hidden_states.abs().max() * self.fault_magnitude
-            mask = hidden_states.abs() < threshold
-            hidden_states = hidden_states.masked_fill(mask, 0.0)
+            fault_mask = hidden_states.abs() < threshold
+            hidden_states = hidden_states.masked_fill(fault_mask, 0.0)
 
         elif self.fault_type == "spike":
             # Random large values (simulates bit flip)
@@ -1209,6 +1234,10 @@ class HardwareFaultSimulator:
             spike_mask = torch.rand_like(hidden_states) < spike_prob
             spike_values = hidden_states.abs().max() * torch.randn_like(hidden_states) * 10
             hidden_states = torch.where(spike_mask, spike_values, hidden_states)
+
+        # v5.3: Apply sparsity - blend faulty and original
+        if sparse_mask is not None:
+            hidden_states = torch.where(sparse_mask, hidden_states, original_states)
 
         if rest is not None:
             return (hidden_states,) + rest
@@ -1218,7 +1247,8 @@ class HardwareFaultSimulator:
         """Enable the fault injection."""
         if self.hook_handle is None:
             self.hook_handle = self.target_module.register_forward_hook(self._fault_hook)
-            print(f"[FAULT SIMULATOR] Enabled {self.fault_type} fault on layer {self.fault_layer}")
+            sparsity_str = f" (sparsity={self.sparsity*100:.1f}%)" if self.sparsity < 1.0 else ""
+            print(f"[FAULT SIMULATOR] Enabled {self.fault_type} fault on layer {self.fault_layer}{sparsity_str}")
 
     def disable(self):
         """Disable the fault injection."""
@@ -1231,7 +1261,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v5.0 (Local Scan)")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v5.3 (Sparse Fault Support)")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
@@ -1241,6 +1271,8 @@ def main():
                        help="Type of hardware fault to simulate")
     parser.add_argument("--fault_magnitude", type=float, default=0.3,
                        help="Magnitude of simulated fault (0.0-1.0)")
+    parser.add_argument("--sparsity", type=float, default=1.0,
+                       help="v5.3: Fraction of elements affected by fault (1.0=dense, 0.01=1%% sparse)")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
     parser.add_argument("--local-scan", action="store_true",
@@ -1275,12 +1307,15 @@ def main():
     if args.ground_truth_layer is not None:
         print(f"\n[VALIDATION MODE] Simulating {args.fault_type} fault on layer {args.ground_truth_layer}")
         print(f"Fault magnitude: {args.fault_magnitude}")
+        if args.sparsity < 1.0:
+            print(f"Sparsity: {args.sparsity*100:.1f}% of elements affected (SPARSE FAULT)")
 
         fault_simulator = HardwareFaultSimulator(
             model=model,
             fault_layer=args.ground_truth_layer,
             fault_type=args.fault_type,
             fault_magnitude=args.fault_magnitude,
+            sparsity=args.sparsity,
         )
         fault_simulator.enable()
 
