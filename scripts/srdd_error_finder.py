@@ -798,21 +798,31 @@ class SRDDErrorFinder:
                     break
 
         # v6.0: Process min_gain if available (sparse saturation detection)
+        # IMPORTANT: Exclude boundary layers (L0, L1, L26, L27) due to natural anomalies
         min_gain_arr = None
         z_min_gain = None
         first_sparse_sat_layer = None
+        min_gain_valid_range = (2, self.num_layers - 2)  # Exclude first/last 2 layers
         if min_gain_results:
             min_gain_arr = np.array([min_gain_results.get(i, 1.0) for i in range(self.num_layers)])
-            z_min_gain = mad_zscore(min_gain_arr)
 
-            # EDGE DETECTION: Find where min_gain DROPS
-            # Sparse saturation at layer i causes min_gain to drop significantly
+            # Only compute z-scores on valid range (exclude boundary layers)
+            valid_start, valid_end = min_gain_valid_range
+            valid_min_gains = min_gain_arr[valid_start:valid_end]
+            z_min_gain_valid = mad_zscore(valid_min_gains)
+
+            # Create full array with zeros for invalid layers
+            z_min_gain = np.zeros(self.num_layers)
+            z_min_gain[valid_start:valid_end] = z_min_gain_valid
+
+            # EDGE DETECTION: Find where min_gain DROPS (only in valid range)
             min_gain_diff = np.diff(min_gain_arr, prepend=min_gain_arr[0])
-            z_min_gain_drop = mad_zscore(min_gain_diff)
+            valid_diffs = min_gain_diff[valid_start:valid_end]
+            z_diff_valid = mad_zscore(valid_diffs)
 
-            # Find FIRST layer with significant min_gain DROP (excluding L0/L1)
-            for lid in range(2, self.num_layers):
-                if z_min_gain_drop[lid] < -2.0:  # Negative = DROP
+            # Find FIRST layer with significant min_gain DROP
+            for i, lid in enumerate(range(valid_start, valid_end)):
+                if z_diff_valid[i] < -2.0:  # Negative = DROP
                     first_sparse_sat_layer = lid
                     break
 
@@ -884,7 +894,9 @@ class SRDDErrorFinder:
 
             # v6.0: Min Gain DROP = sparse saturation (weakest link blocked)
             # This detects sparse faults that kurtosis misses
-            if not has_dead_zone and not has_noise and z_min_gain is not None and lid >= 2:
+            # Only apply to valid range (exclude boundary layers with natural anomalies)
+            in_valid_range = min_gain_valid_range[0] <= lid < min_gain_valid_range[1]
+            if not has_dead_zone and not has_noise and z_min_gain is not None and in_valid_range:
                 if lid == first_sparse_sat_layer:
                     score += 100.0  # High score for first sparse saturation layer
                     reasons.append(f"SPARSE_SAT(min_g={min_gain_arr[lid]:.3f})")
