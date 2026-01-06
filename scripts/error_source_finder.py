@@ -45,7 +45,14 @@ from verl.utils.noisy_ops import (
 
 
 class ErrorSourceFinder:
-    """Find which layer has persistent hardware error."""
+    """Find which layer has persistent hardware error.
+
+    Two methods available:
+    1. Differential Sensitivity: Layer with LEAST additional divergence is error source
+       (already noisy, so adding more noise has less relative impact)
+    2. Fingerprint Correlation: Layer whose noise pattern MATCHES the failure pattern
+       (correct layer produces similar output deviation as HW error)
+    """
 
     def __init__(
         self,
@@ -91,6 +98,16 @@ class ErrorSourceFinder:
         eps = 1e-10
         kl = torch.sum(p * torch.log((p + eps) / (q + eps)))
         return kl.item()
+
+    def compute_cosine_similarity(self, a: torch.Tensor, b: torch.Tensor) -> float:
+        """Compute cosine similarity between two tensors."""
+        a_flat = a.flatten().float()
+        b_flat = b.flatten().float()
+        return torch.nn.functional.cosine_similarity(a_flat.unsqueeze(0), b_flat.unsqueeze(0)).item()
+
+    def compute_deviation_pattern(self, clean: torch.Tensor, noisy: torch.Tensor) -> torch.Tensor:
+        """Compute the deviation pattern (fingerprint) from clean to noisy output."""
+        return noisy - clean
 
     def find_error_source(
         self,
@@ -237,6 +254,146 @@ class ErrorSourceFinder:
             "sorted_candidates": sorted_layers[:10],
         }
 
+    def find_error_source_fingerprint(
+        self,
+        ground_truth_layer: int,
+        prompts: List[str],
+        search_range: Tuple[int, int] = None,
+    ) -> Dict:
+        """
+        Find error source using fingerprint correlation method.
+
+        This method compares the "deviation pattern" caused by HW error with
+        the pattern caused by injecting noise into each candidate layer.
+        The layer whose pattern best matches the HW error pattern is the source.
+
+        Algorithm:
+        1. Get clean baseline (no noise)
+        2. Get degraded output (HW error on GT layer) - this is the "failure fingerprint"
+        3. For each candidate layer:
+           - Inject noise ONLY into that layer
+           - Compute the "candidate fingerprint" (deviation from clean)
+           - Compute similarity between candidate and failure fingerprint
+        4. Layer with HIGHEST similarity is the error source
+        """
+        if search_range is None:
+            search_range = (0, self.num_layers)
+
+        print(f"\n{'='*60}")
+        print("ERROR SOURCE FINDER - Fingerprint Correlation Method")
+        print(f"{'='*60}")
+        print(f"Ground Truth Layer: {ground_truth_layer}")
+        print(f"HW Error Scale: {self.hw_error_scale}")
+        print(f"Diagnostic Scale: {self.diagnostic_scale}")
+        print(f"Search Range: layers {search_range[0]}-{search_range[1]-1}")
+        print(f"{'='*60}")
+
+        # Step 1: Get clean baseline
+        print("\n[Step 1] Getting clean baseline...")
+        disable_noisy_ops()
+        set_selective_layers(None)
+
+        clean_logits = []
+        for prompt in prompts:
+            logits = self.get_output_logits(prompt)
+            clean_logits.append(logits)
+
+        # Step 2: Get failure fingerprint (HW error on GT layer)
+        print(f"\n[Step 2] Getting failure fingerprint (HW error on layer {ground_truth_layer})...")
+        enable_noisy_ops(error_scale=self.hw_error_scale, error_type='relative_gaussian')
+        set_selective_layers([ground_truth_layer])
+
+        failure_logits = []
+        failure_fingerprints = []
+        for i, prompt in enumerate(prompts):
+            logits = self.get_output_logits(prompt)
+            failure_logits.append(logits)
+            fingerprint = self.compute_deviation_pattern(clean_logits[i], logits)
+            failure_fingerprints.append(fingerprint)
+
+        disable_noisy_ops()
+
+        # Step 3: Fingerprint matching sweep
+        print(f"\n[Step 3] Running fingerprint correlation sweep...")
+        print("(Higher similarity = more likely error source)")
+
+        correlations = {}
+
+        for layer_id in range(search_range[0], search_range[1]):
+            set_selective_layers([layer_id])
+            enable_noisy_ops(error_scale=self.diagnostic_scale, error_type='relative_gaussian')
+            reset_injection_stats()
+            reset_layer_injection_stats()
+
+            # Get candidate fingerprint
+            candidate_similarities = []
+            for i, prompt in enumerate(prompts):
+                logits = self.get_output_logits(prompt)
+                candidate_fingerprint = self.compute_deviation_pattern(clean_logits[i], logits)
+
+                # Compute similarity between candidate and failure fingerprint
+                similarity = self.compute_cosine_similarity(
+                    failure_fingerprints[i], candidate_fingerprint
+                )
+                candidate_similarities.append(similarity)
+
+            avg_similarity = np.mean(candidate_similarities)
+            correlations[layer_id] = avg_similarity
+
+            disable_noisy_ops()
+
+            marker = " <-- GT" if layer_id == ground_truth_layer else ""
+            if (layer_id + 1) % 5 == 0 or layer_id == ground_truth_layer:
+                print(f"  Layer {layer_id:2d}: similarity = {avg_similarity:.4f}{marker}")
+
+        set_selective_layers(None)
+
+        # Step 4: Identify error source (layer with HIGHEST similarity)
+        print(f"\n[Step 4] Analyzing results...")
+
+        # Sort by similarity (descending - higher = more likely error source)
+        sorted_layers = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+
+        print("\nTop 5 candidates (highest fingerprint similarity):")
+        for rank, (layer_id, sim) in enumerate(sorted_layers[:5], 1):
+            marker = " <-- GROUND TRUTH" if layer_id == ground_truth_layer else ""
+            print(f"  {rank}. Layer {layer_id}: {sim:.4f}{marker}")
+
+        # Diagnosis
+        diagnosed_layer = sorted_layers[0][0]
+
+        print(f"\n{'='*50}")
+        print(f"Ground Truth Layer: {ground_truth_layer}")
+        print(f"Diagnosed Layer:    {diagnosed_layer}")
+
+        # Check result
+        top_3_ids = [l[0] for l in sorted_layers[:3]]
+
+        if diagnosed_layer == ground_truth_layer:
+            result = "EXACT_MATCH"
+            print("Result: EXACT MATCH")
+        elif ground_truth_layer in top_3_ids:
+            rank = top_3_ids.index(ground_truth_layer) + 1
+            result = f"IN_TOP_3_RANK_{rank}"
+            print(f"Result: In top 3 (rank {rank})")
+        elif abs(diagnosed_layer - ground_truth_layer) <= 2:
+            result = "ADJACENT"
+            print(f"Result: Adjacent layer (within 2)")
+        else:
+            result = "MISMATCH"
+            print(f"Result: MISMATCH")
+
+        print(f"{'='*50}")
+
+        return {
+            "ground_truth": ground_truth_layer,
+            "diagnosed": diagnosed_layer,
+            "result": result,
+            "correlations": correlations,
+            "sorted_candidates": sorted_layers[:10],
+            "method": "fingerprint_correlation",
+        }
+
 
 def load_model(model_path: str, device: str = "cuda"):
     """Load model and tokenizer."""
@@ -353,6 +510,10 @@ def main():
                        help="Number of trials for multi-trial mode (1=single trial)")
     parser.add_argument("--seed", type=int, default=None,
                        help="Random seed for reproducibility")
+    parser.add_argument("--method", type=str, default="differential",
+                       choices=["differential", "fingerprint", "both"],
+                       help="Method: differential (least additional divergence), "
+                            "fingerprint (pattern correlation), or both")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
 
@@ -389,29 +550,63 @@ def main():
     search_end = args.search_end if args.search_end else finder.num_layers
     search_range = (args.search_start, search_end)
 
-    # Run single trial or multi-trial
-    if args.num_trials > 1:
-        results = run_multi_trial(
-            finder=finder,
-            ground_truth_layer=args.ground_truth_layer,
-            prompts=prompts,
-            search_range=search_range,
-            num_trials=args.num_trials,
-        )
-        final_result = results["final_result"]
-    else:
-        results = finder.find_error_source(
-            ground_truth_layer=args.ground_truth_layer,
-            prompts=prompts,
-            search_range=search_range,
-        )
-        final_result = results["result"]
+    # Run methods based on selection
+    all_results = []
 
-    # Exit code based on result
-    if final_result in ["EXACT_MATCH", "IN_TOP_3_RANK_1", "IN_TOP_3_RANK_2", "IN_TOP_3_RANK_3"]:
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    if args.method in ["differential", "both"]:
+        print("\n" + "="*70)
+        print("METHOD 1: DIFFERENTIAL SENSITIVITY")
+        print("="*70)
+        if args.num_trials > 1:
+            results = run_multi_trial(
+                finder=finder,
+                ground_truth_layer=args.ground_truth_layer,
+                prompts=prompts,
+                search_range=search_range,
+                num_trials=args.num_trials,
+            )
+            results["method"] = "differential"
+            all_results.append(results)
+        else:
+            results = finder.find_error_source(
+                ground_truth_layer=args.ground_truth_layer,
+                prompts=prompts,
+                search_range=search_range,
+            )
+            results["method"] = "differential"
+            all_results.append(results)
+
+    if args.method in ["fingerprint", "both"]:
+        print("\n" + "="*70)
+        print("METHOD 2: FINGERPRINT CORRELATION")
+        print("="*70)
+        results = finder.find_error_source_fingerprint(
+            ground_truth_layer=args.ground_truth_layer,
+            prompts=prompts,
+            search_range=search_range,
+        )
+        all_results.append(results)
+
+    # Summary if both methods were run
+    if args.method == "both":
+        print("\n" + "="*70)
+        print("COMPARISON SUMMARY")
+        print("="*70)
+        for r in all_results:
+            method = r.get("method", "unknown")
+            diagnosed = r.get("diagnosed") or r.get("final_diagnosed")
+            result = r.get("result") or r.get("final_result")
+            print(f"  {method:20s}: Diagnosed layer {diagnosed}, {result}")
+
+    # Exit code based on results
+    success = False
+    for r in all_results:
+        result = r.get("result") or r.get("final_result")
+        if result in ["EXACT_MATCH", "IN_TOP_3_RANK_1", "IN_TOP_3_RANK_2", "IN_TOP_3_RANK_3"]:
+            success = True
+            break
+
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
