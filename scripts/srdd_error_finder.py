@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v5.0 - Local Scan
+Self-Referential Differential Diagnosis (SRDD) v5.0.1 - Local Scan
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
+
+v5.0.1 FIX: True Local Gain Measurement
+- Problem in v5.0: Still measuring E2E output change, not local layer response
+- Fix: Use forward_pre_hook to perturb INPUT to layer, measure OUTPUT change
+- This gives the true "local transfer function" (gain = output_change / input_noise)
 
 v5.0 KEY BREAKTHROUGH (Gemini collaboration):
 - Problem: E2E probing fails because signal passes through 18+ healthy layers
@@ -15,7 +20,7 @@ Two Local Scan Methods:
    - Normal layer: variance ≈ 0
    - Noise fault: variance >> 0 (isolated spike)
 
-2. Gain Scan (Saturation/Dead Zone Detection): Inject noise, measure immediate output
+2. Gain Scan (Saturation/Dead Zone Detection): Perturb input, measure output change
    - Normal layer: gain ≈ 1.0 (linear transfer)
    - Saturated layer: gain < 0.1 (signal compressed)
    - Dead zone layer: gain ≈ 0.0 (signal lost)
@@ -437,23 +442,23 @@ class SRDDErrorFinder:
     def local_gain_scan(
         self,
         prompts: List[str],
-        noise_scale: float = 1.0,
+        noise_scale: float = 0.1,
     ) -> Dict[int, float]:
         """
         v5.0 Probe: Local Gain Analysis (Saturation/Dead Zone Detection)
 
-        For each layer: inject noise at input, measure output variance IMMEDIATELY.
-        - Normal layer: gain ≈ 1.0 (output variance matches input noise)
-        - Saturated layer: gain < 0.1 (output compressed)
-        - Dead zone layer: gain ≈ 0.0 (signal lost)
+        TRUE LOCAL MEASUREMENT: Perturb INPUT to layer, measure OUTPUT change.
+        - Normal layer: output changes proportionally to input perturbation
+        - Saturated layer: output barely changes (signal compressed at ceiling)
+        - Dead zone layer: output barely changes (small values zeroed out)
 
-        Key insight: We measure the IMMEDIATE output of the probed layer,
-        not the final output after 20+ more layers.
+        Key fix (v5.0.1): Use forward_pre_hook to add noise to INPUT,
+        then measure OUTPUT difference. This is true "local gain".
         """
         print(f"\n{'='*60}")
-        print("v5.0 LOCAL SCAN: GAIN (Saturation/Dead Zone Detection)")
+        print("v5.0.1 LOCAL SCAN: GAIN (True Local Measurement)")
         print(f"{'='*60}")
-        print(f"Noise scale: {noise_scale}")
+        print(f"Input perturbation scale: {noise_scale}")
 
         if self.layers is None:
             print("  Error: Cannot access model layers")
@@ -461,66 +466,84 @@ class SRDDErrorFinder:
 
         layer_gains = {}
 
-        # First, get baseline output std for each layer (no noise)
-        baseline_stds = {}
         for layer_id in range(self.num_layers):
-            captured = []
+            # Step 1: Get baseline output (no perturbation)
+            baseline_outputs = []
 
-            def capture_hook(module, input, output):
+            def capture_baseline(module, input, output):
                 if isinstance(output, tuple):
                     out = output[0]
                 else:
                     out = output
-                captured.append(torch.std(out.float()).item())
+                baseline_outputs.append(out.detach().clone())
 
-            hook = self.layers[layer_id].register_forward_hook(capture_hook)
+            hook_base = self.layers[layer_id].register_forward_hook(capture_baseline)
             try:
                 self.get_output_logits(prompts[0])
             finally:
-                hook.remove()
+                hook_base.remove()
 
-            baseline_stds[layer_id] = captured[0] if captured else 1.0
+            if not baseline_outputs:
+                layer_gains[layer_id] = 0.0
+                continue
 
-        # Now measure with noise injection at each layer
-        for layer_id in range(self.num_layers):
-            # Enable noise at this layer
-            set_selective_layers([layer_id])
-            enable_noisy_ops(error_scale=noise_scale, error_type='relative_gaussian')
+            baseline_out = baseline_outputs[0]
+            input_std_estimate = torch.std(baseline_out.float()).item()
 
-            captured = []
+            # Step 2: Add perturbation to INPUT and capture OUTPUT
+            perturbed_outputs = []
+            perturbation_magnitude = []
 
-            def capture_hook(module, input, output):
+            def perturb_input(module, args):
+                """Forward pre-hook: Add noise to the input of this layer."""
+                if isinstance(args, tuple) and len(args) > 0:
+                    hidden_states = args[0]
+                    # Add Gaussian noise scaled to input magnitude
+                    noise = torch.randn_like(hidden_states) * noise_scale * torch.std(hidden_states)
+                    perturbation_magnitude.append(torch.std(noise.float()).item())
+                    perturbed = hidden_states + noise
+                    # Return modified args
+                    return (perturbed,) + args[1:]
+                return args
+
+            def capture_perturbed(module, input, output):
                 if isinstance(output, tuple):
                     out = output[0]
                 else:
                     out = output
-                captured.append(torch.std(out.float()).item())
+                perturbed_outputs.append(out.detach().clone())
 
-            hook = self.layers[layer_id].register_forward_hook(capture_hook)
+            hook_pre = self.layers[layer_id].register_forward_pre_hook(perturb_input)
+            hook_post = self.layers[layer_id].register_forward_hook(capture_perturbed)
 
             try:
                 self.get_output_logits(prompts[0])
             finally:
-                hook.remove()
-                disable_noisy_ops()
+                hook_pre.remove()
+                hook_post.remove()
 
-            noisy_std = captured[0] if captured else 0.0
+            if not perturbed_outputs or not perturbation_magnitude:
+                layer_gains[layer_id] = 0.0
+                continue
 
-            # Gain = how much the output responds to input noise
-            # Normal: noisy_std should be higher than baseline
-            # Saturated: noisy_std ≈ baseline (noise absorbed)
-            if baseline_stds[layer_id] > 1e-9:
-                # Ratio of (noisy - baseline) to expected increase
-                gain = (noisy_std - baseline_stds[layer_id]) / (baseline_stds[layer_id] * noise_scale + 1e-9)
+            perturbed_out = perturbed_outputs[0]
+            input_noise_std = perturbation_magnitude[0]
+
+            # Step 3: Calculate gain = output_change / input_perturbation
+            # This is the TRUE local transfer function
+            output_diff = perturbed_out - baseline_out
+            output_change_std = torch.std(output_diff.float()).item()
+
+            if input_noise_std > 1e-9:
+                gain = output_change_std / input_noise_std
             else:
                 gain = 0.0
 
             layer_gains[layer_id] = gain
 
             if (layer_id + 1) % 7 == 0 or layer_id == 0:
-                print(f"  Layer {layer_id:2d}: baseline={baseline_stds[layer_id]:.4f}, noisy={noisy_std:.4f}, gain={gain:.4f}")
+                print(f"  Layer {layer_id:2d}: in_noise={input_noise_std:.4f}, out_change={output_change_std:.4f}, gain={gain:.4f}")
 
-        set_selective_layers(None)
         return layer_gains
 
     def diagnose_local(
@@ -641,10 +664,13 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run v5.0 Local Scan diagnosis pipeline.
+        Run v5.0.1 Local Scan diagnosis pipeline.
+
+        v5.0.1 Fix: True local gain measurement using forward_pre_hook
+        to perturb INPUT and measure OUTPUT change.
         """
         print(f"\n{'='*70}")
-        print("SRDD v5.0 LOCAL SCAN DIAGNOSIS")
+        print("SRDD v5.0.1 LOCAL SCAN DIAGNOSIS")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
