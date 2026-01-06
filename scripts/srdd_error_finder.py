@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v4.0 - DC Bias Probe
+Self-Referential Differential Diagnosis (SRDD) v5.0 - Local Scan
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
-It uses controllable noise injection as a probe to detect ANOMALOUS layer behavior.
 
-v4.0 New Feature (Gemini collaboration):
-- DC Bias Probe for SATURATION detection
-- Instead of random noise (variance), inject constant DC offset (bias)
-- Normal layer: output mean shifts proportionally
-- Saturated layer: output mean shifts LESS (hit the ceiling)
+v5.0 KEY BREAKTHROUGH (Gemini collaboration):
+- Problem: E2E probing fails because signal passes through 18+ healthy layers
+  that normalize/mask/absorb the anomaly ("propagation masking")
+- Solution: LOCAL MEASUREMENT - measure at the layer itself, not at final output
+- "Inject at L(i), measure at L(i)" instead of "Inject at L(i), measure at L(End)"
 
-v3.3 Key Insight:
-- Fault localization is an EDGE DETECTION problem
-- Use LOCAL comparison (layer i vs i-1) instead of GLOBAL (layer i vs median)
-- First derivative (jump) in metrics pinpoints the fault onset
+Two Local Scan Methods:
+1. Ambient Scan (Noise Detection): No injection, measure output variance at each layer
+   - Normal layer: variance ≈ 0
+   - Noise fault: variance >> 0 (isolated spike)
 
-v3.2 Fixes:
-1. Independent RNG: Simulator noise uses separate Generator, not affected by global seed
-2. Dynamic MAD Floor: Use max(median*0.01, 1e-4) to prevent Z-score explosion
+2. Gain Scan (Saturation/Dead Zone Detection): Inject noise, measure immediate output
+   - Normal layer: gain ≈ 1.0 (linear transfer)
+   - Saturated layer: gain < 0.1 (signal compressed)
+   - Dead zone layer: gain ≈ 0.0 (signal lost)
+
+v3.2-v4.0 Fixes (retained):
+1. Independent RNG for simulator noise
+2. Dynamic MAD floor for numerical stability
 """
 
 import os
@@ -45,10 +49,10 @@ from verl.utils.noisy_ops import (
 
 class SRDDErrorFinder:
     """
-    Self-Referential Differential Diagnosis v4.0 for finding hardware error sources.
+    Self-Referential Differential Diagnosis v5.0 for finding hardware error sources.
 
-    Works WITHOUT a reference system - uses edge detection and DC bias probing
-    to find where fault behavior STARTS (the transition point).
+    Works WITHOUT a reference system - uses LOCAL SCAN to measure layer behavior
+    directly at the layer output, bypassing propagation masking.
     """
 
     def __init__(
@@ -69,8 +73,14 @@ class SRDDErrorFinder:
 
         # Register layer hooks
         self.num_hooks = register_layer_hooks(model)
-        print(f"[SRDD v4.0] Registered {self.num_hooks} layer hooks")
-        print(f"[SRDD v4.0] Model has {self.num_layers} layers")
+        print(f"[SRDD v5.0] Registered {self.num_hooks} layer hooks")
+        print(f"[SRDD v5.0] Model has {self.num_layers} layers")
+
+        # Get layer modules for local scanning
+        if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+            self.layers = model.model.layers
+        else:
+            self.layers = None
 
     def get_output_logits(self, prompt: str) -> torch.Tensor:
         """Get model output logits for a prompt."""
@@ -359,6 +369,301 @@ class SRDDErrorFinder:
             print(f"  Error in DC bias probe: {e}")
 
         return layer_dc_results
+
+    # ================================================================
+    # v5.0 LOCAL SCAN METHODS - Bypass Propagation Masking
+    # ================================================================
+
+    def local_ambient_scan(
+        self,
+        prompts: List[str],
+        num_trials: int = 3,
+    ) -> Dict[int, float]:
+        """
+        v5.0 Probe: Ambient Stethoscope (Noise Fault Detection)
+
+        Measures output VARIANCE at each layer WITHOUT any injection.
+        - Normal layer: variance is consistent across trials
+        - Noise fault layer: variance spikes (hardware adding random noise)
+
+        Key insight: We measure LOCALLY at each layer, not at final output.
+        This bypasses the "propagation masking" that plagued v1-v4.
+        """
+        print(f"\n{'='*60}")
+        print("v5.0 LOCAL SCAN: AMBIENT (Noise Detection)")
+        print(f"{'='*60}")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        layer_variances = {}
+
+        for layer_id in range(self.num_layers):
+            trial_vars = []
+
+            for trial in range(num_trials):
+                # Hook to capture this layer's output
+                captured = []
+
+                def capture_hook(module, input, output):
+                    if isinstance(output, tuple):
+                        out = output[0]
+                    else:
+                        out = output
+                    # Compute variance of output tensor
+                    var = torch.var(out.float()).item()
+                    captured.append(var)
+
+                hook = self.layers[layer_id].register_forward_hook(capture_hook)
+
+                try:
+                    # Run inference (no noise injection)
+                    for prompt in prompts[:2]:  # Use 2 prompts
+                        self.get_output_logits(prompt)
+                finally:
+                    hook.remove()
+
+                trial_vars.append(np.mean(captured) if captured else 0.0)
+
+            # Variance of variances across trials (instability indicator)
+            layer_variances[layer_id] = np.std(trial_vars)
+
+            if (layer_id + 1) % 7 == 0 or layer_id == 0:
+                print(f"  Layer {layer_id:2d}: ambient_var_std = {layer_variances[layer_id]:.6f}")
+
+        return layer_variances
+
+    def local_gain_scan(
+        self,
+        prompts: List[str],
+        noise_scale: float = 1.0,
+    ) -> Dict[int, float]:
+        """
+        v5.0 Probe: Local Gain Analysis (Saturation/Dead Zone Detection)
+
+        For each layer: inject noise at input, measure output variance IMMEDIATELY.
+        - Normal layer: gain ≈ 1.0 (output variance matches input noise)
+        - Saturated layer: gain < 0.1 (output compressed)
+        - Dead zone layer: gain ≈ 0.0 (signal lost)
+
+        Key insight: We measure the IMMEDIATE output of the probed layer,
+        not the final output after 20+ more layers.
+        """
+        print(f"\n{'='*60}")
+        print("v5.0 LOCAL SCAN: GAIN (Saturation/Dead Zone Detection)")
+        print(f"{'='*60}")
+        print(f"Noise scale: {noise_scale}")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        layer_gains = {}
+
+        # First, get baseline output std for each layer (no noise)
+        baseline_stds = {}
+        for layer_id in range(self.num_layers):
+            captured = []
+
+            def capture_hook(module, input, output):
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                captured.append(torch.std(out.float()).item())
+
+            hook = self.layers[layer_id].register_forward_hook(capture_hook)
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook.remove()
+
+            baseline_stds[layer_id] = captured[0] if captured else 1.0
+
+        # Now measure with noise injection at each layer
+        for layer_id in range(self.num_layers):
+            # Enable noise at this layer
+            set_selective_layers([layer_id])
+            enable_noisy_ops(error_scale=noise_scale, error_type='relative_gaussian')
+
+            captured = []
+
+            def capture_hook(module, input, output):
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                captured.append(torch.std(out.float()).item())
+
+            hook = self.layers[layer_id].register_forward_hook(capture_hook)
+
+            try:
+                self.get_output_logits(prompts[0])
+            finally:
+                hook.remove()
+                disable_noisy_ops()
+
+            noisy_std = captured[0] if captured else 0.0
+
+            # Gain = how much the output responds to input noise
+            # Normal: noisy_std should be higher than baseline
+            # Saturated: noisy_std ≈ baseline (noise absorbed)
+            if baseline_stds[layer_id] > 1e-9:
+                # Ratio of (noisy - baseline) to expected increase
+                gain = (noisy_std - baseline_stds[layer_id]) / (baseline_stds[layer_id] * noise_scale + 1e-9)
+            else:
+                gain = 0.0
+
+            layer_gains[layer_id] = gain
+
+            if (layer_id + 1) % 7 == 0 or layer_id == 0:
+                print(f"  Layer {layer_id:2d}: baseline={baseline_stds[layer_id]:.4f}, noisy={noisy_std:.4f}, gain={gain:.4f}")
+
+        set_selective_layers(None)
+        return layer_gains
+
+    def diagnose_local(
+        self,
+        ambient_results: Dict[int, float],
+        gain_results: Dict[int, float],
+        ground_truth_layer: int = None,
+    ) -> Dict:
+        """
+        v5.0 Diagnosis using Local Scan results.
+
+        Much simpler than v4.0 - just find the layer with:
+        - Highest ambient variance (noise fault)
+        - Lowest gain (saturation/dead zone fault)
+        """
+        print(f"\n{'='*60}")
+        print("v5.0 LOCAL DIAGNOSIS")
+        print(f"{'='*60}")
+
+        # Convert to arrays
+        ambient_arr = np.array([ambient_results.get(i, 0) for i in range(self.num_layers)])
+        gain_arr = np.array([gain_results.get(i, 0) for i in range(self.num_layers)])
+
+        # MAD-based Z-score
+        def mad_zscore(values):
+            med = np.median(values)
+            mad = np.median(np.abs(values - med))
+            min_mad = max(abs(med) * 0.01, 1e-6)
+            effective_mad = max(mad, min_mad)
+            return (values - med) / (effective_mad * 1.4826)
+
+        z_ambient = mad_zscore(ambient_arr)
+        z_gain = mad_zscore(gain_arr)
+
+        # Print statistics
+        print(f"\nStatistics:")
+        print(f"  Ambient Var: max={np.max(ambient_arr):.6f} at L{np.argmax(ambient_arr)}")
+        print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
+
+        # Score each layer
+        candidates = []
+        for lid in range(self.num_layers):
+            score = 0
+            reasons = []
+
+            # High ambient variance = noise fault
+            if z_ambient[lid] > 2.0:
+                score += z_ambient[lid] * 2.0
+                reasons.append(f"NOISE(z={z_ambient[lid]:.1f})")
+
+            # Low gain = saturation/dead zone
+            if z_gain[lid] < -2.0:
+                score += abs(z_gain[lid]) * 2.0
+                reasons.append(f"SAT/DEAD(z={z_gain[lid]:.1f})")
+
+            candidates.append({
+                'layer': lid,
+                'score': score,
+                'reasons': reasons,
+                'ambient': ambient_arr[lid],
+                'gain': gain_arr[lid],
+                'z_ambient': z_ambient[lid],
+                'z_gain': z_gain[lid],
+            })
+
+        # Sort by score
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        # Print results
+        print(f"\n{'Layer':<6}{'Score':<8}{'Ambient':<12}{'Gain':<10}{'Diagnosis'}")
+        print("-" * 60)
+
+        for c in candidates[:10]:
+            marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
+            diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
+            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['ambient']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
+
+        # Final diagnosis
+        top = candidates[0] if candidates[0]['score'] > 0 else None
+
+        print(f"\n{'='*50}")
+        if top:
+            print(f"DIAGNOSIS: Layer {top['layer']} - {', '.join(top['reasons'])}")
+        else:
+            print("DIAGNOSIS: No significant faults detected")
+
+        # Validation
+        result = "NO_FAULT_DETECTED"
+        if ground_truth_layer is not None and top:
+            if top['layer'] == ground_truth_layer:
+                result = "EXACT_MATCH"
+                print("Validation: EXACT MATCH")
+            elif abs(top['layer'] - ground_truth_layer) == 1:
+                result = "OFF_BY_ONE"
+                print(f"Validation: Off by 1 (GT={ground_truth_layer})")
+            else:
+                top_5 = [c['layer'] for c in candidates[:5] if c['score'] > 0]
+                if ground_truth_layer in top_5:
+                    rank = top_5.index(ground_truth_layer) + 1
+                    result = f"IN_TOP_5_RANK_{rank}"
+                    print(f"Validation: In top 5 (rank {rank})")
+                else:
+                    result = "MISMATCH"
+                    print(f"Validation: MISMATCH (GT={ground_truth_layer})")
+
+        print(f"{'='*50}")
+
+        return {
+            'diagnosed_layer': top['layer'] if top else None,
+            'diagnosis': top['reasons'] if top else [],
+            'result': result,
+            'candidates': candidates,
+        }
+
+    def run_local_scan(
+        self,
+        prompts: List[str],
+        ground_truth_layer: int = None,
+    ) -> Dict:
+        """
+        Run v5.0 Local Scan diagnosis pipeline.
+        """
+        print(f"\n{'='*70}")
+        print("SRDD v5.0 LOCAL SCAN DIAGNOSIS")
+        print(f"{'='*70}")
+        if ground_truth_layer is not None:
+            print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
+        print(f"{'='*70}")
+
+        # Step 1: Ambient scan (noise detection)
+        ambient_results = self.local_ambient_scan(prompts, num_trials=3)
+
+        # Step 2: Gain scan (saturation/dead zone detection)
+        gain_results = self.local_gain_scan(prompts, noise_scale=1.0)
+
+        # Step 3: Diagnose
+        results = self.diagnose_local(
+            ambient_results=ambient_results,
+            gain_results=gain_results,
+            ground_truth_layer=ground_truth_layer,
+        )
+
+        return results
 
     def diagnose(
         self,
@@ -745,7 +1050,7 @@ class HardwareFaultSimulator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v4.0 (Edge Detection + DC Bias)")
+    parser = argparse.ArgumentParser(description="SRDD Error Source Finder v5.0 (Local Scan)")
     parser.add_argument("--model_path", type=str, required=True,
                        help="Path to model checkpoint")
     parser.add_argument("--ground_truth_layer", type=int, default=None,
@@ -757,6 +1062,11 @@ def main():
                        help="Magnitude of simulated fault (0.0-1.0)")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to run on")
+    parser.add_argument("--local-scan", action="store_true",
+                       help="Use v5.0 Local Scan instead of v4.0 E2E probing")
+    parser.add_argument("--method", type=str, default="auto",
+                       choices=["auto", "local", "e2e"],
+                       help="Diagnosis method: local (v5.0), e2e (v4.0), or auto")
 
     args = parser.parse_args()
 
@@ -793,12 +1103,26 @@ def main():
         )
         fault_simulator.enable()
 
-    # Run full diagnosis
+    # Determine which method to use
+    use_local = getattr(args, 'local_scan', False) or args.method == "local"
+    if args.method == "auto":
+        # Default to local scan in v5.0
+        use_local = True
+
+    # Run diagnosis
     try:
-        results = finder.run_full_diagnosis(
-            prompts=prompts,
-            ground_truth_layer=args.ground_truth_layer,
-        )
+        if use_local:
+            print("\n[Using v5.0 LOCAL SCAN method]")
+            results = finder.run_local_scan(
+                prompts=prompts,
+                ground_truth_layer=args.ground_truth_layer,
+            )
+        else:
+            print("\n[Using v4.0 E2E method]")
+            results = finder.run_full_diagnosis(
+                prompts=prompts,
+                ground_truth_layer=args.ground_truth_layer,
+            )
     finally:
         # Clean up fault simulator
         if fault_simulator is not None:
