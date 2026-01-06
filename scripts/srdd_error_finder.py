@@ -820,6 +820,10 @@ class SRDDErrorFinder:
             valid_diffs = min_gain_diff[valid_start:valid_end]
             z_diff_valid = mad_zscore(valid_diffs)
 
+            # Store z-score of drop for printing
+            z_min_gain_drop = np.zeros(self.num_layers)
+            z_min_gain_drop[valid_start:valid_end] = z_diff_valid
+
             # Find FIRST layer with significant min_gain DROP
             for i, lid in enumerate(range(valid_start, valid_end)):
                 if z_diff_valid[i] < -2.0:  # Negative = DROP
