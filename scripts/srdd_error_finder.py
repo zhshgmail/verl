@@ -385,27 +385,28 @@ class SRDDErrorFinder:
         num_trials: int = 3,
     ) -> Dict[int, float]:
         """
-        v5.0 Probe: Ambient Stethoscope (Noise Fault Detection)
+        v5.0.1 Probe: Ambient Stethoscope (Noise Fault Detection)
 
-        Measures output VARIANCE at each layer WITHOUT any injection.
-        - Normal layer: variance is consistent across trials
-        - Noise fault layer: variance spikes (hardware adding random noise)
+        Measures if a layer's OUTPUT CHANGES between trials with the SAME input.
+        - Normal layer: output is identical across trials (deterministic)
+        - Noise fault layer: output differs across trials (hardware adds random noise)
 
-        Key insight: We measure LOCALLY at each layer, not at final output.
-        This bypasses the "propagation masking" that plagued v1-v4.
+        Key fix (v5.0.1): Compare actual OUTPUT VALUES between trials,
+        not just the variance of the output tensor.
         """
         print(f"\n{'='*60}")
-        print("v5.0 LOCAL SCAN: AMBIENT (Noise Detection)")
+        print("v5.0.1 LOCAL SCAN: AMBIENT (Noise Detection)")
         print(f"{'='*60}")
 
         if self.layers is None:
             print("  Error: Cannot access model layers")
             return {}
 
-        layer_variances = {}
+        layer_instabilities = {}
+        prompt = prompts[0]  # Use single prompt for consistency
 
         for layer_id in range(self.num_layers):
-            trial_vars = []
+            trial_outputs = []
 
             for trial in range(num_trials):
                 # Hook to capture this layer's output
@@ -416,28 +417,38 @@ class SRDDErrorFinder:
                         out = output[0]
                     else:
                         out = output
-                    # Compute variance of output tensor
-                    var = torch.var(out.float()).item()
-                    captured.append(var)
+                    # Store the actual output tensor
+                    captured.append(out.detach().clone())
 
                 hook = self.layers[layer_id].register_forward_hook(capture_hook)
 
                 try:
-                    # Run inference (no noise injection)
-                    for prompt in prompts[:2]:  # Use 2 prompts
-                        self.get_output_logits(prompt)
+                    # Run inference with same input
+                    self.get_output_logits(prompt)
                 finally:
                     hook.remove()
 
-                trial_vars.append(np.mean(captured) if captured else 0.0)
+                if captured:
+                    trial_outputs.append(captured[0])
 
-            # Variance of variances across trials (instability indicator)
-            layer_variances[layer_id] = np.std(trial_vars)
+            # Measure instability: how much does output change across trials?
+            if len(trial_outputs) >= 2:
+                # Compare consecutive trials
+                diffs = []
+                for i in range(1, len(trial_outputs)):
+                    diff = trial_outputs[i] - trial_outputs[0]
+                    diff_std = torch.std(diff.float()).item()
+                    diffs.append(diff_std)
+                instability = np.mean(diffs)
+            else:
+                instability = 0.0
+
+            layer_instabilities[layer_id] = instability
 
             if (layer_id + 1) % 7 == 0 or layer_id == 0:
-                print(f"  Layer {layer_id:2d}: ambient_var_std = {layer_variances[layer_id]:.6f}")
+                print(f"  Layer {layer_id:2d}: instability = {instability:.6f}")
 
-        return layer_variances
+        return layer_instabilities
 
     def local_gain_scan(
         self,
@@ -553,18 +564,18 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        v5.0 Diagnosis using Local Scan results.
+        v5.0.1 Diagnosis using Local Scan results.
 
         Much simpler than v4.0 - just find the layer with:
-        - Highest ambient variance (noise fault)
-        - Lowest gain (saturation/dead zone fault)
+        - Highest instability (noise fault) - output changes between trials
+        - Lowest gain (saturation/dead zone fault) - output doesn't respond to input
         """
         print(f"\n{'='*60}")
-        print("v5.0 LOCAL DIAGNOSIS")
+        print("v5.0.1 LOCAL DIAGNOSIS")
         print(f"{'='*60}")
 
         # Convert to arrays
-        ambient_arr = np.array([ambient_results.get(i, 0) for i in range(self.num_layers)])
+        instability_arr = np.array([ambient_results.get(i, 0) for i in range(self.num_layers)])
         gain_arr = np.array([gain_results.get(i, 0) for i in range(self.num_layers)])
 
         # MAD-based Z-score
@@ -575,12 +586,12 @@ class SRDDErrorFinder:
             effective_mad = max(mad, min_mad)
             return (values - med) / (effective_mad * 1.4826)
 
-        z_ambient = mad_zscore(ambient_arr)
+        z_instability = mad_zscore(instability_arr)
         z_gain = mad_zscore(gain_arr)
 
         # Print statistics
         print(f"\nStatistics:")
-        print(f"  Ambient Var: max={np.max(ambient_arr):.6f} at L{np.argmax(ambient_arr)}")
+        print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
 
         # Score each layer
@@ -589,10 +600,10 @@ class SRDDErrorFinder:
             score = 0
             reasons = []
 
-            # High ambient variance = noise fault
-            if z_ambient[lid] > 2.0:
-                score += z_ambient[lid] * 2.0
-                reasons.append(f"NOISE(z={z_ambient[lid]:.1f})")
+            # High instability = noise fault (output changes between trials)
+            if z_instability[lid] > 2.0:
+                score += z_instability[lid] * 2.0
+                reasons.append(f"NOISE(z={z_instability[lid]:.1f})")
 
             # Low gain = saturation/dead zone
             if z_gain[lid] < -2.0:
@@ -603,9 +614,9 @@ class SRDDErrorFinder:
                 'layer': lid,
                 'score': score,
                 'reasons': reasons,
-                'ambient': ambient_arr[lid],
+                'instability': instability_arr[lid],
                 'gain': gain_arr[lid],
-                'z_ambient': z_ambient[lid],
+                'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
             })
 
@@ -613,13 +624,13 @@ class SRDDErrorFinder:
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
         # Print results
-        print(f"\n{'Layer':<6}{'Score':<8}{'Ambient':<12}{'Gain':<10}{'Diagnosis'}")
+        print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<12}{'Gain':<10}{'Diagnosis'}")
         print("-" * 60)
 
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['ambient']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
+            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
 
         # Final diagnosis
         top = candidates[0] if candidates[0]['score'] > 0 else None
