@@ -865,7 +865,7 @@ class SRDDErrorFinder:
     def local_histogram_scan(
         self,
         prompts: List[str],
-        num_bins: int = 200,
+        num_bins: int = 100,
     ) -> Dict[int, Dict]:
         """
         v8.0 Probe: Histogram Pile-up Detection (Sparse/Dense Saturation)
@@ -875,19 +875,18 @@ class SRDDErrorFinder:
         - But saturation pile-up is at THRESHOLD, not MAX
         - With threshold = 30% of max, pile-up is at 0.3*max, not 0.99*max!
 
-        v8.0 Method:
-        1. Build full histogram over entire value range
-        2. Find peaks by comparing each bin to its neighbors
-        3. Look for unusual peaks in TAIL regions (not center)
-        4. Saturation creates pile-up at threshold value (anywhere in tail)
+        v8.0.1 FIX: Look at EDGE bins directly
+        - Saturation clamps values to threshold, creating pile-up at max
+        - After saturation, max = threshold, so pile-up is at rightmost bin
+        - Compare edge bin count to expected exponential decay
 
-        Key insight: Normal distribution has smooth exponential tail decay.
-        Saturation creates a spike/pile-up at the clamp threshold.
+        Key metric: Edge Pile-up Ratio
+        = (count in rightmost bins) / (expected count based on neighbor decay)
         """
         print(f"\n{'='*60}")
         print("v8.0 LOCAL SCAN: HISTOGRAM PILE-UP DETECTION")
         print(f"{'='*60}")
-        print(f"Scanning for unusual peaks in activation histograms...")
+        print(f"Scanning for edge pile-up in activation histograms...")
 
         if self.layers is None:
             print("  Error: Cannot access model layers")
@@ -910,60 +909,59 @@ class SRDDErrorFinder:
                 hook.remove()
 
             if not outputs:
-                layer_results[layer_id] = {'max_tail_peak_ratio': 0.0}
+                layer_results[layer_id] = {'edge_pileup_ratio': 0.0}
                 continue
 
             data = outputs[0]
 
             # Handle edge cases
             if len(data) < 100 or np.std(data) < 1e-6:
-                layer_results[layer_id] = {'max_tail_peak_ratio': 0.0}
+                layer_results[layer_id] = {'edge_pileup_ratio': 0.0}
                 continue
 
             # Build histogram over full range
             hist, bin_edges = np.histogram(data, bins=num_bins)
 
-            # Find peaks: bins with count >> neighbors (local anomaly)
-            # Compare each bin to average of its 4 neighbors
-            peak_ratio = np.zeros(num_bins)
-            for i in range(2, num_bins - 2):
-                local_avg = (hist[i-2] + hist[i-1] + hist[i+1] + hist[i+2]) / 4
-                if local_avg > 10:  # Minimum neighbor count to avoid noise
-                    peak_ratio[i] = hist[i] / local_avg
+            # v8.0.1: Look at EDGE bins directly
+            # Saturation creates pile-up at the max value (rightmost bins)
+            # Compare rightmost bin to its neighbors
 
-            # Focus on TAIL regions (saturation pile-up is in tails, not center)
-            # Exclude center 50% where normal distribution peak is
-            tail_boundary = num_bins // 4
-            left_tail_idx = range(2, tail_boundary)
-            right_tail_idx = range(num_bins - tail_boundary, num_bins - 2)
+            # Right edge analysis (positive saturation)
+            # Last 3 bins: compare rightmost to average of 2nd and 3rd from right
+            right_edge = hist[-1]
+            right_neighbors = (hist[-3] + hist[-4]) / 2 if num_bins >= 4 else 1
+            right_ratio = right_edge / max(right_neighbors, 1)
 
-            left_tail_max = np.max(peak_ratio[2:tail_boundary]) if tail_boundary > 2 else 0
-            right_tail_max = np.max(peak_ratio[num_bins - tail_boundary:num_bins - 2]) if tail_boundary > 2 else 0
-            max_tail_peak = max(left_tail_max, right_tail_max)
+            # Left edge analysis (negative saturation)
+            left_edge = hist[0]
+            left_neighbors = (hist[2] + hist[3]) / 2 if num_bins >= 4 else 1
+            left_ratio = left_edge / max(left_neighbors, 1)
 
-            # Find location of max peak
-            if max_tail_peak > 1.5:
-                if left_tail_max >= right_tail_max:
-                    peak_idx = np.argmax(peak_ratio[2:tail_boundary]) + 2
-                else:
-                    peak_idx = np.argmax(peak_ratio[num_bins - tail_boundary:num_bins - 2]) + (num_bins - tail_boundary)
-                peak_value = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
-                peak_count = hist[peak_idx]
+            # Take max of left/right edge pile-up
+            edge_pileup_ratio = max(left_ratio, right_ratio)
+            is_right_edge = right_ratio >= left_ratio
+
+            # Get the edge value where pile-up occurs
+            if is_right_edge:
+                edge_value = bin_edges[-1]  # Max value
+                edge_count = right_edge
             else:
-                peak_value = 0
-                peak_count = 0
+                edge_value = bin_edges[0]  # Min value
+                edge_count = left_edge
 
             layer_results[layer_id] = {
-                'max_tail_peak_ratio': max_tail_peak,
-                'peak_value': peak_value,
-                'peak_count': peak_count,
+                'edge_pileup_ratio': edge_pileup_ratio,
+                'edge_value': edge_value,
+                'edge_count': int(edge_count),
+                'is_right_edge': is_right_edge,
                 'data_range': (np.min(data), np.max(data)),
             }
 
             # Print significant pile-ups
-            if max_tail_peak > 2.0 or (layer_id + 1) % 7 == 0 or layer_id == 0:
-                marker = " <-- PILE-UP!" if max_tail_peak > 2.0 else ""
-                print(f"  Layer {layer_id:2d}: max_tail_peak_ratio={max_tail_peak:.2f}, peak_at={peak_value:.1f}{marker}")
+            if edge_pileup_ratio > 2.0 or (layer_id + 1) % 7 == 0 or layer_id == 0:
+                marker = " <-- PILE-UP!" if edge_pileup_ratio > 2.0 else ""
+                side = "right" if is_right_edge else "left"
+                print(f"  Layer {layer_id:2d}: edge_ratio={edge_pileup_ratio:.2f} ({side}), max={edge_value:.1f}, count={int(edge_count)}{marker}")
 
         return layer_results
 
@@ -1119,7 +1117,7 @@ class SRDDErrorFinder:
         histogram_valid_range = (2, self.num_layers - 2)
         if histogram_results:
             pileup_arr = np.array([
-                histogram_results.get(i, {}).get('max_tail_peak_ratio', 0)
+                histogram_results.get(i, {}).get('edge_pileup_ratio', 0)
                 for i in range(self.num_layers)
             ])
 
