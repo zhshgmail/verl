@@ -1,8 +1,8 @@
 # Noise Injection Diagnostic Methodology
 
-**Version**: 4.0
+**Version**: 5.0.1
 **Date**: 2026-01-06
-**Status**: v4.0 adds DC Bias Probe; dead_zone 100% accurate; saturation/noise remain challenging
+**Status**: v5.0.1 Local Scan - dead_zone and noise 100% accurate; saturation remains challenging
 
 ---
 
@@ -267,44 +267,61 @@ finally:
 
 **100% accuracy** when reference system available.
 
-### 5.5 SRDD v4.0 Results (A100) - Edge Detection + DC Bias
+### 5.5 SRDD v5.0.1 Results (A100) - Local Scan
 
-v4.0 adds **DC Bias Probe** for saturation detection - injecting constant offset instead of random noise.
+v5.0.1 introduces **Local Scan** - measuring at the layer itself instead of final output.
 
-| GT Layer | Fault Type | Diagnosed | Result | Notes |
-|----------|------------|-----------|--------|-------|
-| 10 | dead_zone (0.3) | **10** | **EXACT MATCH** | Edge detection works |
-| 15 | saturation (0.2) | 7 | MISMATCH | DC bias probe didn't help |
-| 10 | saturation (0.3) | 27 | MISMATCH | Saturation signature masked |
-| 15 | noise (0.3) | 1 | MISMATCH | Propagation masking |
+| GT Layer | Fault Type | Diagnosed | Result | Method |
+|----------|------------|-----------|--------|--------|
+| 10 | dead_zone (0.3) | **10** | **EXACT MATCH** | Local Gain (gain=0.012) |
+| 15 | saturation (0.3) | - | NO FAULT | Gain still ~1.0 |
+| 10 | noise (0.3) | **10** | **EXACT MATCH** | Edge Detection (jump_z=29.96) |
 
-**v4.0 Features (Gemini collaboration)**:
+**v5.0.1 KEY BREAKTHROUGH (Gemini collaboration)**:
 
-1. **Edge Detection** (v3.3): Find fault ONSET via first derivative (local comparison)
-2. **DC Bias Probe** (v4.0): Inject constant offset to detect saturation
-   - Normal layer: output mean shifts proportionally
-   - Saturated layer: output mean shifts LESS (hit ceiling)
+The fundamental problem with v1-v4 was **propagation masking**: injecting at layer L[i] but measuring at final output means the signal passes through 18+ healthy layers that normalize/mask the anomaly.
 
-**Engineering Fixes (retained)**:
-1. Independent RNG for simulator noise (v3.2)
-2. Dynamic MAD floor for numerical stability (v3.2)
+**Solution**: LOCAL MEASUREMENT - measure at the layer itself, not at output.
 
-**Fault Type Detectability**:
+**Two Local Scan Methods**:
 
-| Fault Type | Detectability | Signature |
-|------------|---------------|-----------|
-| dead_zone | **HIGH (100%)** | Large mono jump at fault layer |
-| saturation | LOW | Weak edge signal, masked by downstream |
-| noise | LOW | Propagates uniformly to all layers |
+1. **Local Gain Scan** (dead_zone/saturation detection):
+   - Use `forward_pre_hook` to perturb INPUT to layer
+   - Capture OUTPUT immediately after
+   - gain = output_change_std / input_noise_std
+   - Dead zone: gain ≈ 0.02 (signal lost)
+   - Normal: gain ≈ 1.0 (linear transfer)
 
-**Key Limitation**:
+2. **Instability Scan** (noise detection):
+   - Run same input multiple times
+   - Compare layer OUTPUT between trials
+   - Noise fault: output differs across trials (hardware adds random noise)
+   - Normal: output identical (deterministic)
 
-In production, the fault type is **unknown**. We cannot assume it's always dead_zone. Current SRDD only reliably detects 1 of 3 common fault types.
+3. **Edge Detection** (noise source finding):
+   - Noise propagates downstream and amplifies
+   - Use first derivative of instability to find fault ONSET
+   - jump_z = z-score of (instability[i] - instability[i-1])
 
-**Future Directions**:
-- Intermediate layer capture (isolate fault effects)
-- Binary search for fault location
-- Alternative probe types (sign flip, scaling)
+**Fault Type Detectability (v5.0.1)**:
+
+| Fault Type | Detectability | Method | Signature |
+|------------|---------------|--------|-----------|
+| dead_zone | **HIGH (100%)** | Local Gain | gain << 1.0 |
+| noise | **HIGH (100%)** | Instability + Edge | First spike in instability |
+| saturation | LOW | Local Gain | gain ≈ 1.0 (not distinguishable) |
+
+**Saturation Limitation**:
+
+Saturation clamps values at ceiling, but:
+- Input perturbation may not push values near ceiling
+- Layer normalization absorbs the effect
+- Gain measurement shows ~1.0 even for saturated layers
+
+**Future Directions for Saturation**:
+- DC bias probe with larger magnitudes
+- Different input perturbation strategies
+- Non-linear response analysis
 
 ---
 
@@ -369,9 +386,9 @@ python scripts/srdd_error_finder.py \
 
 - Information Bottleneck: [arXiv:2106.12912](https://arxiv.org/abs/2106.12912)
 - Fisher Information for Quantization: BRECQ, FIMA-Q papers
-- Gemini collaboration for SRDD v2.0 improvements
+- Gemini collaboration for SRDD v2.0-v5.0.1 improvements
 
 ---
 
-**Document Status**: Validated on A100
+**Document Status**: v5.0.1 validated on A100 (2/3 fault types detected)
 **Last Updated**: 2026-01-06
