@@ -1,8 +1,8 @@
 # Hardware Error Source Localization via SRDD
 
-**Version**: 5.2
+**Version**: 5.3
 **Date**: 2026-01-06
-**Status**: ALL 3 fault types 100% accurate
+**Status**: Dense faults 100% accurate; Sparse fault limits identified
 
 ---
 
@@ -13,7 +13,7 @@
 | Approach | Requires Reference | Accuracy | Script |
 |----------|-------------------|----------|--------|
 | Fingerprint Correlation | Yes | 100% | `error_source_finder.py` |
-| **SRDD v5.2** | **No** | **100%** | `srdd_error_finder.py` |
+| **SRDD v5.3** | **No** | **100% (dense)** | `srdd_error_finder.py` |
 
 ---
 
@@ -34,11 +34,20 @@ python scripts/srdd_error_finder.py \
 
 Supported fault types: `dead_zone`, `saturation`, `noise`, `bias`, `spike`
 
+```bash
+# v5.3: Test sparse fault (e.g., 1% of neurons affected)
+python scripts/srdd_error_finder.py \
+    --model_path /path/to/model \
+    --ground_truth_layer 10 \
+    --fault_type dead_zone \
+    --sparsity 0.01
+```
+
 ---
 
-## SRDD v5.2 Detection Methods
+## SRDD v5.3 Detection Methods
 
-SRDD v5.2 uses three complementary detection methods, each targeting a specific fault type:
+SRDD v5.3 uses three complementary detection methods, each targeting a specific fault type:
 
 ### Method 1: Local Gain Scan (Dead Zone Detection)
 
@@ -118,15 +127,99 @@ To prevent interference between methods:
 
 ---
 
+## v5.3: Sparse Fault Analysis
+
+### Background (Gemini Collaboration)
+
+v5.2 achieves 100% accuracy on **dense faults** (affecting ALL tensor elements). However, real hardware faults are often **sparse/local**:
+
+- Single bad GPU core → affects only 1/128 of neurons (~0.8%)
+- Bad memory bank → affects specific address ranges
+- Bit flip in ALU → affects specific computation paths
+
+**Question**: How sparse can a fault be before SRDD misses it?
+
+### Sparse Fault Simulation
+
+v5.3 adds a `--sparsity` parameter to simulate local faults:
+
+```python
+# In HardwareFaultSimulator
+if self.sparsity < 1.0:
+    sparse_mask = torch.rand_like(hidden_states) < self.sparsity
+    hidden_states = torch.where(sparse_mask, faulty_states, original_states)
+```
+
+- `sparsity=1.0`: Dense fault (ALL elements affected) - default
+- `sparsity=0.01`: Sparse fault (only 1% of elements affected)
+
+### Sparse Fault Detection Results (A100, Qwen2.5-1.5B)
+
+| Fault Type | 100% | 10% | 5% | 1% |
+|-----------|------|-----|-----|-----|
+| **noise** | ✓ EXACT | ✓ EXACT | ✓ EXACT | ✓ EXACT |
+| **dead_zone** | ✓ EXACT | ✓ EXACT | ~33% fail | ✓ EXACT* |
+| **saturation** | ✓ EXACT | ✗ MISS | ~50% fail | ✗ MISS |
+
+*Note: 1% dead_zone success may be due to random mask placement
+
+### Analysis
+
+**Why noise detection is robust to sparsity:**
+- Instability scan measures **variance across trials**
+- Even sparse random noise creates detectable trial-to-trial variation
+- Edge detection finds the FIRST layer with instability spike
+
+**Why saturation detection fails on sparse faults:**
+- Kurtosis is a **global statistic** (mean of 4th moments)
+- Sparse clipping (1-10% of values) barely affects global kurtosis
+- The signal gets "averaged out" by the 90-99% healthy values
+
+**Why dead_zone is intermediate:**
+- At high sparsity (100%), gain drops dramatically (detected via Local Gain)
+- At low sparsity (<10%), sparse zeroing creates instability (detected via Noise method)
+- At medium sparsity (5%), neither signal is strong enough
+
+### Detection Threshold Summary
+
+| Fault Type | Reliable Detection | Method Used |
+|-----------|-------------------|-------------|
+| Noise | Down to **1%** sparsity | Instability Scan |
+| Dead Zone | Down to **~7%** sparsity | Local Gain / Instability |
+| Saturation | **Dense only** (100%) | Kurtosis Scan |
+
+### Known Limitations
+
+1. **Saturation blind spot**: Cannot detect sparse saturation (<10% of neurons)
+2. **Potential fix**: Use L∞ norm (max-error) instead of kurtosis for sparse clipping detection
+3. **ALU bugs**: Deterministic logic errors (e.g., `2*3=5`) are not detected by any current method
+
+### Future Work
+
+- Implement L∞ norm scan for sparse saturation detection
+- Add structured fault patterns (row/column dead, addressing errors)
+- Investigate deterministic ALU bug detection
+
+---
+
 ## Validation Results
 
-### v5.2 Results (A100)
+### v5.3 Dense Fault Results (A100, Qwen2.5-1.5B)
 
 | Fault Type | GT Layer | Diagnosed | Result | Method |
 |-----------|----------|-----------|--------|--------|
-| dead_zone | L10 | **L10** | EXACT MATCH | Local Gain (z=-38.6) |
-| saturation | L15 | **L15** | EXACT MATCH | Kurtosis Edge (drop_z=-541.2) |
-| noise | L10 | **L10** | EXACT MATCH | Instability Edge (jump_z=29.96) |
+| dead_zone | L10 | **L10** | EXACT MATCH | Local Gain (z=-27.3) |
+| saturation | L10 | **L10** | EXACT MATCH | Kurtosis Edge (drop_z=-434.2) |
+| noise | L10 | **L10** | EXACT MATCH | Instability Edge |
+
+### v5.3 Sparse Fault Results (A100, Qwen2.5-1.5B)
+
+| Fault Type | Sparsity | GT Layer | Diagnosed | Result |
+|-----------|----------|----------|-----------|--------|
+| noise | 1% | L10 | **L10** | EXACT MATCH |
+| dead_zone | 10% | L10 | **L10** | EXACT MATCH |
+| dead_zone | 5% | L10 | L11/L18 | UNRELIABLE |
+| saturation | 10% | L10 | L20 | MISS |
 
 ### Fault Type Summary
 
@@ -251,10 +344,10 @@ Using first derivative (edge detection) finds the **source** layer, not just aff
 
 ## References
 
-- Gemini collaboration for SRDD v2.0-v5.2 methodology
+- Gemini collaboration for SRDD v2.0-v5.3 methodology
 - Information Bottleneck: [arXiv:2106.12912](https://arxiv.org/abs/2106.12912)
 
 ---
 
-**Document Status**: v5.2 validated on A100 - ALL 3 fault types 100% accurate
+**Document Status**: v5.3 validated on A100 - Dense faults 100% accurate; Sparse fault limits documented
 **Last Updated**: 2026-01-06
