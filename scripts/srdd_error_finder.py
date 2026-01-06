@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
 """
-Self-Referential Differential Diagnosis (SRDD) v5.0.1 - Local Scan
+Self-Referential Differential Diagnosis (SRDD) v5.2 - Local Scan + Kurtosis
 
 This method finds hardware error sources WITHOUT a reference system (no GPU needed).
 
+v5.2 NEW: Kurtosis Scan for Saturation Detection (Gemini collaboration)
+- Why: LLM activations are naturally 'spiky' (High Kurtosis >> 0)
+- Saturation/clamping cuts off these spikes, causing massive Kurtosis DROP
+- Key advantage: Passive measurement, bypasses LayerNorm invariance issues
+
 v5.0.1 FIX: True Local Gain Measurement
-- Problem in v5.0: Still measuring E2E output change, not local layer response
-- Fix: Use forward_pre_hook to perturb INPUT to layer, measure OUTPUT change
+- Use forward_pre_hook to perturb INPUT to layer, measure OUTPUT change
 - This gives the true "local transfer function" (gain = output_change / input_noise)
 
 v5.0 KEY BREAKTHROUGH (Gemini collaboration):
-- Problem: E2E probing fails because signal passes through 18+ healthy layers
-  that normalize/mask/absorb the anomaly ("propagation masking")
-- Solution: LOCAL MEASUREMENT - measure at the layer itself, not at final output
-- "Inject at L(i), measure at L(i)" instead of "Inject at L(i), measure at L(End)"
+- Problem: E2E probing fails due to "propagation masking"
+- Solution: LOCAL MEASUREMENT at the layer itself, not at final output
 
-Two Local Scan Methods:
-1. Ambient Scan (Noise Detection): No injection, measure output variance at each layer
-   - Normal layer: variance ≈ 0
-   - Noise fault: variance >> 0 (isolated spike)
+Three Local Scan Methods:
+1. Instability Scan (Noise Detection): Run same input multiple times
+   - Normal layer: output identical across trials
+   - Noise fault: output differs (hardware adds random noise)
 
-2. Gain Scan (Saturation/Dead Zone Detection): Perturb input, measure output change
+2. Gain Scan (Dead Zone Detection): Perturb input, measure output change
    - Normal layer: gain ≈ 1.0 (linear transfer)
-   - Saturated layer: gain < 0.1 (signal compressed)
    - Dead zone layer: gain ≈ 0.0 (signal lost)
+
+3. Kurtosis Scan (Saturation Detection): Measure distribution shape
+   - Normal layer: kurtosis >> 0 (spiky distribution)
+   - Saturated layer: kurtosis ~ 0 (flattened, spikes clipped)
 
 v3.2-v4.0 Fixes (retained):
 1. Independent RNG for simulator noise
@@ -559,21 +564,80 @@ class SRDDErrorFinder:
 
         return layer_gains
 
+    def local_kurtosis_scan(
+        self,
+        prompts: List[str],
+    ) -> Dict[int, float]:
+        """
+        v5.2 Probe: Passive Kurtosis Scan (Saturation Detection)
+
+        Why Kurtosis works for saturation:
+        - LLM activations are naturally 'spiky' (High Kurtosis >> 0)
+        - Saturation/Clamping cuts off these spikes
+        - This causes massive Kurtosis DROP (from ~50 to ~1)
+
+        Key advantage: Passive measurement, bypasses LayerNorm invariance issues.
+        """
+        print(f"\n{'='*60}")
+        print("v5.2 LOCAL SCAN: KURTOSIS (Saturation Detection)")
+        print(f"{'='*60}")
+
+        if self.layers is None:
+            print("  Error: Cannot access model layers")
+            return {}
+
+        from scipy.stats import kurtosis
+
+        layer_kurtosis = {}
+        prompt = prompts[0]  # Single prompt is enough
+
+        for layer_id in range(self.num_layers):
+            captured_outputs = []
+
+            def capture_hook(module, input, output):
+                if isinstance(output, tuple):
+                    out = output[0]
+                else:
+                    out = output
+                captured_outputs.append(out.detach().float().cpu().numpy())
+
+            hook = self.layers[layer_id].register_forward_hook(capture_hook)
+
+            try:
+                self.get_output_logits(prompt)
+            finally:
+                hook.remove()
+
+            if captured_outputs:
+                # Calculate Kurtosis of the flat array
+                # Fisher=True means normal distribution has kurtosis=0
+                # LLM activations are typically Super-Gaussian (>> 0)
+                data = captured_outputs[0].flatten()
+                k = kurtosis(data, fisher=True)
+                layer_kurtosis[layer_id] = k
+
+            if (layer_id + 1) % 5 == 0 or layer_id == 0 or layer_id in [10, 15]:
+                print(f"  Layer {layer_id:2d}: kurtosis = {layer_kurtosis.get(layer_id, 0):.2f}")
+
+        return layer_kurtosis
+
     def diagnose_local(
         self,
         ambient_results: Dict[int, float],
         gain_results: Dict[int, float],
+        kurtosis_results: Dict[int, float] = None,
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        v5.0.1 Diagnosis using Local Scan results.
+        v5.2 Diagnosis using Local Scan results.
 
-        Key insight: Find the FIRST layer with significant anomaly, not the max.
-        - Noise faults propagate downstream, so first spike = source
-        - Saturation/dead zone: lowest gain = source
+        Three detection methods:
+        - Noise: Edge detection on instability (first spike = source)
+        - Dead zone: Local gain (gain << 1.0)
+        - Saturation: Kurtosis drop (spiky distribution flattened)
         """
         print(f"\n{'='*60}")
-        print("v5.0.1 LOCAL DIAGNOSIS")
+        print("v5.2 LOCAL DIAGNOSIS")
         print(f"{'='*60}")
 
         # Convert to arrays
@@ -591,10 +655,21 @@ class SRDDErrorFinder:
         z_instability = mad_zscore(instability_arr)
         z_gain = mad_zscore(gain_arr)
 
+        # v5.2: Process kurtosis if available
+        z_kurt = None
+        kurt_arr = None
+        if kurtosis_results:
+            kurt_arr = np.array([kurtosis_results.get(i, 0) for i in range(self.num_layers)])
+            # Log-space helps because kurtosis varies by orders of magnitude
+            log_kurt = np.log(np.maximum(kurt_arr, 1e-4))
+            z_kurt = mad_zscore(log_kurt)
+
         # Print statistics
         print(f"\nStatistics:")
         print(f"  Instability: max={np.max(instability_arr):.6f} at L{np.argmax(instability_arr)}")
         print(f"  Gain: min={np.min(gain_arr):.4f} at L{np.argmin(gain_arr)}")
+        if kurt_arr is not None:
+            print(f"  Kurtosis: min={np.min(kurt_arr):.2f} at L{np.argmin(kurt_arr)}, median={np.median(kurt_arr):.2f}")
 
         # EDGE DETECTION: Find where instability JUMPS (first derivative)
         # Layers before fault have instability ≈ 0
@@ -628,10 +703,17 @@ class SRDDErrorFinder:
                 score += z_instability[lid] * 0.5  # Lower score for downstream
                 reasons.append(f"NOISE_PROP(z={z_instability[lid]:.1f})")
 
-            # Low gain = saturation/dead zone
+            # Low gain = dead zone (signal lost)
             if z_gain[lid] < -2.0:
                 score += abs(z_gain[lid]) * 2.0
-                reasons.append(f"SAT/DEAD(z={z_gain[lid]:.1f})")
+                reasons.append(f"DEAD_ZONE(z={z_gain[lid]:.1f})")
+
+            # v5.2: Low kurtosis = saturation (spikes clipped)
+            # LLM activations are normally spiky (high kurtosis)
+            # Clamping flattens the distribution (low kurtosis)
+            if z_kurt is not None and z_kurt[lid] < -3.0:
+                score += abs(z_kurt[lid]) * 3.0  # High confidence signature
+                reasons.append(f"SATURATED(kurt_z={z_kurt[lid]:.1f})")
 
             candidates.append({
                 'layer': lid,
@@ -639,21 +721,30 @@ class SRDDErrorFinder:
                 'reasons': reasons,
                 'instability': instability_arr[lid],
                 'gain': gain_arr[lid],
+                'kurtosis': kurt_arr[lid] if kurt_arr is not None else 0,
                 'z_instability': z_instability[lid],
                 'z_gain': z_gain[lid],
+                'z_kurt': z_kurt[lid] if z_kurt is not None else 0,
             })
 
         # Sort by score
         candidates.sort(key=lambda x: x['score'], reverse=True)
 
         # Print results
-        print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<12}{'Gain':<10}{'Diagnosis'}")
-        print("-" * 60)
+        if kurt_arr is not None:
+            print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<10}{'Gain':<8}{'Kurt':<10}{'Diagnosis'}")
+            print("-" * 70)
+        else:
+            print(f"\n{'Layer':<6}{'Score':<8}{'Instab':<12}{'Gain':<10}{'Diagnosis'}")
+            print("-" * 60)
 
         for c in candidates[:10]:
             marker = " <-- GT" if c['layer'] == ground_truth_layer else ""
             diagnosis = ", ".join(c['reasons']) if c['reasons'] else "Normal"
-            print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
+            if kurt_arr is not None:
+                print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<10.4f}{c['gain']:<8.4f}{c['kurtosis']:<10.2f}{diagnosis}{marker}")
+            else:
+                print(f"{c['layer']:<6}{c['score']:<8.2f}{c['instability']:<12.6f}{c['gain']:<10.4f}{diagnosis}{marker}")
 
         # Final diagnosis
         top = candidates[0] if candidates[0]['score'] > 0 else None
@@ -698,13 +789,15 @@ class SRDDErrorFinder:
         ground_truth_layer: int = None,
     ) -> Dict:
         """
-        Run v5.0.1 Local Scan diagnosis pipeline.
+        Run v5.2 Local Scan diagnosis pipeline.
 
-        v5.0.1 Fix: True local gain measurement using forward_pre_hook
-        to perturb INPUT and measure OUTPUT change.
+        Three detection methods:
+        - Instability Scan: Noise detection (output changes between trials)
+        - Gain Scan: Dead zone detection (gain << 1.0)
+        - Kurtosis Scan: Saturation detection (spiky distribution flattened)
         """
         print(f"\n{'='*70}")
-        print("SRDD v5.0.1 LOCAL SCAN DIAGNOSIS")
+        print("SRDD v5.2 LOCAL SCAN DIAGNOSIS")
         print(f"{'='*70}")
         if ground_truth_layer is not None:
             print(f"Validation mode: Ground truth layer = {ground_truth_layer}")
@@ -713,13 +806,17 @@ class SRDDErrorFinder:
         # Step 1: Ambient scan (noise detection)
         ambient_results = self.local_ambient_scan(prompts, num_trials=3)
 
-        # Step 2: Gain scan (saturation/dead zone detection)
-        gain_results = self.local_gain_scan(prompts, noise_scale=1.0)
+        # Step 2: Gain scan (dead zone detection)
+        gain_results = self.local_gain_scan(prompts, noise_scale=0.1)
 
-        # Step 3: Diagnose
+        # Step 3: Kurtosis scan (saturation detection) - v5.2
+        kurtosis_results = self.local_kurtosis_scan(prompts)
+
+        # Step 4: Diagnose with all three methods
         results = self.diagnose_local(
             ambient_results=ambient_results,
             gain_results=gain_results,
+            kurtosis_results=kurtosis_results,
             ground_truth_layer=ground_truth_layer,
         )
 
