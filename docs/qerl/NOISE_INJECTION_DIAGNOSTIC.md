@@ -1,8 +1,8 @@
 # Noise Injection Diagnostic Methodology
 
-**Version**: 2.0
+**Version**: 3.1 (experimental)
 **Date**: 2026-01-06
-**Status**: Validated on A100
+**Status**: v2.0 validated for dead_zone faults; v3.1 in testing
 
 ---
 
@@ -266,6 +266,25 @@ finally:
 | 25 | 25 | 1.0000 | EXACT MATCH |
 
 **100% accuracy** when reference system available.
+
+### 5.5 SRDD v3.1 Experimental Results (A100)
+
+v3.1 introduces decoupled probes for noise and saturation detection:
+
+| GT Layer | Fault Type | Diagnosed | Result | Notes |
+|----------|------------|-----------|--------|-------|
+| 15 | noise (0.3) | - | FAILED | All instability = 0 |
+| 15 | saturation (0.2) | 8 | MISMATCH | MAD numerical instability |
+
+**Known Issues**:
+
+1. **Noise Detection**: The fault simulator uses `torch.randn_like()` which is seeded by `torch.manual_seed()`. This makes simulated noise deterministic, unlike real hardware noise which would be independent of software seeds. The instability probe correctly detects no variance across trials because there IS no variance in simulation.
+
+2. **Saturation Detection**: MAD-based Z-scores show numerical instability (z-scores like -128153244) when the median absolute deviation approaches zero.
+
+**v3.1 Status**: Experimental. The methodology is theoretically sound but requires:
+- Real hardware noise (not simulated) for Probe A validation
+- Robust MAD calculation with minimum deviation floor for Probe B
 
 ---
 
