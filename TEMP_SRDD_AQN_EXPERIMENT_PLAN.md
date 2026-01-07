@@ -2,6 +2,40 @@
 
 ## Date: 2026-01-08
 
+## FINAL RESULTS (v2.0 Experiment)
+
+### Results Summary
+| Config | Loss (mean±std) | vs Deadzone | p-value |
+|--------|-----------------|-------------|---------|
+| clean | 3.1777 ± 0.0000 | - | - |
+| deadzone_only | 12.8541 ± 0.0000 | baseline | - |
+| global_aqn | 12.8606 ± 0.0105 | +0.1% | - |
+| **targeted_aqn** | **12.8374 ± 0.0054** | **-0.1%** | **0.0126** |
+| healthy_aqn | 12.8577 ± 0.0148 | +0.0% | 0.7267 |
+
+### Key Findings
+1. **Targeted AQN is 0.18% better than Global AQN (p=0.0126, significant)**
+2. **Healthy AQN ≈ Global AQN (p=0.73, NOT significant)**
+3. All methods fail catastrophically (~304% vs clean)
+4. Control group suggests: benefit is from NOT adding noise to healthy layers
+
+### QA Expert Conclusion
+> "The most parsimonious explanation: Targeted AQN works slightly better because it doesn't degrade healthy layers further, NOT because it actively guides learning away from faults."
+
+### Limitations Identified
+- Single operating point (layer 10, threshold 0.01)
+- No mechanistic analysis (gradient flow, activation distributions)
+- All methods in catastrophic failure regime
+- Tiny practical effect (0.18%)
+
+### Recommended Next Steps
+1. Test milder faults (threshold 0.1, 0.2, 0.5)
+2. Add gradient flow analysis
+3. Test multiple faulty layers
+4. Add alternative baselines (layer pruning, etc.)
+
+---
+
 ## QA Review Issues to Fix
 
 ### 1. CRITICAL: Not a Training Experiment
