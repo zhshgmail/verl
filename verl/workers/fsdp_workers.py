@@ -833,7 +833,17 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 log_gpu_memory_usage("After offload actor optimizer during init", logger=logger)
 
         if self._is_actor:
-            actor_cfg = omega_conf_to_dataclass(self.config.actor)
+            # Extract hw_error_injection config BEFORE dataclass conversion
+            # (FSDPActorConfig doesn't have this field, so we need to pop it first)
+            hw_error_config = self.config.actor.get('hw_error_injection', None)
+
+            # Remove hw_error_injection from actor config before dataclass conversion
+            from omegaconf import OmegaConf
+            actor_config_copy = OmegaConf.to_container(self.config.actor, resolve=True)
+            actor_config_copy.pop('hw_error_injection', None)
+            actor_config_omega = OmegaConf.create(actor_config_copy)
+
+            actor_cfg = omega_conf_to_dataclass(actor_config_omega)
             self.actor = DataParallelPPOActor(
                 config=actor_cfg, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer
             )
@@ -841,7 +851,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # Setup HW error injection for training (deadzone, etc.)
             # This must match the configuration in vLLM rollout for consistency
             self._training_hw_error_injector = None
-            hw_error_config = self.config.actor.get('hw_error_injection', None)
             if hw_error_config is not None and hw_error_config.get('enabled', False):
                 from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
