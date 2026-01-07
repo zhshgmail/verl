@@ -650,17 +650,52 @@ TEST 3: AQN + Deadzone Interaction
 - ✅ 针对性AQN显著降低计算开销
 - ⏳ 需要完整RL训练验证效果差异
 
-### D.6 下一步
+### D.6 verl集成已完成 (2026-01-07)
 
-1. **集成到verl RL训练**:
-   - 修改 `fsdp_workers.py` 支持死区注入配置
-   - 修改 `vllm_rollout.py` 支持rollout阶段死区
+**已实现的代码修改**:
 
-2. **完整RL实验**:
+1. **`verl/utils/hw_error_injection.py`**:
+   - 新增 `deadzone` 错误类型
+   - 新增 `target_layers` 参数 (层级过滤)
+   - 新增 `deadzone_threshold` 参数 (默认1%)
+   - 更新hook处理死区逻辑 (将小值置零)
+
+2. **`verl/workers/fsdp_workers.py`**:
+   - 在actor训练forward中添加HWErrorInjector
+   - 使用与vLLM相同的配置结构保证一致性
+   - 在actor模块构建后注册hooks
+
+3. **`verl/workers/rollout/vllm_rollout/vllm_rollout.py`**:
+   - 添加 `target_layers` 和 `deadzone_threshold` 到hw_error配置
+   - 死区使用'output'注入点 (层输出)
+
+**配置示例**:
+```yaml
+# 在actor配置中添加
+actor:
+  hw_error_injection:
+    enabled: true
+    error_type: deadzone
+    target_layers: [15]  # SRDD检测到的层
+    deadzone_threshold: 0.01  # 1%
+
+# 在rollout配置中添加 (必须与actor一致!)
+rollout:
+  hw_error_injection_enabled: true
+  hw_error_injection_config:
+    error_type: deadzone
+    target_layers: [15]
+    deadzone_threshold: 0.01
+```
+
+### D.7 下一步
+
+1. **完整RL实验**:
    - 使用GSM8K + PPO训练
    - 对比OOD准确率而非loss
 
-3. **代码位置**:
-   - `verl/utils/deadzone_injection.py` - 统一死区注入模块
+2. **代码位置**:
+   - `verl/utils/hw_error_injection.py` - 统一HW错误注入模块 (含死区)
+   - `verl/utils/deadzone_injection.py` - 独立死区注入模块 (PoC用)
    - `scripts/test_deadzone_injection.py` - 单元测试
-   - `scripts/test_srdd_guided_aqn.py` - E2E测试
+   - `scripts/test_srdd_guided_aqn.py` - E2E测试 (非verl)
