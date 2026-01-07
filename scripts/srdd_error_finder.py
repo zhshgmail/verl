@@ -1174,6 +1174,21 @@ class SRDDErrorFinder:
         instability_jumps = np.diff(instability_arr, prepend=0)
         z_inst_jump = mad_zscore(instability_jumps)
 
+        # Check for GLOBAL RNG anomaly (all layers have elevated instability)
+        # This happens when NPU has uniform RNG variance difference vs GPU
+        global_rng_anomaly = False
+        avg_instability = np.mean(instability_arr[2:])  # Exclude boundary layers
+        instability_variance = np.var(instability_arr[2:])
+        if avg_instability > 0.1 and instability_variance < avg_instability * 0.5:
+            # High average instability but low variance = uniform RNG issue
+            global_rng_anomaly = True
+            print(f"  ⚠️  GLOBAL RNG ANOMALY DETECTED!")
+            print(f"      Average instability: {avg_instability:.4f}")
+            print(f"      Instability variance: {instability_variance:.4f}")
+            print(f"      All layers show similar non-determinism")
+            print(f"      → This may indicate UNIFORM RNG variance difference (e.g., NPU vs GPU)")
+            print(f"      → No single fault layer - entire device may have RNG calibration issue")
+
         # Find first layer with significant instability JUMP (edge detection)
         first_noisy_layer = None
         for lid in range(self.num_layers):
@@ -1192,12 +1207,15 @@ class SRDDErrorFinder:
             reasons = []
 
             # FIRST layer with high instability = noise source
+            # KEY FIX: When NOISE_SOURCE is found, it MUST rank first
+            # Don't let downstream propagation scores overwhelm the source
             if lid == first_noisy_layer:
-                score += 100.0  # High score for first noisy layer
+                score += 1e9  # Massive score - source always wins
                 reasons.append(f"NOISE_SOURCE(z={z_instability[lid]:.1f})")
-            elif z_instability[lid] > 2.0:
-                # Secondary: downstream noise propagation
-                score += z_instability[lid] * 0.5  # Lower score for downstream
+            elif first_noisy_layer is not None and z_instability[lid] > 2.0:
+                # Secondary: downstream noise propagation (much lower score)
+                # Only show this for context, but source should always rank first
+                score += 10.0 + (self.num_layers - lid)  # Later layers = lower score
                 reasons.append(f"NOISE_PROP(z={z_instability[lid]:.1f})")
 
             # Low gain = dead zone (signal lost)
@@ -1832,6 +1850,170 @@ class HardwareFaultSimulator:
             print(f"[FAULT SIMULATOR] Disabled fault on layer {self.fault_layer}")
 
 
+class NonDeterminismFaultSimulator:
+    """
+    Simulates non-deterministic computation faults at a specific layer.
+
+    This simulates scenarios where layer computation is NOT deterministic:
+    - amplified: Layer adds significant random variance to output
+    - suppressed: Layer adds minimal random variance
+    - inconsistent: Variance changes unpredictably between calls
+    - biased: Layer has systematic random offset
+    - correlated: Layer produces correlated random patterns
+
+    Use case: Detecting non-deterministic operators in NPU/accelerators.
+
+    Real-world scenarios this simulates:
+    - NPU matrix multiplication with non-deterministic reduction order
+    - Attention computation with parallel reduce race conditions
+    - Softmax with non-deterministic numerical handling
+    - Any operator that violates torch.use_deterministic_algorithms()
+
+    SRDD Detection Method:
+    - Non-determinism causes different output for same input
+    - SRDD's Instability Scan measures variance across multiple trials
+    - First layer with instability > 0 is flagged as "NOISE_SOURCE"
+    """
+
+    def __init__(
+        self,
+        model,
+        fault_layer: int,
+        variance_factor: float = 5.0,  # 1.0 = normal, 5.0 = 5x variance
+        fault_mode: str = "amplified",  # amplified, suppressed, inconsistent, biased, correlated
+        sparsity: float = 1.0,
+    ):
+        self.model = model
+        self.fault_layer = fault_layer
+        self.variance_factor = variance_factor
+        self.fault_mode = fault_mode
+        self.sparsity = sparsity
+        self.hook_handle = None
+        self.call_count = 0
+
+        # Independent RNG for the fault simulation
+        self.rng = torch.Generator(device=model.device)
+        self.rng.seed()
+
+        # Fixed sparse mask (created lazily)
+        self._fixed_sparse_mask = None
+
+        # Find target layer
+        if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+            self.target_module = model.model.layers[fault_layer]
+        else:
+            raise ValueError(f"Cannot find layer {fault_layer}")
+
+    def _fault_hook(self, module, input, output):
+        """Hook that injects wrong-variance noise."""
+        if isinstance(output, tuple):
+            hidden_states = output[0]
+            rest = output[1:]
+        else:
+            hidden_states = output
+            rest = None
+
+        self.call_count += 1
+
+        # Create sparse mask if needed
+        if self.sparsity < 1.0:
+            hidden_dim = hidden_states.shape[-1]
+            if self._fixed_sparse_mask is None or self._fixed_sparse_mask.shape[0] != hidden_dim:
+                self._fixed_sparse_mask = torch.rand(
+                    hidden_dim,
+                    device=hidden_states.device,
+                    generator=self.rng,
+                ) < self.sparsity
+
+        # Calculate the "correct" noise level (what normal RNG would produce)
+        base_std = hidden_states.std().item()
+
+        # Generate noise with WRONG variance based on fault mode
+        if self.fault_mode == "amplified":
+            # RNG produces too much variance (2x, 5x, etc.)
+            wrong_std = base_std * 0.01 * self.variance_factor
+            noise = torch.randn(
+                hidden_states.shape,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,
+            ) * wrong_std
+
+        elif self.fault_mode == "suppressed":
+            # RNG produces too little variance (near constant output)
+            wrong_std = base_std * 0.01 / self.variance_factor
+            noise = torch.randn(
+                hidden_states.shape,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,
+            ) * wrong_std
+
+        elif self.fault_mode == "inconsistent":
+            # RNG variance changes unpredictably between calls
+            # Note: torch.rand needs CPU tensor for random factor calculation
+            random_factor = torch.rand(1).item() * 5.0 + 0.1
+            wrong_std = base_std * 0.01 * random_factor
+            noise = torch.randn(
+                hidden_states.shape,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,
+            ) * wrong_std
+
+        elif self.fault_mode == "biased":
+            # RNG produces biased output (mean != 0)
+            wrong_std = base_std * 0.01
+            bias = base_std * 0.05 * self.variance_factor  # Systematic bias
+            noise = torch.randn(
+                hidden_states.shape,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,
+            ) * wrong_std + bias
+
+        elif self.fault_mode == "correlated":
+            # RNG produces correlated (non-independent) noise
+            base_noise = torch.randn(
+                (1, 1, hidden_states.shape[-1]),
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                generator=self.rng,
+            ) * base_std * 0.01
+            # Repeat the same noise pattern across batch/sequence
+            noise = base_noise.expand_as(hidden_states)
+
+        else:
+            raise ValueError(f"Unknown fault mode: {self.fault_mode}")
+
+        # Apply sparsity
+        if self._fixed_sparse_mask is not None:
+            sparse_mask = self._fixed_sparse_mask.expand_as(hidden_states)
+            faulty_states = hidden_states + noise
+            hidden_states = torch.where(sparse_mask, faulty_states, hidden_states)
+        else:
+            hidden_states = hidden_states + noise
+
+        if rest is not None:
+            return (hidden_states,) + rest
+        return hidden_states
+
+    def enable(self):
+        """Enable the non-determinism fault injection."""
+        if self.hook_handle is None:
+            self.hook_handle = self.target_module.register_forward_hook(self._fault_hook)
+            sparsity_str = f" (sparsity={self.sparsity*100:.1f}%)" if self.sparsity < 1.0 else ""
+            print(f"[NON-DETERMINISM] Enabled {self.fault_mode} mode on layer {self.fault_layer}{sparsity_str}")
+            print(f"  Variance factor: {self.variance_factor}x")
+
+    def disable(self):
+        """Disable the non-determinism fault injection."""
+        if self.hook_handle is not None:
+            self.hook_handle.remove()
+            self.hook_handle = None
+            print(f"[NON-DETERMINISM] Disabled. Total hook calls: {self.call_count}")
+
+
 def main():
     import argparse
 
@@ -1841,10 +2023,15 @@ def main():
     parser.add_argument("--ground_truth_layer", type=int, default=None,
                        help="Layer with simulated HW error (for validation)")
     parser.add_argument("--fault_type", type=str, default="dead_zone",
-                       choices=["saturation", "bias", "noise", "dead_zone", "spike"],
-                       help="Type of hardware fault to simulate")
+                       choices=["saturation", "bias", "noise", "dead_zone", "spike", "non_determinism"],
+                       help="Type of hardware fault to simulate (non_determinism for non-deterministic operators)")
     parser.add_argument("--fault_magnitude", type=float, default=0.3,
                        help="Magnitude of simulated fault (0.0-1.0)")
+    parser.add_argument("--nondeterminism_mode", type=str, default="amplified",
+                       choices=["amplified", "suppressed", "inconsistent", "biased", "correlated"],
+                       help="Non-determinism mode (only used when fault_type=non_determinism)")
+    parser.add_argument("--variance_factor", type=float, default=5.0,
+                       help="Variance multiplier for non-determinism (1.0=minimal, 5.0=significant)")
     parser.add_argument("--sparsity", type=float, default=1.0,
                        help="v5.3: Fraction of elements affected by fault (1.0=dense, 0.01=1%% sparse)")
     parser.add_argument("--absolute_saturation", action="store_true",
@@ -1882,20 +2069,37 @@ def main():
     fault_simulator = None
     if args.ground_truth_layer is not None:
         print(f"\n[VALIDATION MODE] Simulating {args.fault_type} fault on layer {args.ground_truth_layer}")
-        print(f"Fault magnitude: {args.fault_magnitude}")
-        if args.sparsity < 1.0:
-            print(f"Sparsity: {args.sparsity*100:.1f}% of elements affected (SPARSE FAULT)")
-        if args.absolute_saturation:
-            print(f"[v7.1] Using ABSOLUTE saturation threshold (tests dynamic threshold hypothesis)")
 
-        fault_simulator = HardwareFaultSimulator(
-            model=model,
-            fault_layer=args.ground_truth_layer,
-            fault_type=args.fault_type,
-            fault_magnitude=args.fault_magnitude,
-            sparsity=args.sparsity,
-            absolute_saturation=args.absolute_saturation,
-        )
+        if args.fault_type == "non_determinism":
+            # Use non-determinism fault simulator
+            print(f"Non-determinism mode: {args.nondeterminism_mode}")
+            print(f"Variance factor: {args.variance_factor}x")
+            if args.sparsity < 1.0:
+                print(f"Sparsity: {args.sparsity*100:.1f}% of elements affected (SPARSE FAULT)")
+
+            fault_simulator = NonDeterminismFaultSimulator(
+                model=model,
+                fault_layer=args.ground_truth_layer,
+                variance_factor=args.variance_factor,
+                fault_mode=args.nondeterminism_mode,
+                sparsity=args.sparsity,
+            )
+        else:
+            # Use standard hardware fault simulator
+            print(f"Fault magnitude: {args.fault_magnitude}")
+            if args.sparsity < 1.0:
+                print(f"Sparsity: {args.sparsity*100:.1f}% of elements affected (SPARSE FAULT)")
+            if args.absolute_saturation:
+                print(f"[v7.1] Using ABSOLUTE saturation threshold (tests dynamic threshold hypothesis)")
+
+            fault_simulator = HardwareFaultSimulator(
+                model=model,
+                fault_layer=args.ground_truth_layer,
+                fault_type=args.fault_type,
+                fault_magnitude=args.fault_magnitude,
+                sparsity=args.sparsity,
+                absolute_saturation=args.absolute_saturation,
+            )
         fault_simulator.enable()
 
     # Determine which method to use
