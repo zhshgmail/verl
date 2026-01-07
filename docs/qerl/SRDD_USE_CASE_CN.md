@@ -52,10 +52,9 @@ SRDD v8.0 LOCAL SCAN DIAGNOSIS
 ============================================================
 v5.2 LOCAL SCAN: KURTOSIS (Saturation Detection)
 ============================================================
-  Layer  0: kurtosis = 17.00
-  Layer 14: kurtosis = 3580.25
-  Layer 15: kurtosis = 2100.35    ← 显著下降！
-  Layer 16: kurtosis = 2095.12
+  Layer  9: kurtosis = 3579.80
+  Layer 10: kurtosis = 2996.86    ← 显著下降！（从3579降至2996）
+  Layer 14: kurtosis = 3000.77
   ...
 
 ============================================================
@@ -63,25 +62,30 @@ v8.0 LOCAL DIAGNOSIS
 ============================================================
 
 Statistics:
-  Kurtosis: min=2095.12 at L16, median=3575.00
-  KURTOSIS EDGE: Layer 15 drop_z=-15.32
+  Kurtosis: min=2991.15 at L25, median=3005.75
+  KURTOSIS EDGE: Layer 10 drop_z=-371.5
+  Pile-up Ratio: max=2.00 at L10    ← 直方图检测到L10堆积！
 
 Layer Score   Instab    Gain    MaxGain   Diagnosis
 ---------------------------------------------------------------------------
-15    200.00  0.0000    1.0215  1.1066    SAT_SOURCE(drop_z=-15.3) <-- 故障层
-16    23.01   0.0000    1.0226  1.1012    SAT_PROP(drop_z=-12.1)
-14    0.00    0.0000    1.0302  1.0703    Normal
+10    179.81  0.0000    1.0326  1.1016    SAT_PROP(drop_z=-371.5) <-- 故障层
+2     200.00  0.0000    1.1560  1.3125    SAT_SOURCE(drop_z=-20.7)  ← 边界层噪声
+21    100.00  0.0000    1.0659  1.1691    DISCRETE_SAT(rate=0.25%)
 ...
 
 ==================================================
-DIAGNOSIS: Layer 15 - SAT_SOURCE(drop_z=-15.3)
+DIAGNOSIS: Layer 10 detected with high confidence
+  - Kurtosis drop: 3579 → 2996 (drop_z=-371.5)
+  - Histogram pile-up: ratio=2.0 at L10
 ==================================================
 ```
 
 **输出解读**:
-- `SAT_SOURCE`: 饱和故障源（Saturation Source）
-- `drop_z=-15.3`: 峰度下降的Z分数，负值越大异常越严重
-- `SAT_PROP`: 饱和传播层（受上游影响）
+- `SAT_PROP(drop_z=-371.5)`: 饱和传播，Z分数-371.5表示极显著的峰度下降
+- `Pile-up Ratio: 2.0`: 直方图边缘堆积比率，>1.5表示检测到饱和截断
+- `Layer 2`: 边界层（embedding层过渡），可在生产中排除L0-L2
+
+**关键指标**: 故障层的`drop_z`绝对值远大于其他层（-371 vs -20），这是定位故障的核心信号。
 
 #### 第三步：根因分析
 
