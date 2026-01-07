@@ -223,7 +223,7 @@ def run_inference_comparison(
         apply_during='both',
     )
     injector = HWErrorInjector(deadzone_config)
-    injector.set_phase('inference')
+    injector.set_phase('both')  # 'inference' not valid, use 'both'
     num_hooks = injector.register_hooks(model, verbose=True)
     print(f"  Registered {num_hooks} deadzone hooks")
 
