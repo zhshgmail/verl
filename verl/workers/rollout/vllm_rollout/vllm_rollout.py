@@ -366,6 +366,7 @@ class vLLMAsyncRollout(BaseRollout):
                         )
 
             # HW ERROR INJECTION: Register hooks on model for simulating GPU/NPU errors
+            # Supports deadzone injection for MXFP4 simulation (SRDD-guided AQN)
             if hasattr(self, 'hw_error_injection_enabled') and self.hw_error_injection_enabled:
                 from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
@@ -379,18 +380,25 @@ class vLLMAsyncRollout(BaseRollout):
                     hw_config_dict = dict(hw_config_dict)
 
                 # Create injector and register hooks
+                # v2.0: Support target_layers and deadzone_threshold for SRDD-guided AQN
+                target_layers = hw_config_dict.get('target_layers', None)
+                if target_layers is not None:
+                    target_layers = list(target_layers)
+
                 hw_config = HWErrorConfig(
                     enabled=True,
                     error_scale=hw_config_dict.get('error_scale', 1e-5),
                     error_type=hw_config_dict.get('error_type', 'relative_gaussian'),
-                    injection_point=hw_config_dict.get('injection_point', 'input'),
+                    injection_point=hw_config_dict.get('injection_point', 'output'),  # output for deadzone
                     target_modules=list(hw_config_dict.get('target_modules', ['rmsnorm'])),
+                    target_layers=target_layers,  # e.g., [15] for SRDD-guided injection
                     apply_during=hw_config_dict.get('apply_during', 'rollout'),
+                    deadzone_threshold=hw_config_dict.get('deadzone_threshold', 0.01),
                 )
                 self.hw_error_injector = HWErrorInjector(hw_config)
                 self.hw_error_injector.set_phase('rollout')
                 num_hooks = self.hw_error_injector.register_hooks(model, verbose=True)
-                print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync")
+                print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync: {hw_config}")
 
     async def update_noise_injection_step(self, current_step: int):
         """Update current training step for noise injection schedule."""

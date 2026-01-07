@@ -46,8 +46,11 @@ class HWErrorConfig:
         error_type: str = 'relative_gaussian',
         injection_point: str = 'input',  # 'input' or 'output'
         target_modules: Optional[List[str]] = None,
+        target_layers: Optional[List[int]] = None,  # v2.0: Specific layer indices
         apply_during: str = 'both',  # 'rollout', 'training', 'both'
         seed: Optional[int] = None,
+        # Deadzone-specific config (for error_type='deadzone')
+        deadzone_threshold: float = 0.01,  # 1% of max value
     ):
         """
         Args:
@@ -56,10 +59,12 @@ class HWErrorConfig:
                 - 1e-6: ~BF16 precision level (very small)
                 - 1e-5: Moderate (recommended starting point)
                 - 1e-4: Aggressive (may cause training instability)
+                - For deadzone: not used (use deadzone_threshold instead)
             error_type: Type of error to inject
                 - 'relative_gaussian': error = randn() * |tensor| * scale
                 - 'absolute_gaussian': error = randn() * scale
                 - 'systematic_bias': error = sign(tensor) * scale (simulates rounding bias)
+                - 'deadzone': MXFP4 deadzone - values < threshold*max are zeroed
             injection_point: Where to inject error (like quant_compute fake quantization)
                 - 'input': Inject error to operator INPUT (before computation)
                           Like fake quantization: y = operator(x + error)
@@ -70,23 +75,33 @@ class HWErrorConfig:
             target_modules: List of module name patterns to target
                 - Default: ['rmsnorm'] - only RMSNorm layers
                 - Options: ['rmsnorm', 'down_proj', 'o_proj', 'linear']
+            target_layers: List of layer indices to target (None = all layers)
+                - Example: [15] - only layer 15
+                - Used with SRDD-guided injection
             apply_during: When to apply error injection
                 - 'rollout': Only during vLLM inference
                 - 'training': Only during FSDP training
                 - 'both': During both phases
             seed: Random seed for reproducibility (None = random)
+            deadzone_threshold: For deadzone error type, values with |x| < threshold * max(|x|)
+                              are set to zero (simulates MXFP4 quantization deadzone)
         """
         self.enabled = enabled
         self.error_scale = error_scale
         self.error_type = error_type
         self.injection_point = injection_point
         self.target_modules = target_modules or ['rmsnorm']
+        self.target_layers = target_layers  # None = all layers
         self.apply_during = apply_during
         self.seed = seed
+        self.deadzone_threshold = deadzone_threshold
 
     def __repr__(self):
+        if self.error_type == 'deadzone':
+            return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
+                    f"threshold={self.deadzone_threshold}, layers={self.target_layers})")
         return (f"HWErrorConfig(enabled={self.enabled}, scale={self.error_scale}, "
-                f"type={self.error_type}, targets={self.target_modules})")
+                f"type={self.error_type}, targets={self.target_modules}, layers={self.target_layers})")
 
 
 class HWErrorInjector:
@@ -138,6 +153,8 @@ class HWErrorInjector:
         Similar to quant_compute's pattern:
         - Quantization: x_quant = quant(x) -> dequant(x_quant) -> error baked in
         - Our approach: x_error = x + error_func(x) -> error added directly
+
+        For deadzone: returns the MODIFIED output directly (not error to add).
         """
         scale = self.config.error_scale
 
@@ -164,15 +181,69 @@ class HWErrorInjector:
             # Systematic bias (simulates rounding mode differences)
             error = torch.sign(output.float()) * scale
 
+        elif self.config.error_type == 'deadzone':
+            # MXFP4 deadzone: values below threshold are zeroed
+            # This REPLACES values, not adds error
+            # Return None to signal special handling needed
+            return None  # Special case handled in hook
+
         else:
             raise ValueError(f"Unknown error type: {self.config.error_type}")
 
         return error.to(output.dtype)
 
+    def _apply_deadzone(self, tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Apply MXFP4 deadzone effect to tensor.
+
+        Values with |x| < threshold * max(|x|) are set to zero.
+        This simulates quantization deadzone where small values
+        cannot be represented and are rounded to zero.
+
+        Args:
+            tensor: Input tensor
+
+        Returns:
+            Tensor with deadzone applied
+        """
+        threshold = self.config.deadzone_threshold
+        max_val = tensor.abs().max()
+        deadzone_threshold = threshold * max_val
+
+        # Create mask for values in deadzone
+        deadzone_mask = tensor.abs() < deadzone_threshold
+
+        # Zero out values in deadzone
+        result = tensor.masked_fill(deadzone_mask, 0.0)
+
+        return result, deadzone_mask
+
+    def _extract_layer_id(self, name: str) -> Optional[int]:
+        """Extract layer ID from module name like 'model.layers.15.mlp.down_proj'."""
+        import re
+        match = re.search(r'\.layers\.(\d+)\.', name)
+        if match:
+            return int(match.group(1))
+        return None
+
     def _is_target_module(self, name: str, module: nn.Module) -> bool:
         """Check if module should have error injection applied."""
         name_lower = name.lower()
         class_name = module.__class__.__name__.lower()
+
+        # First check layer filter if specified
+        if self.config.target_layers is not None:
+            layer_id = self._extract_layer_id(name)
+            if layer_id is None or layer_id not in self.config.target_layers:
+                return False
+
+        # For deadzone, we target the decoder layer output (the whole layer)
+        if self.config.error_type == 'deadzone':
+            # Match decoder layer modules like "model.layers.15" or "layers.15"
+            import re
+            if re.match(r'.*\.layers\.\d+$', name) or re.match(r'layers\.\d+$', name):
+                return True
+            return False
 
         for target in self.config.target_modules:
             target_lower = target.lower()
@@ -204,16 +275,42 @@ class HWErrorInjector:
 
             # Handle tuple outputs (some modules return multiple tensors)
             if isinstance(output, tuple):
-                # Only modify the first tensor (main output)
-                error = self._compute_error(output[0])
-                modified = output[0] + error
-                tensor_for_stats = output[0]
-                result = (modified,) + output[1:]
+                tensor_to_modify = output[0]
+                rest = output[1:]
+                is_tuple = True
             else:
-                error = self._compute_error(output)
-                modified = output + error
-                tensor_for_stats = output
-                result = modified
+                tensor_to_modify = output
+                rest = None
+                is_tuple = False
+
+            # Handle deadzone specially (it replaces values, not adds error)
+            if self.config.error_type == 'deadzone':
+                modified, deadzone_mask = self._apply_deadzone(tensor_to_modify)
+                num_zeroed = deadzone_mask.sum().item()
+                total = deadzone_mask.numel()
+                zero_rate = num_zeroed / total * 100
+
+                # Track statistics
+                if name not in self.stats:
+                    self.stats[name] = {'count': 0, 'zeroed': 0, 'total': 0, 'point': 'output', 'type': 'deadzone'}
+                self.stats[name]['count'] += 1
+                self.stats[name]['zeroed'] += num_zeroed
+                self.stats[name]['total'] += total
+
+                # Log first injection
+                if self.stats[name]['count'] == 1:
+                    print(f"[DEADZONE] First injection on {name}: "
+                          f"shape={tuple(tensor_to_modify.shape)}, "
+                          f"zeroed={num_zeroed}/{total} ({zero_rate:.1f}%), "
+                          f"threshold={self.config.deadzone_threshold}")
+
+                if is_tuple:
+                    return (modified,) + rest
+                return modified
+
+            # Standard error injection (add error to output)
+            error = self._compute_error(tensor_to_modify)
+            modified = tensor_to_modify + error
 
             # Track statistics
             if name not in self.stats:
@@ -229,13 +326,15 @@ class HWErrorInjector:
 
             # Log first injection per module for verification
             if self.stats[name]['count'] == 1:
-                rel_error = error_abs_mean / (tensor_for_stats.abs().mean().item() + 1e-10)
+                rel_error = error_abs_mean / (tensor_to_modify.abs().mean().item() + 1e-10)
                 print(f"[HW Error] First injection on {name}: "
-                      f"output_shape={tuple(tensor_for_stats.shape)}, "
+                      f"output_shape={tuple(tensor_to_modify.shape)}, "
                       f"mean_error={error_abs_mean:.2e}, "
                       f"rel_error={rel_error:.2e}")
 
-            return result
+            if is_tuple:
+                return (modified,) + rest
+            return modified
 
         return hook
 
@@ -347,11 +446,25 @@ class HWErrorInjector:
             print("[HW Error] No injection statistics available")
             return
 
-        print(f"\n[HW Error] Injection Statistics (scale={self.config.error_scale}):")
-        print("-" * 60)
-        for name, stat in sorted(self.stats.items()):
-            print(f"  {name}: count={stat['count']}, mean_error={stat['mean_error']:.2e}")
-        print("-" * 60)
+        if self.config.error_type == 'deadzone':
+            print(f"\n[DEADZONE] Injection Statistics (threshold={self.config.deadzone_threshold}):")
+            print("-" * 60)
+            total_zeroed = 0
+            total_values = 0
+            for name, stat in sorted(self.stats.items()):
+                zero_rate = stat['zeroed'] / stat['total'] * 100 if stat['total'] > 0 else 0
+                print(f"  {name}: count={stat['count']}, zeroed={stat['zeroed']:,}/{stat['total']:,} ({zero_rate:.1f}%)")
+                total_zeroed += stat['zeroed']
+                total_values += stat['total']
+            overall_rate = total_zeroed / total_values * 100 if total_values > 0 else 0
+            print("-" * 60)
+            print(f"  TOTAL: {total_zeroed:,}/{total_values:,} ({overall_rate:.1f}%) values zeroed")
+        else:
+            print(f"\n[HW Error] Injection Statistics (scale={self.config.error_scale}):")
+            print("-" * 60)
+            for name, stat in sorted(self.stats.items()):
+                print(f"  {name}: count={stat['count']}, mean_error={stat['mean_error']:.2e}")
+            print("-" * 60)
 
 
 def create_hw_error_injector(

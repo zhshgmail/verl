@@ -838,6 +838,34 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 config=actor_cfg, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer
             )
 
+            # Setup HW error injection for training (deadzone, etc.)
+            # This must match the configuration in vLLM rollout for consistency
+            self._training_hw_error_injector = None
+            hw_error_config = self.config.actor.get('hw_error_injection', None)
+            if hw_error_config is not None and hw_error_config.get('enabled', False):
+                from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
+
+                # Get the underlying model (not FSDP wrapper) for hook registration
+                if hasattr(self, 'actor_module'):
+                    target_model = self.actor_module
+                else:
+                    target_model = getattr(self.actor_module_fsdp, '_fsdp_wrapped_module', self.actor_module_fsdp)
+
+                config = HWErrorConfig(
+                    enabled=True,
+                    error_type=hw_error_config.get('error_type', 'relative_gaussian'),
+                    error_scale=hw_error_config.get('error_scale', 1e-5),
+                    target_layers=list(hw_error_config.get('target_layers', [])) or None,
+                    target_modules=list(hw_error_config.get('target_modules', ['rmsnorm'])),
+                    apply_during='training',
+                    deadzone_threshold=hw_error_config.get('deadzone_threshold', 0.01),
+                )
+                self._training_hw_error_injector = HWErrorInjector(config)
+                self._training_hw_error_injector.set_phase('training')
+                num_hooks = self._training_hw_error_injector.register_hooks(target_model, verbose=True)
+                if self.rank == 0:
+                    print(f"[HW Error] Registered {num_hooks} hooks on actor model for training: {config}")
+
         if self._is_rollout:
             self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
 
