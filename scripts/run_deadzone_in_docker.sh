@@ -125,6 +125,10 @@ python -m verl.trainer.main_ppo \
     data.train_batch_size=64 \
     data.max_prompt_length=256 \
     data.max_response_length=256 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    critic.ppo_micro_batch_size_per_gpu=4 \
+    critic.ppo_mini_batch_size=64 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
