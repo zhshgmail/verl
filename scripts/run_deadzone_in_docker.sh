@@ -129,6 +129,7 @@ python -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
+    critic.model.path="$MODEL_PATH" \
     critic.ppo_micro_batch_size_per_gpu=4 \
     critic.ppo_mini_batch_size=64 \
     critic.forward_micro_batch_size_per_gpu=4 \
