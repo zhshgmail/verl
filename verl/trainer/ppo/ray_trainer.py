@@ -950,13 +950,16 @@ class RayPPOTrainer:
             else:
                 print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
 
-        # Pass HW error injection config to rollout workers
+        # Pass HW error injection config to rollout workers AND actor workers (for training)
         if self.hw_error_injection_enabled:
             from omegaconf import open_dict
             with open_dict(self.config):
+                # Pass to rollout (vLLM inference)
                 self.config.actor_rollout_ref.rollout.hw_error_injection_enabled = True
                 self.config.actor_rollout_ref.rollout.hw_error_injection_config = self.hw_error_injection_config
-            print(f"[RayPPOTrainer] HW error injection config passed to rollout: {self.hw_error_injection_config}")
+                # Pass to actor (FSDP training) - this is the key for consistent injection!
+                self.config.actor_rollout_ref.actor.hw_error_injection = self.hw_error_injection_config
+            print(f"[RayPPOTrainer] HW error injection config passed to rollout AND actor: {self.hw_error_injection_config}")
 
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,
