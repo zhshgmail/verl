@@ -389,13 +389,20 @@ class RayPPOTrainer:
         self.hw_error_injection_enabled = self.config.trainer.get('hw_error_injection', {}).get('enabled', False)
         if self.hw_error_injection_enabled:
             hw_config = self.config.trainer.get('hw_error_injection', {})
+            # Get target_layers - convert OmegaConf ListConfig to Python list if needed
+            target_layers = hw_config.get('target_layers', None)
+            if target_layers is not None:
+                target_layers = list(target_layers)
+
             self.hw_error_injection_config = {
                 'enabled': True,
                 'error_scale': hw_config.get('error_scale', 1e-5),
                 'error_type': hw_config.get('error_type', 'relative_gaussian'),
                 'injection_point': hw_config.get('injection_point', 'input'),
                 'target_modules': list(hw_config.get('target_modules', ['rmsnorm'])),
+                'target_layers': target_layers,  # For SRDD-guided layer-specific injection
                 'apply_during': hw_config.get('apply_during', 'rollout'),
+                'deadzone_threshold': hw_config.get('deadzone_threshold', 0.01),
             }
             print(f"[RayPPOTrainer] HW error injection initialized: "
                   f"scale={self.hw_error_injection_config['error_scale']}, "
