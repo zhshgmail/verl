@@ -792,6 +792,8 @@ def main():
                 return float(obj)
             if isinstance(obj, (np.int32, np.int64)):
                 return int(obj)
+            if isinstance(obj, (np.bool_,)):
+                return bool(obj)
             if isinstance(obj, dict):
                 return {k: convert_numpy(v) for k, v in obj.items()}
             if isinstance(obj, list):
