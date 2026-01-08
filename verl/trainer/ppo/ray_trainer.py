@@ -383,6 +383,7 @@ class RayPPOTrainer:
 
             self.noise_injection_target_modules = noise_config.get('target_modules', ['post_attention_layernorm'])
             self.noise_injection_exclude_patterns = noise_config.get('exclude_patterns', ['input_layernorm'])
+            self.noise_injection_layer_types = noise_config.get('layer_types', [])  # ['rmsnorm'], ['linear'], or both
 
         # Initialize HW error injection config (for simulating GPU/NPU heterogeneous errors)
         # NOTE: This is module-level injection (forward hooks only, rollout phase only)
@@ -946,6 +947,7 @@ class RayPPOTrainer:
                 self.config.actor_rollout_ref.rollout.noise_injection_total_steps = self.noise_injection_total_steps
                 self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
                 self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
+                self.config.actor_rollout_ref.rollout.noise_injection_layer_types = self.noise_injection_layer_types
                 # Epoch-aware config (Option C)
                 self.config.actor_rollout_ref.rollout.noise_injection_epoch_aware = self.noise_injection_epoch_aware
                 self.config.actor_rollout_ref.rollout.noise_injection_epoch_ranges = list(self.noise_injection_epoch_ranges)

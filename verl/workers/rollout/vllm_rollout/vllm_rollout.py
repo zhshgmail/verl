@@ -149,6 +149,8 @@ class vLLMAsyncRollout(BaseRollout):
             # (Dense models: ALL RMSNorm, MoE models: post_attention_layernorm only)
             'target_modules': list(getattr(config, 'noise_injection_target_modules', [])) or None,
             'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', [])) or None,
+            # Layer types to target: ['rmsnorm'], ['linear'], or ['rmsnorm', 'linear']
+            'layer_types': list(getattr(config, 'noise_injection_layer_types', [])) or None,
             # Epoch-aware config (Option C)
             'epoch_aware': getattr(config, 'noise_injection_epoch_aware', False),
             'epoch_ranges': epoch_ranges,

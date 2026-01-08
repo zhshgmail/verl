@@ -223,6 +223,7 @@ class RolloutConfig(BaseConfig):
     noise_injection_total_steps: int = 1000
     noise_injection_target_modules: list = field(default_factory=lambda: ['post_attention_layernorm'])
     noise_injection_exclude_patterns: list = field(default_factory=lambda: ['input_layernorm'])
+    noise_injection_layer_types: list = field(default_factory=list)  # ['rmsnorm'], ['linear'], or both
     # Epoch-aware AQN config (Option C)
     noise_injection_epoch_aware: bool = False
     noise_injection_epoch_ranges: list = field(default_factory=list)
