@@ -70,12 +70,15 @@ class HWErrorConfig:
                 - 'deadzone': MXFP4 deadzone - values < threshold*max are zeroed
                 - 'mxfp4': Full MXFP4 fake quantization (E2M1K8B32)
             injection_point: Where to inject error (like quant_compute fake quantization)
-                - 'input': Inject error to operator INPUT (before computation)
+                - 'input': Inject error to operator INPUT activations (before computation)
                           Like fake quantization: y = operator(x + error)
-                          Simulates error in data representation
+                          Simulates error in activation representation (W16A4)
                 - 'output': Inject error to operator OUTPUT (after computation)
                           Like: y = operator(x) + error
                           Simulates error in operator's HW implementation
+                - 'weight': Inject error to WEIGHT tensors (W4A16 - QeRL style)
+                          Like: y = operator_with_quantized_weight(x)
+                          Simulates static weight quantization with FP16 activations
             target_modules: List of module name patterns to target
                 - Default: ['rmsnorm'] - only RMSNorm layers
                 - Options: ['rmsnorm', 'down_proj', 'o_proj', 'linear']
@@ -565,6 +568,77 @@ class HWErrorInjector:
 
         return hook
 
+    def _create_weight_quant_pre_hook(self, name: str) -> Callable:
+        """
+        Create forward pre-hook for WEIGHT quantization (W4A16 - QeRL style).
+
+        This applies MXFP4 quantization to weight tensors:
+        - Original: y = linear(x, W)
+        - With injection: y = linear(x, quant_dequant(W))
+
+        The weight is quantized before forward and restored after.
+        """
+        def hook(module: nn.Module, input: Tuple) -> None:
+            if not self._should_inject():
+                return
+
+            # Only quantize if module has weight attribute
+            if not hasattr(module, 'weight') or module.weight is None:
+                return
+
+            weight = module.weight.data
+
+            # Apply MXFP4 quantization to weight
+            if self.config.error_type == 'mxfp4' and self._mxfp4_quantize is not None:
+                # Save original weight for restoration
+                module._original_weight = weight.clone()
+
+                # Quantize weight
+                quantized_weight, quant_stats = self._apply_mxfp4(weight)
+                module.weight.data = quantized_weight
+
+                # Track statistics
+                if name not in self.stats:
+                    self.stats[name] = {
+                        'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
+                        'relative_error': 0.0, 'point': 'weight', 'type': 'mxfp4'
+                    }
+                self.stats[name]['count'] += 1
+                alpha = 0.1
+                self.stats[name]['mean_error'] = (
+                    alpha * quant_stats['mean_error'] +
+                    (1 - alpha) * self.stats[name]['mean_error']
+                )
+                self.stats[name]['max_error'] = max(
+                    self.stats[name]['max_error'], quant_stats['max_error']
+                )
+                self.stats[name]['relative_error'] = (
+                    alpha * quant_stats['relative_error'] +
+                    (1 - alpha) * self.stats[name]['relative_error']
+                )
+
+                # Log first injection
+                if self.stats[name]['count'] == 1:
+                    print(f"[MXFP4-W4A16] First WEIGHT quant on {name}: "
+                          f"shape={tuple(weight.shape)}, "
+                          f"mean_error={quant_stats['mean_error']:.2e}, "
+                          f"rel_error={quant_stats['relative_error']*100:.1f}%")
+
+        return hook
+
+    def _create_weight_restore_hook(self, name: str) -> Callable:
+        """
+        Create forward hook to restore original weight after forward pass.
+
+        This ensures gradients are computed on original (non-quantized) weights.
+        """
+        def hook(module: nn.Module, input: Tuple, output) -> None:
+            if hasattr(module, '_original_weight'):
+                module.weight.data = module._original_weight
+                del module._original_weight
+
+        return hook
+
     def register_hooks(self, model: nn.Module, verbose: bool = True) -> int:
         """
         Register forward hooks on target modules.
@@ -583,16 +657,25 @@ class HWErrorInjector:
         for name, module in model.named_modules():
             if self._is_target_module(name, module):
                 # Choose hook type based on injection point
-                if self.config.injection_point == 'input':
+                if self.config.injection_point == 'weight':
+                    # W4A16 mode: quantize weights, keep activations FP16 (QeRL style)
+                    # Pre-hook quantizes weight, post-hook restores it
+                    pre_hook = module.register_forward_pre_hook(self._create_weight_quant_pre_hook(name))
+                    post_hook = module.register_forward_hook(self._create_weight_restore_hook(name))
+                    self.hooks.append(pre_hook)
+                    self.hooks.append(post_hook)
+                elif self.config.injection_point == 'input':
+                    # W16A4 mode: quantize input activations (our previous approach)
                     # Pre-hook: inject error to input BEFORE operator processes it
                     # Like quant_compute's fake quantization: y = operator(fake_quant(x))
                     hook = module.register_forward_pre_hook(self._create_forward_pre_hook(name))
+                    self.hooks.append(hook)
                 else:
-                    # Post-hook: inject error to output AFTER operator processes it
-                    # Like: y = operator(x) + error
+                    # Output mode: inject error to output AFTER operator processes it
+                    # Post-hook: Like: y = operator(x) + error
                     hook = module.register_forward_hook(self._create_forward_hook(name))
+                    self.hooks.append(hook)
 
-                self.hooks.append(hook)
                 count += 1
 
                 if verbose and count <= 5:
