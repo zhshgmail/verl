@@ -1,8 +1,37 @@
 # MXFP4 + AQN Next Steps Plan
 
 **Date**: 2026-01-09
-**Status**: Active
+**Last Updated**: 2026-01-09
+**Status**: Ready for Execution
 **Reference**: Gemini Expert Review
+
+---
+
+## 0. Quick Start - Execution Commands
+
+```bash
+# SSH to A100 server
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+# Pull latest code (includes NVFP4 support!)
+git pull personal feature/npu-aqn-test
+
+# Clean up
+pkill -f "ray|vllm" || true
+
+# Run experiments in order:
+
+# 1. MXFP4 Exp 1D (ultra-small sigma on Linear)
+bash scripts/test_mxfp4_exp1d_tiny_sigma.sh 8
+
+# 2. MXFP4 Exp 1E (RMSNorm targeting - QeRL default)
+bash scripts/test_mxfp4_exp1e_rmsnorm.sh 8
+
+# 3. NVFP4 Experiment (21x lower error, should work!)
+bash scripts/test_nvfp4_w4a16_training.sh 8
+```
 
 ---
 
