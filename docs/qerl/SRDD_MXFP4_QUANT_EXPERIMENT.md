@@ -48,8 +48,14 @@ This allows us to:
 - **Precision**: BF16 → MXFP4 fake quantization
 
 ### 3.3 Libraries
-- **quant_compute**: `~/workspace/quant_compute` (MXFP4 fake quantization)
+- **mxfp4_quant**: `verl/utils/mxfp4_quant.py` (standalone MXFP4 fake quantization, no external deps)
 - **SRDD**: `scripts/srdd_error_finder.py` (diagnostic tool)
+
+### 3.4 Dependencies (all standard, should be pre-installed)
+- torch
+- scipy
+- numpy
+- transformers
 
 ---
 
@@ -214,11 +220,19 @@ ssh root@90.90.102.18
 docker exec -it verl-r3-test bash
 cd /home/z00637938/workspace/verl
 
-# Run experiment
+# Pull latest code
+git pull personal feature/npu-aqn-test
+
+# Run experiment (uses standalone mxfp4_quant, no external deps)
 python scripts/srdd_mxfp4_experiment.py \
     --model_path /data/z00637938/hub/Qwen2.5-1.5B-Instruct \
     --quant_type mxfp4 \
     --output results_mxfp4_srdd.json
+
+# Try different quantization modes:
+# --quant_type mxfp4      # Standard MXFP4
+# --quant_type mxfp4_sr   # With stochastic rounding
+# --quant_type mxfp4_2d   # 2D block quantization (32x32)
 ```
 
 ---
