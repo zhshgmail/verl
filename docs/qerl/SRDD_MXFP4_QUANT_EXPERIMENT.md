@@ -779,7 +779,48 @@ trainer.noise_injection:
 
 ---
 
-## 20. Execution Commands (2026-01-09)
+## 20. Experiment 1A Results: Model Collapse (2026-01-09)
+
+### 20.1 Critical Finding: AQN on Linear Layers is Too Destructive
+
+**Experiment 1A FAILED** - Model collapsed when AQN noise was applied to Linear layers with sigma=0.05.
+
+| Step | Score | Entropy | Status |
+|------|-------|---------|--------|
+| 0 | 7.88% | ~0.4 | Initial (pre-training) |
+| 16-18 | 65-69% | ~0.4 | Training normally |
+| **19** | **0%** | **9.5** | **COLLAPSED** |
+
+### 20.2 Analysis
+
+When sigma became non-zero (~step 17-19), the AQN noise on Linear layer weights caused:
+- **Entropy spike**: 0.4 → 9.5 (model outputting random tokens)
+- **Score crash**: 69% → 0% (all predictions wrong)
+- **Response length**: 94% hit max length (generating garbage)
+
+**Root cause**: sigma=0.05 relative noise on Linear weights is catastrophic because:
+1. Linear weights directly affect the model output (unlike RMSNorm which only normalizes)
+2. MXFP4 already has ~21% relative error - adding 5% more noise tips the model over
+3. The noise propagates through all subsequent layers
+
+### 20.3 Key Insight
+
+**QeRL's choice to target RMSNorm was deliberate** - it adds noise to normalization layers which:
+- Have a "smoothing" effect on the noise
+- Don't directly corrupt the learned representations
+- Allow gradual adaptation without catastrophic collapse
+
+### 20.4 Next Steps
+
+| Option | Sigma | Target | Rationale |
+|--------|-------|--------|-----------|
+| **1C** | 0.005 (10x smaller) | Linear | Test if smaller noise works |
+| **1D** | 0.001 (50x smaller) | Linear | Very conservative |
+| **1E** | 0.05 | RMSNorm | Return to QeRL default |
+
+---
+
+## 21. Execution Commands (2026-01-09)
 
 ```bash
 # SSH to A100 server
@@ -795,16 +836,9 @@ git pull personal feature/npu-aqn-test
 # Clean up zombie processes
 pkill -f "ray|vllm" || true
 
-# Experiment 1A: Target Alignment + 3 Epochs
-bash scripts/test_mxfp4_exp1a_aligned.sh 8
+# Experiment 1C: 10x Smaller Sigma for Linear Layers
+bash scripts/test_mxfp4_exp1c_small_sigma.sh 8
 
-# Experiment 1B: Scaled Sigma (if 1A > 70%)
-bash scripts/test_mxfp4_exp1b_scaled_sigma.sh 8
-
-# SRDD Comparison (after training completes)
-python scripts/srdd_checkpoint_comparison.py \
-    --baseline_ckpt /tmp/mxfp4_exp_baseline/checkpoints/global_step_58 \
-    --mxfp4_only_ckpt /tmp/mxfp4_exp_mxfp4only/checkpoints/global_step_58 \
-    --mxfp4_aqn_ckpt /tmp/mxfp4_exp1a_aligned/checkpoints/global_step_174 \
-    --output srdd_comparison_exp1a.json
+# Experiment 1D: 50x Smaller Sigma (if 1C still fails)
+# bash scripts/test_mxfp4_exp1d_tiny_sigma.sh 8
 ```
