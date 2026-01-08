@@ -36,17 +36,21 @@ import torch.nn.functional as F
 
 # Add paths
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, '/home/zheng/workspace/quant_compute')
 
-# Try to import quant_compute
+# Import standalone MXFP4 implementation (no external dependencies)
 try:
-    from quant_cy_npu import QType, quant_dequant_float
-    QUANT_AVAILABLE = True
-    print("[OK] quant_compute library loaded")
+    from verl.utils.mxfp4_quant import (
+        mxfp4_quantize,
+        MXFP4Config,
+        MXFP4QuantHook,
+        analyze_mxfp4_sensitivity,
+    )
+    MXFP4_AVAILABLE = True
+    print("[OK] verl.utils.mxfp4_quant loaded")
 except ImportError as e:
-    QUANT_AVAILABLE = False
-    print(f"[WARN] quant_compute not available: {e}")
-    print("[WARN] Will use simulated quantization instead")
+    MXFP4_AVAILABLE = False
+    print(f"[WARN] mxfp4_quant not available: {e}")
+    print("[WARN] Will use basic simulation")
 
 
 @dataclass
@@ -68,10 +72,16 @@ class FakeQuantHook:
         self.total_error = 0.0
         self.total_elements = 0
 
-        if QUANT_AVAILABLE:
-            self.Q = QType(qtype)
+        # Configure based on qtype
+        if MXFP4_AVAILABLE:
+            self.config = MXFP4Config(
+                stochastic_rounding='sr' in qtype,
+                truncation_free='tf' in qtype,
+                block_h=32 if '2d' in qtype else 1,
+                block_w=32,
+            )
         else:
-            self.Q = None
+            self.config = None
 
     def __call__(self, module, input, output):
         if isinstance(output, tuple):
@@ -79,12 +89,12 @@ class FakeQuantHook:
         else:
             hidden = output
 
-        if self.Q is not None:
-            # Use quant_compute library
-            hidden_quant = quant_dequant_float(hidden, self.Q, force_py=self.force_py)
+        if self.config is not None:
+            # Use standalone MXFP4 implementation
+            hidden_quant = mxfp4_quantize(hidden, config=self.config)
         else:
-            # Simulated MXFP4 quantization (fallback)
-            hidden_quant = self._simulated_mxfp4(hidden)
+            # Basic fallback simulation
+            hidden_quant = self._basic_mxfp4_fallback(hidden)
 
         # Track quantization error
         error = (hidden_quant - hidden).abs().mean().item()
@@ -96,11 +106,8 @@ class FakeQuantHook:
             return (hidden_quant,) + output[1:]
         return hidden_quant
 
-    def _simulated_mxfp4(self, x: torch.Tensor) -> torch.Tensor:
-        """Fallback: simulate MXFP4 quantization (E2M1, block size 32)"""
-        # MXFP4 has limited precision: values map to {0, 0.5, 1, 1.5, 2, 3, 4, 6}
-        # with shared exponent per block of 32
-
+    def _basic_mxfp4_fallback(self, x: torch.Tensor) -> torch.Tensor:
+        """Basic fallback when mxfp4_quant module is not available"""
         shape = x.shape
         x_flat = x.view(-1, 32) if x.numel() >= 32 else x.view(1, -1)
 
@@ -108,21 +115,17 @@ class FakeQuantHook:
         max_abs = x_flat.abs().max(dim=-1, keepdim=True)[0]
         shared_exp = torch.floor(torch.log2(max_abs + 1e-10))
 
-        # Scale to MXFP4 range
+        # Scale and quantize
         x_scaled = x_flat / (2 ** shared_exp)
-
-        # Quantize mantissa (E2M1 = 4 values per sign)
-        # Values: 0, 0.5, 1, 1.5 (subnormal) and 1, 1.5, 2, 3 (normal)
         x_sign = torch.sign(x_scaled)
         x_abs = x_scaled.abs()
 
-        # Simplified MXFP4 rounding
+        # Simple MXFP4-like rounding
         x_quant = torch.round(x_abs * 2) / 2
-        x_quant = x_quant.clamp(0, 6)  # Max representable value
+        x_quant = x_quant.clamp(0, 6)
 
         # Dequantize
         x_dequant = x_sign * x_quant * (2 ** shared_exp)
-
         return x_dequant.view(shape)
 
     def get_avg_error(self) -> float:
@@ -702,10 +705,16 @@ class CombinedQuantAQNHook:
         self.aqn_gamma = aqn_gamma
         self.force_py = force_py
 
-        if qtype and QUANT_AVAILABLE:
-            self.Q = QType(qtype)
+        # Configure MXFP4 if quantization requested
+        if qtype and MXFP4_AVAILABLE:
+            self.config = MXFP4Config(
+                stochastic_rounding='sr' in qtype,
+                truncation_free='tf' in qtype,
+                block_h=32 if '2d' in qtype else 1,
+                block_w=32,
+            )
         else:
-            self.Q = None
+            self.config = None
 
     def __call__(self, module, input, output):
         if isinstance(output, tuple):
@@ -722,18 +731,18 @@ class CombinedQuantAQNHook:
 
         # Step 2: Apply quantization
         if self.qtype:
-            if self.Q is not None:
-                result = quant_dequant_float(result, self.Q, force_py=self.force_py)
+            if self.config is not None:
+                result = mxfp4_quantize(result, config=self.config)
             else:
-                # Fallback simulation
-                result = self._simulated_mxfp4(result)
+                # Basic fallback
+                result = self._basic_mxfp4_fallback(result)
 
         if isinstance(output, tuple):
             return (result,) + output[1:]
         return result
 
-    def _simulated_mxfp4(self, x: torch.Tensor) -> torch.Tensor:
-        """Fallback MXFP4 simulation"""
+    def _basic_mxfp4_fallback(self, x: torch.Tensor) -> torch.Tensor:
+        """Basic fallback MXFP4 simulation"""
         shape = x.shape
         x_flat = x.view(-1, 32) if x.numel() >= 32 else x.view(1, -1)
 
