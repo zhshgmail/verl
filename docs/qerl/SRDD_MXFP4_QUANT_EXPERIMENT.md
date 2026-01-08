@@ -424,19 +424,34 @@ Once problematic layers are identified, compare two approaches:
 
 ### 13.4 Conclusion for Qwen2.5-1.5B + MXFP4
 
-**Result: 100% of layers are problematic → MXFP4 not viable**
+**Result: 100% of layers are problematic → Global AQN is justified**
 
-| Option | Feasibility | Notes |
-|--------|-------------|-------|
-| AQN Training | ❌ Not viable | All layers need AQN = same as global AQN |
-| Mixed Precision | ❌ Not viable | All layers need FP16 = defeats quantization |
-| **MXFP8** | ✅ **Try this** | Higher precision format |
-| **Different Model** | ✅ **Try this** | Some models may be more MXFP4-friendly |
+| Finding | Implication |
+|---------|-------------|
+| All layers have SQNR < 20 dB | Global AQN correctly targets all layers |
+| All layers have deadzone > 5% | AQN noise helps overcome quantization deadzone |
+| No healthy layers exist | Targeted AQN = Global AQN (explains earlier result) |
+| Mean relative error ~36% | AQN gamma should be calibrated to this error level |
+
+**Why This is a Useful Result:**
+
+1. **Validates Global AQN**: SRDD confirms every layer needs noise injection - global AQN is not wasteful
+2. **Explains earlier experiment**: Targeted AQN (Layer 0 only) showed only 1.41% improvement because the kurtosis-based detection missed 27 other problematic layers
+3. **Provides calibration data**: SQNR ~17 dB and deadzone ~23% can inform AQN gamma selection
+
+**Recommended AQN Configuration for MXFP4:**
+```python
+# Based on scan results:
+# - Mean relative error: 36%
+# - Mean deadzone: 23%
+# Suggested gamma range: 0.1 - 0.3 (proportional to error)
+aqn_gamma = 0.2  # Higher than previous 0.01 experiments
+```
 
 **Next Steps:**
-1. Test MXFP8 on Qwen2.5-1.5B
-2. Test MXFP4 on different models (DeepSeek-R1-Distill-Qwen-1.5B)
-3. Investigate if activation statistics differ across model architectures
+1. Run full RL training with global AQN (gamma=0.1-0.3) on MXFP4
+2. Compare training stability and final reward
+3. Test if MXFP8 reduces the number of problematic layers (enabling targeted AQN)
 
 ---
 
