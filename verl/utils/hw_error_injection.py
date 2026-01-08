@@ -54,6 +54,8 @@ class HWErrorConfig:
         # MXFP4-specific config (for error_type='mxfp4')
         mxfp4_stochastic_rounding: bool = False,
         mxfp4_block_2d: bool = False,
+        # NVFP4-specific config (for error_type='nvfp4')
+        nvfp4_stochastic_rounding: bool = False,
     ):
         """
         Args:
@@ -68,7 +70,8 @@ class HWErrorConfig:
                 - 'absolute_gaussian': error = randn() * scale
                 - 'systematic_bias': error = sign(tensor) * scale (simulates rounding bias)
                 - 'deadzone': MXFP4 deadzone - values < threshold*max are zeroed
-                - 'mxfp4': Full MXFP4 fake quantization (E2M1K8B32)
+                - 'mxfp4': Full MXFP4 fake quantization (E2M1K8B32, ~21% error)
+                - 'nvfp4': NVFP4 fake quantization (E4M3 scale, ~1% error, QeRL compatible)
             injection_point: Where to inject error (like quant_compute fake quantization)
                 - 'input': Inject error to operator INPUT activations (before computation)
                           Like fake quantization: y = operator(x + error)
@@ -107,6 +110,7 @@ class HWErrorConfig:
         self.deadzone_threshold = deadzone_threshold
         self.mxfp4_stochastic_rounding = mxfp4_stochastic_rounding
         self.mxfp4_block_2d = mxfp4_block_2d
+        self.nvfp4_stochastic_rounding = nvfp4_stochastic_rounding
 
     def __repr__(self):
         if self.error_type == 'deadzone':
@@ -115,6 +119,10 @@ class HWErrorConfig:
         if self.error_type == 'mxfp4':
             return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"sr={self.mxfp4_stochastic_rounding}, 2d={self.mxfp4_block_2d}, "
+                    f"targets={self.target_modules}, layers={self.target_layers})")
+        if self.error_type == 'nvfp4':
+            return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
+                    f"sr={self.nvfp4_stochastic_rounding}, "
                     f"targets={self.target_modules}, layers={self.target_layers})")
         return (f"HWErrorConfig(enabled={self.enabled}, scale={self.error_scale}, "
                 f"type={self.error_type}, targets={self.target_modules}, layers={self.target_layers})")
@@ -168,6 +176,21 @@ class HWErrorInjector:
                 logger.info(f"[MXFP4] Initialized MXFP4 quantizer: sr={config.mxfp4_stochastic_rounding}, 2d={config.mxfp4_block_2d}, injection={config.injection_point}")
             except ImportError as e:
                 raise ImportError(f"MXFP4 error type requires verl.utils.mxfp4_quant: {e}")
+
+        # Initialize NVFP4 quantizer if needed
+        self._nvfp4_quantize = None
+        if config.error_type == 'nvfp4':
+            try:
+                from verl.utils.nvfp4_quant import nvfp4_quantize, NVFP4Config
+                self._nvfp4_config = NVFP4Config(
+                    stochastic_rounding=config.nvfp4_stochastic_rounding,
+                )
+                self._nvfp4_quantize = nvfp4_quantize
+                if config.injection_point == 'output':
+                    logger.warning("[NVFP4] injection_point='output' will apply quant AFTER computation")
+                logger.info(f"[NVFP4] Initialized NVFP4 quantizer: sr={config.nvfp4_stochastic_rounding}, injection={config.injection_point}")
+            except ImportError as e:
+                raise ImportError(f"NVFP4 error type requires verl.utils.nvfp4_quant: {e}")
 
     def set_phase(self, phase: str):
         """Set current execution phase for conditional injection."""
@@ -225,6 +248,11 @@ class HWErrorInjector:
 
         elif self.config.error_type == 'mxfp4':
             # Full MXFP4 fake quantization
+            # Return None to signal special handling needed
+            return None  # Special case handled in hook
+
+        elif self.config.error_type == 'nvfp4':
+            # Full NVFP4 fake quantization
             # Return None to signal special handling needed
             return None  # Special case handled in hook
 
@@ -291,6 +319,40 @@ class HWErrorInjector:
 
         return quantized, stats
 
+    def _apply_nvfp4(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+        """
+        Apply NVFP4 fake quantization to tensor.
+
+        NVFP4 features:
+        - 16-element blocks (vs 32 for MXFP4)
+        - E4M3 shared exponent (higher precision than MXFP4's E8M0)
+        - ~1% relative error (vs ~21% for MXFP4)
+
+        This is the format used by QeRL and is more suitable for
+        quantization-aware training.
+
+        Args:
+            tensor: Input tensor
+
+        Returns:
+            Tuple of (quantized tensor, stats dict)
+        """
+        if self._nvfp4_quantize is None:
+            raise RuntimeError("NVFP4 quantizer not initialized")
+
+        # Apply NVFP4 quantization
+        quantized = self._nvfp4_quantize(tensor, config=self._nvfp4_config)
+
+        # Compute error statistics
+        error = (quantized - tensor).abs()
+        stats = {
+            'mean_error': error.mean().item(),
+            'max_error': error.max().item(),
+            'relative_error': (error / (tensor.abs() + 1e-10)).mean().item(),
+        }
+
+        return quantized, stats
+
     def _extract_layer_id(self, name: str) -> Optional[int]:
         """Extract layer ID from module name like 'model.layers.15.mlp.down_proj'."""
         import re
@@ -318,13 +380,13 @@ class HWErrorInjector:
                 return True
             return False
 
-        # For MXFP4, use target_modules (default to 'linear' for all linear layers)
+        # For MXFP4/NVFP4, use target_modules (default to 'linear' for all linear layers)
         # This is different from deadzone which targets whole decoder layers
-        if self.config.error_type == 'mxfp4':
+        if self.config.error_type in ('mxfp4', 'nvfp4'):
             # Default to linear layers if not specified
             targets = self.config.target_modules
             if not targets or targets == ['rmsnorm']:
-                # Override default for MXFP4 - should target linear layers
+                # Override default for MXFP4/NVFP4 - should target linear layers
                 targets = ['linear']
 
             for target in targets:
@@ -401,15 +463,18 @@ class HWErrorInjector:
                     return (modified,) + rest
                 return modified
 
-            # Handle MXFP4 specially (full fake quantization)
-            if self.config.error_type == 'mxfp4':
-                modified, quant_stats = self._apply_mxfp4(tensor_to_modify)
+            # Handle MXFP4/NVFP4 specially (full fake quantization)
+            if self.config.error_type in ('mxfp4', 'nvfp4'):
+                if self.config.error_type == 'mxfp4':
+                    modified, quant_stats = self._apply_mxfp4(tensor_to_modify)
+                else:
+                    modified, quant_stats = self._apply_nvfp4(tensor_to_modify)
 
                 # Track statistics
                 if name not in self.stats:
                     self.stats[name] = {
                         'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
-                        'relative_error': 0.0, 'point': 'output', 'type': 'mxfp4'
+                        'relative_error': 0.0, 'point': 'output', 'type': self.config.error_type
                     }
                 self.stats[name]['count'] += 1
                 # Exponential moving average for error tracking
@@ -487,15 +552,18 @@ class HWErrorInjector:
             if not isinstance(first_input, torch.Tensor):
                 return input
 
-            # Handle MXFP4 specially (full fake quantization)
-            if self.config.error_type == 'mxfp4':
-                modified_input, quant_stats = self._apply_mxfp4(first_input)
+            # Handle MXFP4/NVFP4 specially (full fake quantization)
+            if self.config.error_type in ('mxfp4', 'nvfp4'):
+                if self.config.error_type == 'mxfp4':
+                    modified_input, quant_stats = self._apply_mxfp4(first_input)
+                else:
+                    modified_input, quant_stats = self._apply_nvfp4(first_input)
 
                 # Track statistics
                 if name not in self.stats:
                     self.stats[name] = {
                         'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
-                        'relative_error': 0.0, 'point': 'input', 'type': 'mxfp4'
+                        'relative_error': 0.0, 'point': 'input', 'type': self.config.error_type
                     }
                 self.stats[name]['count'] += 1
                 alpha = 0.1
@@ -588,20 +656,27 @@ class HWErrorInjector:
 
             weight = module.weight.data
 
-            # Apply MXFP4 quantization to weight
-            if self.config.error_type == 'mxfp4' and self._mxfp4_quantize is not None:
+            # Apply MXFP4/NVFP4 quantization to weight
+            if self.config.error_type in ('mxfp4', 'nvfp4'):
+                quantizer = self._mxfp4_quantize if self.config.error_type == 'mxfp4' else self._nvfp4_quantize
+                if quantizer is None:
+                    return
+
                 # Save original weight for restoration
                 module._original_weight = weight.clone()
 
                 # Quantize weight
-                quantized_weight, quant_stats = self._apply_mxfp4(weight)
+                if self.config.error_type == 'mxfp4':
+                    quantized_weight, quant_stats = self._apply_mxfp4(weight)
+                else:
+                    quantized_weight, quant_stats = self._apply_nvfp4(weight)
                 module.weight.data = quantized_weight
 
                 # Track statistics
                 if name not in self.stats:
                     self.stats[name] = {
                         'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
-                        'relative_error': 0.0, 'point': 'weight', 'type': 'mxfp4'
+                        'relative_error': 0.0, 'point': 'weight', 'type': self.config.error_type
                     }
                 self.stats[name]['count'] += 1
                 alpha = 0.1
@@ -721,8 +796,9 @@ class HWErrorInjector:
             overall_rate = total_zeroed / total_values * 100 if total_values > 0 else 0
             print("-" * 60)
             print(f"  TOTAL: {total_zeroed:,}/{total_values:,} ({overall_rate:.1f}%) values zeroed")
-        elif self.config.error_type == 'mxfp4':
-            print(f"\n[MXFP4] Injection Statistics:")
+        elif self.config.error_type in ('mxfp4', 'nvfp4'):
+            quant_type = self.config.error_type.upper()
+            print(f"\n[{quant_type}] Injection Statistics:")
             print("-" * 60)
             total_count = 0
             avg_rel_error = 0.0

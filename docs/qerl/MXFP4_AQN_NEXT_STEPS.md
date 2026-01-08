@@ -215,7 +215,50 @@ Training with RMSNorm noise:
 |------|------------|--------|------------|
 | 1D still collapses | High (80%) | Low | Already have 1E ready |
 | 1E doesn't improve | Medium (40%) | Medium | Try sigma tuning, more epochs |
-| MXFP4 error too high | Low (20%) | High | Consider MXFP8 or mixed precision |
+| MXFP4 error too high | Low (20%) | High | **Try NVFP4 instead** |
+
+---
+
+## 7.1 NVFP4 Fallback Plan
+
+If MXFP4 experiments don't yield good results, **NVFP4 is the recommended fallback**:
+
+### Why NVFP4?
+
+| Metric | MXFP4 | NVFP4 | Improvement |
+|--------|-------|-------|-------------|
+| **Relative Error** | ~21% | ~1% | **21x better** |
+| **Block Size** | 32 elements | 16 elements | Finer granularity |
+| **Scale Format** | E8M0 | E4M3 | Higher precision |
+| **QeRL Compatibility** | Untested | Proven | QeRL's original format |
+
+### NVFP4 Implementation Options
+
+1. **Use quant_compute library** (if available on A100):
+   ```python
+   from quant_cy_npu import QType
+   qtype = QType('nvfp4')  # NVIDIA FP4 format
+   ```
+
+2. **Implement standalone NVFP4** (like mxfp4_quant.py):
+   - E4M3 format for scales (vs E8M0)
+   - 16-element blocks (vs 32)
+   - Should be straightforward adaptation
+
+### When to Switch to NVFP4
+
+| Condition | Action |
+|-----------|--------|
+| Exp 1E accuracy < 70% | Consider NVFP4 |
+| SRDD shows no improvement | Switch to NVFP4 |
+| User explicitly requests | Implement NVFP4 |
+
+### Expected NVFP4 Results
+
+With 21x lower quantization error:
+- AQN sigma=0.05 should be appropriate (not 21x too weak)
+- Model should be able to adapt during training
+- Final accuracy target: **74-76%** (near baseline)
 
 ---
 
