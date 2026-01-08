@@ -97,6 +97,19 @@ def compute_relative_error(original: torch.Tensor, quantized: torch.Tensor) -> f
     return rel_error.mean().item()
 
 
+def to_regular_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Convert DTensor or other distributed tensor to regular tensor."""
+    # Check if it's a DTensor
+    if hasattr(tensor, 'full_tensor'):
+        return tensor.full_tensor()
+    elif hasattr(tensor, 'to_local'):
+        return tensor.to_local()
+    elif hasattr(tensor, '_local_tensor'):
+        return tensor._local_tensor
+    else:
+        return tensor
+
+
 def scan_checkpoint(state_dict: Dict[str, torch.Tensor], quant_type: str = 'mxfp4') -> Dict[str, Any]:
     """Run SRDD quantization scan on checkpoint."""
     results = {
@@ -113,6 +126,14 @@ def scan_checkpoint(state_dict: Dict[str, torch.Tensor], quant_type: str = 'mxfp
         # Only scan weight tensors
         if not name.endswith('.weight'):
             continue
+
+        # Convert DTensor to regular tensor
+        try:
+            param = to_regular_tensor(param)
+        except Exception as e:
+            print(f"  Skipping {name}: could not convert tensor ({e})")
+            continue
+
         if param.dim() < 2:  # Skip 1D tensors (biases, norms)
             continue
 
@@ -120,7 +141,7 @@ def scan_checkpoint(state_dict: Dict[str, torch.Tensor], quant_type: str = 'mxfp
         if 'embed' in name.lower() or 'lm_head' in name.lower():
             continue
 
-        original = param.float()
+        original = param.float().clone()
 
         # Apply MXFP4 quantization
         if HAS_MXFP4 and quant_type == 'mxfp4':
