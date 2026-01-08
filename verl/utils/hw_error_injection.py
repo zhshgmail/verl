@@ -51,6 +51,9 @@ class HWErrorConfig:
         seed: Optional[int] = None,
         # Deadzone-specific config (for error_type='deadzone')
         deadzone_threshold: float = 0.01,  # 1% of max value
+        # MXFP4-specific config (for error_type='mxfp4')
+        mxfp4_stochastic_rounding: bool = False,
+        mxfp4_block_2d: bool = False,
     ):
         """
         Args:
@@ -59,12 +62,13 @@ class HWErrorConfig:
                 - 1e-6: ~BF16 precision level (very small)
                 - 1e-5: Moderate (recommended starting point)
                 - 1e-4: Aggressive (may cause training instability)
-                - For deadzone: not used (use deadzone_threshold instead)
+                - For deadzone/mxfp4: not used
             error_type: Type of error to inject
                 - 'relative_gaussian': error = randn() * |tensor| * scale
                 - 'absolute_gaussian': error = randn() * scale
                 - 'systematic_bias': error = sign(tensor) * scale (simulates rounding bias)
                 - 'deadzone': MXFP4 deadzone - values < threshold*max are zeroed
+                - 'mxfp4': Full MXFP4 fake quantization (E2M1K8B32)
             injection_point: Where to inject error (like quant_compute fake quantization)
                 - 'input': Inject error to operator INPUT (before computation)
                           Like fake quantization: y = operator(x + error)
@@ -75,6 +79,7 @@ class HWErrorConfig:
             target_modules: List of module name patterns to target
                 - Default: ['rmsnorm'] - only RMSNorm layers
                 - Options: ['rmsnorm', 'down_proj', 'o_proj', 'linear']
+                - For mxfp4: recommend ['linear'] to target all linear layers
             target_layers: List of layer indices to target (None = all layers)
                 - Example: [15] - only layer 15
                 - Used with SRDD-guided injection
@@ -85,6 +90,8 @@ class HWErrorConfig:
             seed: Random seed for reproducibility (None = random)
             deadzone_threshold: For deadzone error type, values with |x| < threshold * max(|x|)
                               are set to zero (simulates MXFP4 quantization deadzone)
+            mxfp4_stochastic_rounding: Use stochastic rounding for MXFP4 (reduces bias)
+            mxfp4_block_2d: Use 32x32 2D blocks instead of 1x32 for MXFP4
         """
         self.enabled = enabled
         self.error_scale = error_scale
@@ -95,11 +102,17 @@ class HWErrorConfig:
         self.apply_during = apply_during
         self.seed = seed
         self.deadzone_threshold = deadzone_threshold
+        self.mxfp4_stochastic_rounding = mxfp4_stochastic_rounding
+        self.mxfp4_block_2d = mxfp4_block_2d
 
     def __repr__(self):
         if self.error_type == 'deadzone':
             return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"threshold={self.deadzone_threshold}, layers={self.target_layers})")
+        if self.error_type == 'mxfp4':
+            return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
+                    f"sr={self.mxfp4_stochastic_rounding}, 2d={self.mxfp4_block_2d}, "
+                    f"targets={self.target_modules}, layers={self.target_layers})")
         return (f"HWErrorConfig(enabled={self.enabled}, scale={self.error_scale}, "
                 f"type={self.error_type}, targets={self.target_modules}, layers={self.target_layers})")
 
@@ -132,6 +145,26 @@ class HWErrorInjector:
             self._rng.manual_seed(config.seed)
         else:
             self._rng = None
+
+        # Initialize MXFP4 quantizer if needed
+        self._mxfp4_quantize = None
+        if config.error_type == 'mxfp4':
+            try:
+                from verl.utils.mxfp4_quant import mxfp4_quantize, MXFP4Config
+                self._mxfp4_config = MXFP4Config(
+                    stochastic_rounding=config.mxfp4_stochastic_rounding,
+                    block_h=32 if config.mxfp4_block_2d else 1,
+                    block_w=32,
+                )
+                self._mxfp4_quantize = mxfp4_quantize
+                # MXFP4 should use input injection (quant before computation)
+                # This simulates: output = linear(quant_dequant(input))
+                # Where quant_dequant adds the MXFP4 error to input activations
+                if config.injection_point == 'output':
+                    logger.warning("[MXFP4] injection_point='output' will apply quant AFTER computation")
+                logger.info(f"[MXFP4] Initialized MXFP4 quantizer: sr={config.mxfp4_stochastic_rounding}, 2d={config.mxfp4_block_2d}, injection={config.injection_point}")
+            except ImportError as e:
+                raise ImportError(f"MXFP4 error type requires verl.utils.mxfp4_quant: {e}")
 
     def set_phase(self, phase: str):
         """Set current execution phase for conditional injection."""
@@ -187,6 +220,11 @@ class HWErrorInjector:
             # Return None to signal special handling needed
             return None  # Special case handled in hook
 
+        elif self.config.error_type == 'mxfp4':
+            # Full MXFP4 fake quantization
+            # Return None to signal special handling needed
+            return None  # Special case handled in hook
+
         else:
             raise ValueError(f"Unknown error type: {self.config.error_type}")
 
@@ -218,6 +256,38 @@ class HWErrorInjector:
 
         return result, deadzone_mask
 
+    def _apply_mxfp4(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+        """
+        Apply full MXFP4 fake quantization to tensor.
+
+        Uses the verl.utils.mxfp4_quant module for proper E2M1K8B32
+        quantization simulation including:
+        - Shared exponent per block of 32 elements
+        - 2-bit exponent, 1-bit mantissa
+        - Proper deadzone and saturation handling
+
+        Args:
+            tensor: Input tensor
+
+        Returns:
+            Tuple of (quantized tensor, stats dict)
+        """
+        if self._mxfp4_quantize is None:
+            raise RuntimeError("MXFP4 quantizer not initialized")
+
+        # Apply MXFP4 quantization
+        quantized = self._mxfp4_quantize(tensor, config=self._mxfp4_config)
+
+        # Compute error statistics
+        error = (quantized - tensor).abs()
+        stats = {
+            'mean_error': error.mean().item(),
+            'max_error': error.max().item(),
+            'relative_error': (error / (tensor.abs() + 1e-10)).mean().item(),
+        }
+
+        return quantized, stats
+
     def _extract_layer_id(self, name: str) -> Optional[int]:
         """Extract layer ID from module name like 'model.layers.15.mlp.down_proj'."""
         import re
@@ -243,6 +313,26 @@ class HWErrorInjector:
             import re
             if re.match(r'.*\.layers\.\d+$', name) or re.match(r'layers\.\d+$', name):
                 return True
+            return False
+
+        # For MXFP4, use target_modules (default to 'linear' for all linear layers)
+        # This is different from deadzone which targets whole decoder layers
+        if self.config.error_type == 'mxfp4':
+            # Default to linear layers if not specified
+            targets = self.config.target_modules
+            if not targets or targets == ['rmsnorm']:
+                # Override default for MXFP4 - should target linear layers
+                targets = ['linear']
+
+            for target in targets:
+                target_lower = target.lower()
+                if target_lower == 'linear':
+                    if isinstance(module, nn.Linear):
+                        return True
+                    if 'linear' in class_name:
+                        return True
+                if target_lower in name_lower or target_lower in class_name:
+                    return True
             return False
 
         for target in self.config.target_modules:
@@ -308,6 +398,42 @@ class HWErrorInjector:
                     return (modified,) + rest
                 return modified
 
+            # Handle MXFP4 specially (full fake quantization)
+            if self.config.error_type == 'mxfp4':
+                modified, quant_stats = self._apply_mxfp4(tensor_to_modify)
+
+                # Track statistics
+                if name not in self.stats:
+                    self.stats[name] = {
+                        'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
+                        'relative_error': 0.0, 'point': 'output', 'type': 'mxfp4'
+                    }
+                self.stats[name]['count'] += 1
+                # Exponential moving average for error tracking
+                alpha = 0.1
+                self.stats[name]['mean_error'] = (
+                    alpha * quant_stats['mean_error'] +
+                    (1 - alpha) * self.stats[name]['mean_error']
+                )
+                self.stats[name]['max_error'] = max(
+                    self.stats[name]['max_error'], quant_stats['max_error']
+                )
+                self.stats[name]['relative_error'] = (
+                    alpha * quant_stats['relative_error'] +
+                    (1 - alpha) * self.stats[name]['relative_error']
+                )
+
+                # Log first injection
+                if self.stats[name]['count'] == 1:
+                    print(f"[MXFP4] First injection on {name}: "
+                          f"shape={tuple(tensor_to_modify.shape)}, "
+                          f"mean_error={quant_stats['mean_error']:.2e}, "
+                          f"rel_error={quant_stats['relative_error']*100:.1f}%")
+
+                if is_tuple:
+                    return (modified,) + rest
+                return modified
+
             # Standard error injection (add error to output)
             error = self._compute_error(tensor_to_modify)
             modified = tensor_to_modify + error
@@ -344,7 +470,7 @@ class HWErrorInjector:
 
         This is similar to quant_compute's fake quantization approach:
         - Original: y = operator(x)
-        - With injection: y = operator(x + error)
+        - With injection: y = operator(quant_dequant(x))
         """
         def hook(module: nn.Module, input: Tuple) -> Tuple:
             if not self._should_inject():
@@ -358,6 +484,59 @@ class HWErrorInjector:
             if not isinstance(first_input, torch.Tensor):
                 return input
 
+            # Handle MXFP4 specially (full fake quantization)
+            if self.config.error_type == 'mxfp4':
+                modified_input, quant_stats = self._apply_mxfp4(first_input)
+
+                # Track statistics
+                if name not in self.stats:
+                    self.stats[name] = {
+                        'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
+                        'relative_error': 0.0, 'point': 'input', 'type': 'mxfp4'
+                    }
+                self.stats[name]['count'] += 1
+                alpha = 0.1
+                self.stats[name]['mean_error'] = (
+                    alpha * quant_stats['mean_error'] +
+                    (1 - alpha) * self.stats[name]['mean_error']
+                )
+                self.stats[name]['max_error'] = max(
+                    self.stats[name]['max_error'], quant_stats['max_error']
+                )
+                self.stats[name]['relative_error'] = (
+                    alpha * quant_stats['relative_error'] +
+                    (1 - alpha) * self.stats[name]['relative_error']
+                )
+
+                # Log first injection
+                if self.stats[name]['count'] == 1:
+                    print(f"[MXFP4] First INPUT injection on {name}: "
+                          f"shape={tuple(first_input.shape)}, "
+                          f"mean_error={quant_stats['mean_error']:.2e}, "
+                          f"rel_error={quant_stats['relative_error']*100:.1f}%")
+
+                return (modified_input,) + input[1:]
+
+            # Handle deadzone specially
+            if self.config.error_type == 'deadzone':
+                modified_input, deadzone_mask = self._apply_deadzone(first_input)
+                num_zeroed = deadzone_mask.sum().item()
+                total = deadzone_mask.numel()
+
+                if name not in self.stats:
+                    self.stats[name] = {'count': 0, 'zeroed': 0, 'total': 0, 'point': 'input', 'type': 'deadzone'}
+                self.stats[name]['count'] += 1
+                self.stats[name]['zeroed'] += num_zeroed
+                self.stats[name]['total'] += total
+
+                if self.stats[name]['count'] == 1:
+                    print(f"[DEADZONE] First INPUT injection on {name}: "
+                          f"shape={tuple(first_input.shape)}, "
+                          f"zeroed={num_zeroed}/{total} ({num_zeroed/total*100:.1f}%)")
+
+                return (modified_input,) + input[1:]
+
+            # Standard error injection (add error to input)
             error = self._compute_error(first_input)
             modified_input = first_input + error
 
@@ -459,6 +638,21 @@ class HWErrorInjector:
             overall_rate = total_zeroed / total_values * 100 if total_values > 0 else 0
             print("-" * 60)
             print(f"  TOTAL: {total_zeroed:,}/{total_values:,} ({overall_rate:.1f}%) values zeroed")
+        elif self.config.error_type == 'mxfp4':
+            print(f"\n[MXFP4] Injection Statistics:")
+            print("-" * 60)
+            total_count = 0
+            avg_rel_error = 0.0
+            for name, stat in sorted(self.stats.items()):
+                print(f"  {name}: count={stat['count']}, "
+                      f"mean_err={stat['mean_error']:.2e}, "
+                      f"rel_err={stat['relative_error']*100:.1f}%")
+                total_count += stat['count']
+                avg_rel_error += stat['relative_error']
+            if self.stats:
+                avg_rel_error /= len(self.stats)
+            print("-" * 60)
+            print(f"  TOTAL: {total_count} injections, avg_rel_error={avg_rel_error*100:.1f}%")
         else:
             print(f"\n[HW Error] Injection Statistics (scale={self.config.error_scale}):")
             print("-" * 60)

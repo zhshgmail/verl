@@ -67,6 +67,13 @@ bash scripts/test_hw_error_injection_a100.sh linear 8 1e-5
 | DeepSeek-R1-Distill-Qwen-1.5B | `/data/z00637938/hub/models--deepseek-ai--DeepSeek-R1-Distill-Qwen-1.5B/snapshots/ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562` |
 | Qwen3-30B-A3B-Base | `/data/z00637938/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9` |
 
+## Datasets
+
+| Dataset | Path | Files |
+|---------|------|-------|
+| GSM8k | `/data/z00637938/gsm8k/` | `train.parquet`, `test.parquet` |
+| GSM8k (HF cache) | `/data/z00637938/hub/datasets--openai--gsm8k/` | HuggingFace format |
+
 ## Related Documentation
 
 - [HW_ERROR_INJECTION_EXPERIMENTS.md](docs/qerl/HW_ERROR_INJECTION_EXPERIMENTS.md)
