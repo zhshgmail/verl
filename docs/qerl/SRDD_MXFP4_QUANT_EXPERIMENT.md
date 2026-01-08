@@ -1,7 +1,7 @@
 # SRDD + MXFP4 Fake Quantization Experiment Plan
 
 **Date**: 2026-01-08
-**Status**: In Progress
+**Status**: Completed (Initial Run)
 
 ---
 
@@ -237,7 +237,59 @@ python scripts/srdd_mxfp4_experiment.py \
 
 ---
 
-## 10. Notes
+## 10. Experiment Results (2026-01-08)
+
+### 10.1 MXFP4 Quantization Impact
+
+| Metric | BF16 | MXFP4 | Degradation |
+|--------|------|-------|-------------|
+| Loss | 2.6267 | 5.1987 | **+97.92%** |
+
+**Finding**: MXFP4 quantization causes nearly 2x loss increase on Qwen2.5-1.5B.
+
+### 10.2 Problematic Layers Identified
+
+| Layer | Issue | Value |
+|-------|-------|-------|
+| **Layer 0** | Kurtosis drop | 0.713 (29% drop) |
+
+**Finding**: Only Layer 0 (embedding layer) was identified as significantly affected by MXFP4 quantization using the gain/kurtosis thresholds.
+
+### 10.3 AQN Strategy Comparison
+
+| Config | Loss (mean±std) | vs Baseline | vs Global |
+|--------|-----------------|-------------|-----------|
+| Baseline (no AQN) | 5.1987 | - | - |
+| Global AQN | 5.0012 ± 0.3624 | -3.8% | - |
+| **Targeted AQN** | **4.9306 ± 0.3248** | **-5.2%** | **-1.41%** |
+| Healthy AQN | 5.3111 ± 0.3424 | +2.2% | +6.2% |
+
+**Statistical Comparison**: p=0.7791 (NOT significant)
+
+### 10.4 Key Conclusions
+
+1. **MXFP4 causes severe degradation** (~98% loss increase)
+2. **SRDD identified Layer 0** as the most affected layer
+3. **Targeted AQN shows slight improvement** (1.41% better than Global)
+4. **Not statistically significant** (p=0.78) - need more runs or different conditions
+
+### 10.5 Observations
+
+- The deadzone effect was less pronounced than expected in the gain scan
+- Kurtosis scan was more effective at identifying problematic layers
+- Layer 0 (embedding layer) is most sensitive to quantization
+- AQN helps slightly but doesn't overcome the large quantization error
+
+### 10.6 Recommended Next Steps
+
+1. **Test milder quantization** (MXFP8 or mixed precision)
+2. **Exclude Layer 0** from quantization and re-test
+3. **Add more prompts** for more robust statistics
+4. **Test MXFP4 2D mode** (`--quant_type mxfp4_2d`) for potentially lower error
+
+---
+
+## 11. Notes
 
 - Start with W4A16 (weights only), then try W4A4 if needed
 - Use `force_py=True` if NPU kernels unavailable on A100
