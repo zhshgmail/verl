@@ -864,8 +864,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     enabled=True,
                     error_type=hw_error_config.get('error_type', 'relative_gaussian'),
                     error_scale=hw_error_config.get('error_scale', 1e-5),
-                    target_layers=list(hw_error_config.get('target_layers', [])) or None,
-                    target_modules=list(hw_error_config.get('target_modules', ['rmsnorm'])),
+                    injection_point=hw_error_config.get('injection_point', 'input'),
+                    target_layers=list(hw_error_config.get('target_layers') or []) or None,
+                    target_modules=list(hw_error_config.get('target_modules') or ['rmsnorm']),
                     apply_during='training',
                     deadzone_threshold=hw_error_config.get('deadzone_threshold', 0.01),
                 )
