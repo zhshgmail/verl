@@ -603,9 +603,35 @@ Log evidence:
 [HW Error] Registered 112 weight hooks (scale=1e-05, type=mxfp4, targets=['linear'])
 ```
 
-### 15.7 MXFP4-only Results (Pending)
+### 15.7 Full Experiment Results (3 Experiments Completed)
 
-Experiment 2 (MXFP4 without AQN) in progress to measure pure degradation.
+| Step | Baseline (no MXFP4) | MXFP4-only (no AQN) | MXFP4 + AQN |
+|------|---------------------|---------------------|-------------|
+| 0 | 7.88% | 8.04% | 8.42% |
+| 20 | **73.31%** | **72.02%** | **71.95%** |
+| 40 | **75.13%** | **72.93%** | **72.18%** |
+| 58 | **75.97%** | **70.05%** | **67.48%** |
+
+### 15.8 Surprising Finding: AQN Hurts Performance!
+
+| Comparison | Step 58 Difference |
+|------------|---------------------|
+| MXFP4-only vs Baseline | **-5.92%** |
+| MXFP4+AQN vs Baseline | **-8.49%** |
+| **MXFP4+AQN vs MXFP4-only** | **-2.57%** (AQN hurts!) |
+
+**Possible explanations:**
+1. **Target mismatch**: AQN targets RMSNorm layers, MXFP4 quantizes Linear layers
+2. **Sigma too high**: AQN sigma (0.05→0.0005) may be too aggressive
+3. **Implementation issue**: AQN in verl+vLLM might not apply correctly to FSDP training
+4. **Evaluation doesn't reflect robustness**: Need SRDD scan to measure actual quantization tolerance
+
+### 15.9 Next Steps
+
+1. **SRDD comparison**: Run SRDD scan on checkpoints to measure actual robustness
+2. **Investigate AQN targeting**: Should AQN target Linear layers (same as MXFP4)?
+3. **Tune AQN sigma**: Try lower sigma values (e.g., 0.01→0.0001)
+4. **Compare with QeRL**: Why does QeRL's AQN work but ours doesn't?
 
 ---
 
