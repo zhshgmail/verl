@@ -365,12 +365,38 @@ python scripts/srdd_quant_scanner.py \
     --output results_quant_scan_v2.json
 ```
 
-### 12.4 Expected Output
+### 12.4 Scan Results (v2) - 2026-01-08
 
-The scanner will produce:
-1. Per-layer metrics (SQNR, deadzone, saturation, relative error)
-2. List of problematic layers with specific issues
-3. Recommendations: AQN layers vs mixed-precision layers
+**ALL 28 layers are problematic for MXFP4!**
+
+| Metric | Range | Threshold | Status |
+|--------|-------|-----------|--------|
+| **SQNR** | 15.7-18.1 dB | < 20 dB | ALL FAIL |
+| **Deadzone** | 15.6%-28.7% | > 5% | ALL FAIL |
+| **Saturation** | 0.02%-0.11% | > 1% | OK |
+| **Relative Error** | 28.5%-42.7% | > 10% | ALL FAIL |
+
+**Layer-wise Breakdown:**
+
+| Layer Group | SQNR (dB) | Deadzone (%) | Rel. Error (%) | Notes |
+|-------------|-----------|--------------|----------------|-------|
+| L0-L1 | 16.9-18.1 | 16-19% | 30-32% | Embedding area |
+| L2-L9 | 16.8-16.9 | 20-23% | 33-37% | Early layers |
+| L10-L17 | 16.9-17.0 | 24-29% | 38-43% | **Worst affected** |
+| L18-L25 | 16.9-17.2 | 20-26% | 33-40% | Recovery trend |
+| L26-L27 | 15.7-16.2 | 16-18% | 28-32% | Final layers |
+
+**Key Findings:**
+
+1. **Deadzone is the main issue** (15-29% of values lost to zero)
+2. **Middle layers (L10-L17) are worst** - highest deadzone and relative error
+3. **Saturation is NOT an issue** (< 0.11% everywhere)
+4. **SQNR uniformly low** (~17 dB vs 20 dB threshold)
+
+**Scanner Recommendation:** `reconsider_quantization`
+- MXFP4 is NOT suitable for Qwen2.5-1.5B
+- Consider MXFP8 or higher precision format
+- If MXFP4 required: Need to keep ALL layers in higher precision (defeats purpose)
 
 ---
 
@@ -395,6 +421,22 @@ Once problematic layers are identified, compare two approaches:
 | < 10% of layers | Mixed precision (keep in FP16) |
 | 10-30% of layers | Mixed: FP16 for worst, AQN for moderate |
 | > 30% of layers | Reconsider MXFP4, try MXFP8 |
+
+### 13.4 Conclusion for Qwen2.5-1.5B + MXFP4
+
+**Result: 100% of layers are problematic → MXFP4 not viable**
+
+| Option | Feasibility | Notes |
+|--------|-------------|-------|
+| AQN Training | ❌ Not viable | All layers need AQN = same as global AQN |
+| Mixed Precision | ❌ Not viable | All layers need FP16 = defeats quantization |
+| **MXFP8** | ✅ **Try this** | Higher precision format |
+| **Different Model** | ✅ **Try this** | Some models may be more MXFP4-friendly |
+
+**Next Steps:**
+1. Test MXFP8 on Qwen2.5-1.5B
+2. Test MXFP4 on different models (DeepSeek-R1-Distill-Qwen-1.5B)
+3. Investigate if activation statistics differ across model architectures
 
 ---
 
