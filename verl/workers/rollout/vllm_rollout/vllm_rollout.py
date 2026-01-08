@@ -345,6 +345,7 @@ class vLLMAsyncRollout(BaseRollout):
                                 sigma_trend=[sigma],  # Single value = use this sigma directly
                                 target_modules=self.noise_injection_config.get('target_modules'),
                                 exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                                layer_types=self.noise_injection_config.get('layer_types'),
                                 verbose=True
                             )
                 else:
@@ -362,6 +363,7 @@ class vLLMAsyncRollout(BaseRollout):
                             sigma_trend=sigma_trend,
                             target_modules=self.noise_injection_config.get('target_modules'),
                             exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                            layer_types=self.noise_injection_config.get('layer_types'),
                             verbose=True
                         )
 

@@ -72,11 +72,11 @@ def _detect_moe_model(model):
     return False
 
 
-def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, is_moe=None, verbose=True):
+def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, is_moe=None, verbose=True, layer_types=None):
     """
-    Generate and apply Gaussian noise to RMSNorm layers in quantized models.
+    Generate and apply Gaussian noise to model layers for quantization-aware training.
 
-    Behavior differs based on model type:
+    Behavior differs based on model type and layer_types:
 
     For MoE models (is_moe=True):
         - Only targets post_attention_layernorm (after router/MLP)
@@ -88,6 +88,11 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         - No exclusions
         - Follows QeRL paper's approach for quantized training
 
+    Layer Types (NEW):
+        - layer_types=['rmsnorm']: Target RMSNorm only (QeRL default)
+        - layer_types=['linear']: Target Linear only (align with W4A16 quantization)
+        - layer_types=['rmsnorm', 'linear']: Target both
+
     Args:
         model: The model to inject noise into (typically vLLM inference model)
         step: Current training step
@@ -97,13 +102,14 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         exclude_patterns: List of patterns to exclude (None = auto based on is_moe)
         is_moe: Whether model is MoE (None = auto-detect)
         verbose: Whether to print noise injection info
+        layer_types: List of layer types to target ['rmsnorm', 'linear'] (None = ['rmsnorm'])
 
     Example:
         >>> # Auto-detect model type (recommended)
         >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend)
         >>>
-        >>> # Force dense model behavior (QeRL original)
-        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, is_moe=False)
+        >>> # Target Linear layers (align with W4A16 MXFP4 quantization)
+        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, layer_types=['linear'])
         >>>
         >>> # Force MoE model behavior
         >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, is_moe=True)
@@ -130,12 +136,17 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
             model_type = "MoE" if is_moe else "Dense"
-            target_desc = target_modules if target_modules else "ALL RMSNorm"
+            target_desc = target_modules if target_modules else "ALL"
+            layer_type_desc = layer_types if layer_types else ["rmsnorm"]
             # Use print() to ensure visibility regardless of logging level
-            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, Target: {target_desc}")
+            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, LayerTypes: {layer_type_desc}, Target: {target_desc}")
 
     if sigma == 0:
         return
+
+    # Default layer_types to ['rmsnorm'] for backward compatibility (QeRL default)
+    if layer_types is None:
+        layer_types = ['rmsnorm']
 
     # Detect RMSNorm by class name (works with vLLM's model implementations)
     # vLLM uses its own model classes, not transformers', so we check class name
@@ -152,22 +163,56 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
             return False
         return True
 
+    def _is_linear(module):
+        """Check if module is a Linear layer by class name and structure."""
+        class_name = module.__class__.__name__
+        # Check for Linear in class name (handles nn.Linear, ColumnParallelLinear, etc.)
+        if 'Linear' not in class_name:
+            return False
+        # Verify it has a weight parameter
+        if not hasattr(module, 'weight'):
+            return False
+        if not isinstance(module.weight, torch.Tensor):
+            return False
+        # Linear layers should have 2D weights
+        if module.weight.dim() < 2:
+            return False
+        return True
+
+    def _should_target_module(module, name):
+        """Check if module should be targeted based on layer_types and patterns."""
+        # Check layer type
+        is_target_type = False
+        if 'rmsnorm' in layer_types and _is_rmsnorm(module):
+            is_target_type = True
+        if 'linear' in layer_types and _is_linear(module):
+            is_target_type = True
+
+        if not is_target_type:
+            return False, "type_mismatch"
+
+        # Check exclusion patterns
+        if exclude_patterns and any(pattern in name for pattern in exclude_patterns):
+            return False, "excluded"
+
+        # Check target patterns (if specified)
+        if target_modules and not any(pattern in name for pattern in target_modules):
+            return False, "not_targeted"
+
+        return True, "matched"
+
     noise_count = 0
     skipped_count = 0
+    type_mismatch_count = 0
 
     for name, module in model.named_modules():
-        # Skip if not RMSNorm (use class name detection for vLLM compatibility)
-        if not _is_rmsnorm(module):
-            continue
+        should_target, reason = _should_target_module(module, name)
 
-        # Check exclusion patterns first
-        if exclude_patterns and any(pattern in name for pattern in exclude_patterns):
-            skipped_count += 1
-            continue
-
-        # Check target patterns
-        if target_modules and not any(pattern in name for pattern in target_modules):
-            skipped_count += 1
+        if not should_target:
+            if reason == "type_mismatch":
+                type_mismatch_count += 1
+            else:
+                skipped_count += 1
             continue
 
         weight_tensor = module.weight
@@ -195,7 +240,8 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
             # Use print() to ensure visibility regardless of logging level
-            print(f"[AQN] Applied noise to {noise_count} RMSNorm layers (skipped {skipped_count} excluded layers)")
+            layer_type_str = "+".join(layer_types)
+            print(f"[AQN] Applied noise to {noise_count} {layer_type_str} layers (skipped {skipped_count} excluded layers)")
 
 
 def get_sigma_schedule(sigma_start=0.01, sigma_end=0.001, num_stages=10):
