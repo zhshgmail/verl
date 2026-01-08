@@ -644,3 +644,167 @@ Log evidence:
 - **Key insight**: HWErrorInjector now supports both:
   - `injection_point='input'`: W16A4 (quantize activations) - for testing
   - `injection_point='weight'`: W4A16 (quantize weights) - QeRL style
+
+---
+
+## 17. Expert Analysis: Why AQN Hurts Performance (2026-01-09)
+
+### 17.1 Root Cause Analysis
+
+Expert analysis identified **5 critical issues** explaining why AQN hurts performance (-2.57% vs MXFP4-only):
+
+| Issue | Impact | Fix |
+|-------|--------|-----|
+| **Target Mismatch** | AQN targets RMSNorm, MXFP4 targets Linear | Align AQN to Linear layers |
+| **Sigma Too Weak** | 0.05 sigma for 21% error (should be 0.15-0.20) | Scale sigma 3-4x |
+| **Training Too Short** | 58 steps, ~6 steps/stage | Increase to 174+ steps (3 epochs) |
+| **Error Too High** | MXFP4 21% vs NVFP4 1% (21x worse) | Consider MXFP8 fallback |
+| **No Time to Adapt** | Model can't converge in 6 steps/stage | More steps per stage |
+
+### 17.2 QeRL vs Our Implementation Comparison
+
+| Aspect | QeRL (NVIDIA) | Our Implementation | Gap |
+|--------|---------------|---------------------|-----|
+| Format | NVFP4 (E4M3, 16-elem) | MXFP4 (E8M0, 32-elem) | 21x worse error |
+| Quant Error | ~1% | ~21% | **21x** |
+| AQN Target | LayerNorm (propagates through Linear) | RMSNorm (separate path) | **Mismatch** |
+| AQN Sigma | 0.05 for 1% error | 0.05 for 21% error | **20x too weak** |
+| Training Steps | ~200-300 | 58 | **~5x too short** |
+
+### 17.3 Key Insight
+
+**The fundamental issue is that AQN and MXFP4 operate on different computational paths:**
+
+- MXFP4: Quantizes Linear layer weights → affects output
+- AQN: Adds noise to RMSNorm weights → affects normalization only
+
+**Fix**: Move AQN to target Linear layers (same as MXFP4 quantization target).
+
+---
+
+## 18. Implementation: AQN Layer Types Parameter (2026-01-09)
+
+### 18.1 New `layer_types` Parameter
+
+Added `layer_types` parameter to `generate_expert_gaussian_noise()` in `verl/utils/noise_injection.py`:
+
+```python
+def generate_expert_gaussian_noise(model, step, total_step, sigma_trend,
+                                   target_modules=None, exclude_patterns=None,
+                                   is_moe=None, verbose=True, layer_types=None):
+    """
+    Layer Types:
+        - layer_types=['rmsnorm']: Target RMSNorm only (QeRL default)
+        - layer_types=['linear']: Target Linear only (align with W4A16)
+        - layer_types=['rmsnorm', 'linear']: Target both
+    """
+```
+
+### 18.2 Implementation Details
+
+- Added `_is_linear()` helper function for Linear layer detection
+- Added `_should_target_module()` for flexible targeting logic
+- Updated `vllm_rollout.py` to pass `layer_types` from config
+- Backward compatible: `layer_types=None` defaults to `['rmsnorm']`
+
+### 18.3 Test Verification
+
+```
+=== Testing layer_types=["linear"] ===
+[AQN] Applied noise to 2 linear layers (skipped 0 excluded layers)
+Weight changed: True
+
+=== Testing layer_types=["rmsnorm"] ===
+[AQN] Applied noise to 0 rmsnorm layers (skipped 0 excluded layers)
+Linear weight changed: False (expected)
+
+Test passed!
+```
+
+---
+
+## 19. Experiment Plan: TIER 1 Fixes (2026-01-09)
+
+### 19.1 Experiment 1A: Target Alignment + Longer Training
+
+**Goal**: Fix the two most critical issues together
+
+**Configuration:**
+```yaml
+trainer.total_epochs: 3  # 174 steps (was 1 epoch = 58 steps)
+
+trainer.hw_error_injection:
+  enabled: true
+  error_type: mxfp4
+  injection_point: weight
+  target_modules: ['linear']
+  apply_during: both
+
+trainer.noise_injection:
+  enabled: true
+  sigma_start: 0.05
+  sigma_end: 0.0005
+  num_stages: 10
+  layer_types: ['linear']  # CRITICAL: Match MXFP4 target
+```
+
+**Expected**: 70-72% (vs 67.48% current)
+
+**Script**: `scripts/test_mxfp4_exp1a_aligned.sh`
+
+### 19.2 Experiment 1B: Scaled Sigma (if 1A shows improvement)
+
+**Goal**: Scale AQN sigma proportional to MXFP4 error
+
+**Configuration:**
+```yaml
+trainer.noise_injection:
+  sigma_start: 0.15      # 3x original (for 21% error)
+  sigma_end: 0.0015
+  layer_types: ['linear']
+```
+
+**Expected**: 72-74% (if target alignment works)
+
+**Script**: `scripts/test_mxfp4_exp1b_scaled_sigma.sh`
+
+### 19.3 Success Metrics
+
+| Outcome | Accuracy | Interpretation |
+|---------|----------|----------------|
+| **Success** | ≥72% | AQN working, continue optimization |
+| **Partial** | 70-72% | Needs more sigma or epochs |
+| **No Change** | 67-70% | Target mismatch not fixed |
+| **Regression** | <67% | Bug in implementation |
+
+---
+
+## 20. Execution Commands (2026-01-09)
+
+```bash
+# SSH to A100 server
+ssh root@90.90.102.18
+
+# Enter docker container
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+# Pull latest code with layer_types implementation
+git pull personal feature/npu-aqn-test
+
+# Clean up zombie processes
+pkill -f "ray|vllm" || true
+
+# Experiment 1A: Target Alignment + 3 Epochs
+bash scripts/test_mxfp4_exp1a_aligned.sh 8
+
+# Experiment 1B: Scaled Sigma (if 1A > 70%)
+bash scripts/test_mxfp4_exp1b_scaled_sigma.sh 8
+
+# SRDD Comparison (after training completes)
+python scripts/srdd_checkpoint_comparison.py \
+    --baseline_ckpt /tmp/mxfp4_exp_baseline/checkpoints/global_step_58 \
+    --mxfp4_only_ckpt /tmp/mxfp4_exp_mxfp4only/checkpoints/global_step_58 \
+    --mxfp4_aqn_ckpt /tmp/mxfp4_exp1a_aligned/checkpoints/global_step_174 \
+    --output srdd_comparison_exp1a.json
+```
