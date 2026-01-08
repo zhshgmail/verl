@@ -1,8 +1,8 @@
 # MXFP4 + AQN Next Steps Plan
 
 **Date**: 2026-01-09
-**Last Updated**: 2026-01-09
-**Status**: Ready for Execution
+**Last Updated**: 2026-01-09 (Exp 1D Complete)
+**Status**: Exp 1D Completed, Running Exp 1E
 **Reference**: Gemini Expert Review
 
 ---
@@ -64,8 +64,38 @@ bash scripts/test_nvfp4_w4a16_training.sh 8
 | MXFP4+AQN (original) | W4A16, AQN on RMSNorm | 67.48% | Completed (AQN hurt!) |
 | **1A** | W4A16, AQN on Linear (sigma=0.05) | **Collapsed at step 19** | Failed |
 | **1C** | W4A16, AQN on Linear (sigma=0.005) | **Partial collapse at step 19** | Failed |
-| **1D** | W4A16, AQN on Linear (sigma=0.001) | TBD | **Next** |
-| **1E** | W4A16, AQN on RMSNorm (QeRL default) | TBD | Backup |
+| **1D** | W4A16, AQN on Linear (sigma=0.001) | **66.49% (STABLE!)** | Completed |
+| **1E** | W4A16, AQN on RMSNorm (QeRL default) | TBD | **Next** |
+
+### 2.1 Experiment 1D Results (2026-01-09)
+
+**BREAKTHROUGH: sigma=0.001 is the stability threshold for Linear layer AQN!**
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Final Accuracy | **66.49%** | Lower than MXFP4-only (70.05%) |
+| Training Stability | **STABLE** | No collapse (entropy 0.05-0.3 throughout) |
+| Runtime | 3 hours | 174 steps, 3 epochs |
+| Sigma Range | 0.001 → 0.00001 | 10 stages |
+| Checkpoint | global_step_174 | Saved successfully |
+
+**Key Findings:**
+1. **Stability threshold found**: sigma=0.001 is the minimum for stable Linear layer AQN
+2. **No accuracy improvement**: 66.49% < 70.05% (MXFP4-only) < 75.97% (baseline)
+3. **Ultra-small sigma = effectively no AQN benefit**: The noise is too weak to improve robustness
+4. **Confirms Gemini's analysis**: Linear layers are too sensitive; RMSNorm is the safer target
+
+**Validation Progression:**
+- Step 0: 75.97% (pre-training baseline)
+- Step 20: 66.21%
+- Step 40: 73.16%
+- Step 60: 66.51%
+- Step 80: 69.82%
+- Step 100: 66.67%
+- Step 120: 66.06%
+- Step 140: 66.59%
+- Step 160: 67.02%
+- Step 174: **66.49%** (final)
 
 ---
 
