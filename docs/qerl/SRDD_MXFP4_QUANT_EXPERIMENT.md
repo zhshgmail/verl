@@ -820,7 +820,104 @@ When sigma became non-zero (~step 17-19), the AQN noise on Linear layer weights 
 
 ---
 
-## 21. Execution Commands (2026-01-09)
+## 21. Experiment 1C Results: Partial Collapse (2026-01-09)
+
+### 21.1 Configuration
+
+| Parameter | Value | Change from 1A |
+|-----------|-------|----------------|
+| sigma_start | 0.005 | 10x smaller (was 0.05) |
+| sigma_end | 0.00005 | 10x smaller (was 0.0005) |
+| layer_types | ['linear'] | Same |
+| epochs | 3 | Same |
+
+### 21.2 Results
+
+| Step | Score | Entropy | Status |
+|------|-------|---------|--------|
+| 0-18 | ~72% | ~0.37 | Training normally |
+| **19** | **2%** | **2.56** | **Partial collapse** |
+
+### 21.3 Comparison with 1A
+
+| Metric | 1A (sigma=0.05) | 1C (sigma=0.005) | Improvement |
+|--------|-----------------|------------------|-------------|
+| Step 19 score | 0% | 2% | +2% |
+| Step 19 entropy | 9.5 | 2.56 | -73% (better) |
+| Collapse severity | Complete | Partial | Less severe |
+
+### 21.4 Interpretation
+
+Even with 10x smaller sigma (0.005), AQN on Linear layers still causes collapse:
+- **Less severe** than 1A (entropy 2.56 vs 9.5)
+- **Still destructive** (score dropped from 72% to 2%)
+- **Confirms sensitivity**: Linear layers are extremely sensitive to any noise
+
+### 21.5 Key Insight
+
+**Linear layer weights are the model's learned knowledge** - any perturbation directly corrupts:
+- Token embeddings (lm_head)
+- Attention projections (q_proj, k_proj, v_proj, o_proj)
+- Feed-forward networks (gate_proj, up_proj, down_proj)
+
+**RMSNorm is a safer target** because it only affects scale/variance, not the learned representations.
+
+---
+
+## 22. Experiment 1D: Ultra-Small Sigma (Planned)
+
+### 22.1 Configuration
+
+| Parameter | Value | Change from 1C |
+|-----------|-------|----------------|
+| sigma_start | 0.001 | 5x smaller (was 0.005) |
+| sigma_end | 0.00001 | 5x smaller |
+| layer_types | ['linear'] | Same |
+
+### 22.2 Alternative: Return to RMSNorm
+
+If 1D still fails, return to QeRL's original approach:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| layer_types | ['rmsnorm'] | QeRL's proven approach |
+| sigma_start | 0.05 | Original QeRL value |
+| sigma_end | 0.0005 | Original QeRL value |
+
+---
+
+## 23. Conclusions (2026-01-09)
+
+### 23.1 Key Findings
+
+1. **AQN on Linear layers is destructive** - Even sigma=0.005 causes model collapse
+2. **QeRL's RMSNorm targeting is deliberate** - Not arbitrary, it's safer for noise injection
+3. **Target alignment may not be the answer** - Different approaches needed for different error sources
+
+### 23.2 Revised Understanding
+
+| Component | QeRL Approach | Our Hypothesis | Reality |
+|-----------|---------------|----------------|---------|
+| **MXFP4 target** | Linear weights | Linear weights | ✓ Correct |
+| **AQN target** | RMSNorm | Should match MXFP4 | ✗ Wrong - Linear too sensitive |
+| **Why it works** | Indirect noise propagation | Direct noise injection | RMSNorm provides smoother adaptation |
+
+### 23.3 Recommendation
+
+**Keep AQN on RMSNorm, even with MXFP4 on Linear layers.**
+
+The noise in RMSNorm layers creates a "perturbation field" that the model learns to handle, which indirectly improves robustness to Linear layer quantization.
+
+This is analogous to:
+- Dropout: Random noise in intermediate layers improves generalization
+- Label smoothing: Noise in targets improves calibration
+- Data augmentation: Noise in inputs improves robustness
+
+**AQN on RMSNorm works because it adds noise where the model can absorb it, not where it directly corrupts learned knowledge.**
+
+---
+
+## 24. Execution Commands (2026-01-09)
 
 ```bash
 # SSH to A100 server
@@ -836,9 +933,9 @@ git pull personal feature/npu-aqn-test
 # Clean up zombie processes
 pkill -f "ray|vllm" || true
 
-# Experiment 1C: 10x Smaller Sigma for Linear Layers
-bash scripts/test_mxfp4_exp1c_small_sigma.sh 8
+# Experiment 1D: 50x Smaller Sigma (last attempt for Linear)
+bash scripts/test_mxfp4_exp1d_tiny_sigma.sh 8
 
-# Experiment 1D: 50x Smaller Sigma (if 1C still fails)
-# bash scripts/test_mxfp4_exp1d_tiny_sigma.sh 8
+# If 1D fails, return to RMSNorm:
+# bash scripts/test_mxfp4_exp1e_rmsnorm.sh 8
 ```
