@@ -289,7 +289,116 @@ python scripts/srdd_mxfp4_experiment.py \
 
 ---
 
-## 11. Notes
+## 11. QA Review Findings (2026-01-08)
+
+### 11.1 Methodology Issues Identified
+
+The initial experiment had several methodological flaws:
+
+| Issue | Impact | Resolution |
+|-------|--------|------------|
+| **Gain scan inappropriate for quantization** | Gain scan was designed for hardware faults (deadzone in circuits), not quantization errors | Replace with SQNR (Signal-to-Quantization-Noise Ratio) |
+| **AQN without training is invalid** | AQN requires gradient updates to be effective | Need full training loop or recognize limitation |
+| **Statistical underpower** | n=5 prompts insufficient | Increase to n≥30 prompts |
+| **Missing quantization-specific metrics** | Gain/kurtosis don't directly measure quant error | Add SQNR, deadzone ratio, saturation ratio |
+
+### 11.2 Why Original Metrics Were Wrong
+
+**Gain Scan** (designed for hardware faults):
+- Measures: How noise propagates through a layer
+- Detects: Stuck-at-zero failures in circuits
+- Problem: Quantization error ≠ stuck-at-zero
+
+**Kurtosis Scan** (indirect indicator):
+- Measures: Distribution shape of activations
+- Detects: Saturation causing flattening
+- Problem: Kurtosis change can have many causes
+
+**What We Need**:
+- **Direct error measurement**: How much does quantization change the output?
+- **Per-layer attribution**: Which layers contribute most to total error?
+
+---
+
+## 12. Improved SRDD Approach (v2)
+
+### 12.1 New Quantization-Specific Metrics
+
+| Metric | Formula | Threshold | What It Measures |
+|--------|---------|-----------|------------------|
+| **SQNR (dB)** | 10·log₁₀(signal²/noise²) | < 20 dB | Overall quantization fidelity |
+| **Deadzone Ratio** | % of non-zero values → zero | > 5% | Small values lost to quantization |
+| **Saturation Ratio** | % of values clipped to max | > 1% | Large values truncated |
+| **Relative Error** | mean(\|error\|/\|original\|) | > 10% | Proportional distortion |
+
+### 12.2 New Scanner: `scripts/srdd_quant_scanner.py`
+
+```python
+# Key metrics computed per layer:
+metrics = {
+    'sqnr_db': 10 * log10(signal_power / noise_power),
+    'deadzone_ratio': (was_nonzero & is_zero).mean(),
+    'saturation_ratio': (is_at_max).mean(),
+    'relative_error': (|error| / |original|).mean(),
+}
+```
+
+### 12.3 Execution Commands
+
+```bash
+# SSH to A100 server
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+
+# Pull latest code
+git pull personal feature/npu-aqn-test
+
+# Run improved quantization scan
+python scripts/srdd_quant_scanner.py \
+    --model_path /data/z00637938/hub/Qwen2.5-1.5B-Instruct \
+    --quant_type mxfp4 \
+    --sqnr_threshold 20.0 \
+    --deadzone_threshold 0.05 \
+    --saturation_threshold 0.01 \
+    --relative_error_threshold 0.1 \
+    --output results_quant_scan_v2.json
+```
+
+### 12.4 Expected Output
+
+The scanner will produce:
+1. Per-layer metrics (SQNR, deadzone, saturation, relative error)
+2. List of problematic layers with specific issues
+3. Recommendations: AQN layers vs mixed-precision layers
+
+---
+
+## 13. Mitigation Strategy Comparison
+
+Once problematic layers are identified, compare two approaches:
+
+### 13.1 Option A: AQN Training
+- **How**: Add noise proportional to quantization error during training
+- **Pros**: Model learns to tolerate quantization
+- **Cons**: Requires training, may not help severe cases
+
+### 13.2 Option B: Mixed Precision
+- **How**: Keep problematic layers in FP16/FP32, others in MXFP4
+- **Pros**: Direct fix, no training needed
+- **Cons**: Higher memory/compute for those layers
+
+### 13.3 Decision Framework
+
+| Problematic Layers | Recommended Strategy |
+|-------------------|---------------------|
+| < 10% of layers | Mixed precision (keep in FP16) |
+| 10-30% of layers | Mixed: FP16 for worst, AQN for moderate |
+| > 30% of layers | Reconsider MXFP4, try MXFP8 |
+
+---
+
+## 14. Notes
 
 - Start with W4A16 (weights only), then try W4A4 if needed
 - Use `force_py=True` if NPU kernels unavailable on A100
