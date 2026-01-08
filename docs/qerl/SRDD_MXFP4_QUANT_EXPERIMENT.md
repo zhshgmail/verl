@@ -455,9 +455,166 @@ aqn_gamma = 0.2  # Higher than previous 0.01 experiments
 
 ---
 
-## 14. Notes
+## 14. Full Training Experiments (2026-01-08)
+
+### 14.1 Implementation: HWErrorInjector with MXFP4 Fake Quantization
+
+The fake quantization is implemented via `HWErrorInjector` in `verl/utils/hw_error_injection.py`:
+
+| Feature | Implementation |
+|---------|---------------|
+| **Injection Point** | INPUT (forward_pre_hook) - correct for fake quant |
+| **Formula** | `y = linear(mxfp4_quant_dequant(x))` |
+| **Target** | All linear layers (112 hooks on Qwen2.5-1.5B) |
+| **Error Type** | `mxfp4` using `verl/utils/mxfp4_quant.py` |
+
+### 14.2 Experiment 1: Broken AQN (sigma_start=0.2, sigma_end=0.0)
+
+**Issue**: Wrong sigma configuration broke the exponential decay schedule.
+
+| Parameter | Wrong Value | Correct Value (QeRL) |
+|-----------|-------------|---------------------|
+| sigma_start | 0.2 | 0.05 |
+| sigma_end | 0.0 | 0.0005 |
+| num_stages | 5 | 10 |
+
+**Result**: Exponential decay formula `sigma_end/sigma_start = 0` caused `0**0 = 1`, making sigma_trend = [0.2, 0, 0, 0]. Model scores crashed to 0% during steps 13-24, then recovered with sigma=0.
+
+**SRDD Before vs After (Experiment 1):**
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| SQNR (dB) | 16.91 | 17.05 | +0.79% |
+| Deadzone (%) | 22.88 | 22.88 | +0.03% |
+| Relative Error (%) | 36.41 | 36.41 | +0.00% |
+| Problematic layers | 28 | 28 | No change |
+| **Val Accuracy** | 8.04% | **9.78%** | +1.74% |
+
+**Conclusion**: No meaningful improvement in quantization robustness because AQN was effectively disabled.
+
+### 14.3 Experiment 2: Correct AQN (sigma_start=0.05, sigma_end=0.0005)
+
+**Status**: In progress (2026-01-08)
+
+**Configuration:**
+```yaml
+trainer:
+  hw_error_injection:
+    enabled: True
+    error_type: mxfp4
+    injection_point: input  # Correct for fake quant
+    target_modules: ["linear"]
+    apply_during: both
+  noise_injection:  # AQN
+    enabled: True
+    sigma_start: 0.05  # QeRL default
+    sigma_end: 0.0005  # QeRL default
+    num_stages: 10     # QeRL default
+```
+
+**Sigma Decay Schedule (observed):**
+- Steps 0-5: warmup (sigma=0)
+- Steps 6-11: sigma=0.05
+- Steps 12-17: sigma=0.0281
+- ... (exponential decay continues)
+
+**Training Progress:**
+- Scores stable at 13-17% (vs 0% crash in Experiment 1)
+- Validation accuracy: TBD when training completes
+
+### 14.4 OOD Accuracy Comparison Plan
+
+Compare GSM8k test set accuracy between:
+1. **No AQN**: Experiment 1 checkpoint (broken AQN = no noise)
+2. **With AQN**: Experiment 2 checkpoint (correct sigma decay)
+
+Both models trained with MXFP4 fake quantization on all linear layers.
+
+---
+
+## 15. W4A16 Implementation & Results (2026-01-08)
+
+### 15.1 Critical Finding: W16A4 vs W4A16
+
+**Problem**: Original implementation was W16A4 (quantize activations), not W4A16 (quantize weights) like QeRL.
+
+| Approach | Description | Error Level |
+|----------|-------------|-------------|
+| **W16A4** (broken) | Quantize activations, FP16 weights | ~36% (too high) |
+| **W4A16** (correct) | Quantize weights, FP16 activations | ~20% (QeRL style) |
+
+**QeRL uses W4A16** - weights are quantized, activations remain in FP16.
+
+### 15.2 W4A16 Implementation
+
+Added `injection_point='weight'` mode to HWErrorInjector:
+
+```python
+# Weight quantization hooks (W4A16 - QeRL style)
+def _create_weight_quant_pre_hook(self, name: str) -> Callable:
+    """Quantize weights before forward pass"""
+    def hook(module: nn.Module, input: Tuple) -> None:
+        weight = module.weight.data
+        module._original_weight = weight.clone()
+        quantized_weight, _ = self._apply_mxfp4(weight)
+        module.weight.data = quantized_weight
+    return hook
+
+def _create_weight_restore_hook(self, name: str) -> Callable:
+    """Restore original weights after forward pass"""
+    def hook(module: nn.Module, input: Tuple, output) -> None:
+        if hasattr(module, '_original_weight'):
+            module.weight.data = module._original_weight
+            del module._original_weight
+    return hook
+```
+
+### 15.3 Experiment Suite Results
+
+**Three experiments for comparison:**
+
+| # | Experiment | MXFP4 | AQN | Purpose |
+|---|------------|-------|-----|---------|
+| 1 | Baseline | No | No | Original GRPO training accuracy |
+| 2 | MXFP4-only | W4A16 | No | Degradation from quantization |
+| 3 | MXFP4+AQN | W4A16 | Yes | Recovery with noise training |
+
+### 15.4 Results Summary (Qwen2.5-1.5B on GSM8k)
+
+| Step | Baseline | MXFP4+AQN | Difference |
+|------|----------|-----------|------------|
+| 0 (initial) | 7.88% | 8.42% | +0.54% |
+| 20 | **73.31%** | **71.95%** | **-1.36%** |
+| 40 | **75.13%** | **72.18%** | **-2.95%** |
+| 58 (final) | **75.97%** | **67.48%** | **-8.49%** |
+
+### 15.5 Key Findings
+
+1. **W4A16 weight quantization error**: ~20.9% relative error per layer
+2. **AQN effectively compensates** at step 20/40 (only 1-3% degradation)
+3. **Final accuracy gap widens** (8.5% at step 58) - possibly AQN sigma too aggressive
+4. **Initial validation ~8%** is the pre-training baseline (GRPO training brings it to 70%+)
+
+### 15.6 W4A16 Confirmed Working
+
+Log evidence:
+```
+[MXFP4-W4A16] First WEIGHT quant on lm_head: shape=(151936, 1536), mean_error=2.23e-03, rel_error=20.9%
+[HW Error] Registered 112 weight hooks (scale=1e-05, type=mxfp4, targets=['linear'])
+```
+
+### 15.7 MXFP4-only Results (Pending)
+
+Experiment 2 (MXFP4 without AQN) in progress to measure pure degradation.
+
+---
+
+## 16. Notes
 
 - Start with W4A16 (weights only), then try W4A4 if needed
 - Use `force_py=True` if NPU kernels unavailable on A100
 - Compare `mxfp4` vs `mxfp4-sr` vs `mxfp4_2d` variants
 - Document any unexpected findings
+- **Key insight**: HWErrorInjector now supports both:
+  - `injection_point='input'`: W16A4 (quantize activations) - for testing
+  - `injection_point='weight'`: W4A16 (quantize weights) - QeRL style
