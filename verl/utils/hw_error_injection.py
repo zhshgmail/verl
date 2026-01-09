@@ -56,6 +56,8 @@ class HWErrorConfig:
         mxfp4_block_2d: bool = False,
         # NVFP4-specific config (for error_type='nvfp4')
         nvfp4_stochastic_rounding: bool = False,
+        # Module exclusion list (for production PTQ recipes)
+        exclude_modules: Optional[List[str]] = None,
     ):
         """
         Args:
@@ -98,6 +100,11 @@ class HWErrorConfig:
                               are set to zero (simulates MXFP4 quantization deadzone)
             mxfp4_stochastic_rounding: Use stochastic rounding for MXFP4 (reduces bias)
             mxfp4_block_2d: Use 32x32 2D blocks instead of 1x32 for MXFP4
+            exclude_modules: List of module name patterns to EXCLUDE from quantization
+                - Default for MXFP4/NVFP4: ['lm_head', 'embed_tokens'] (production PTQ recipe)
+                - These layers are excluded because quantizing them is destructive:
+                  - lm_head: Output logits require high precision for token prediction
+                  - embed_tokens: Input embeddings need high precision for semantic encoding
         """
         self.enabled = enabled
         self.error_scale = error_scale
@@ -111,6 +118,12 @@ class HWErrorConfig:
         self.mxfp4_stochastic_rounding = mxfp4_stochastic_rounding
         self.mxfp4_block_2d = mxfp4_block_2d
         self.nvfp4_stochastic_rounding = nvfp4_stochastic_rounding
+        # Default exclusion for MXFP4/NVFP4: exclude lm_head and embed_tokens
+        # This follows production PTQ recipes that keep these layers in FP16
+        if exclude_modules is None and error_type in ('mxfp4', 'nvfp4'):
+            self.exclude_modules = ['lm_head', 'embed_tokens']
+        else:
+            self.exclude_modules = exclude_modules or []
 
     def __repr__(self):
         if self.error_type == 'deadzone':
@@ -119,11 +132,11 @@ class HWErrorConfig:
         if self.error_type == 'mxfp4':
             return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"sr={self.mxfp4_stochastic_rounding}, 2d={self.mxfp4_block_2d}, "
-                    f"targets={self.target_modules}, layers={self.target_layers})")
+                    f"targets={self.target_modules}, exclude={self.exclude_modules}, layers={self.target_layers})")
         if self.error_type == 'nvfp4':
             return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"sr={self.nvfp4_stochastic_rounding}, "
-                    f"targets={self.target_modules}, layers={self.target_layers})")
+                    f"targets={self.target_modules}, exclude={self.exclude_modules}, layers={self.target_layers})")
         return (f"HWErrorConfig(enabled={self.enabled}, scale={self.error_scale}, "
                 f"type={self.error_type}, targets={self.target_modules}, layers={self.target_layers})")
 
@@ -370,6 +383,11 @@ class HWErrorInjector:
         if self.config.target_layers is not None:
             layer_id = self._extract_layer_id(name)
             if layer_id is None or layer_id not in self.config.target_layers:
+                return False
+
+        # Check exclusion list (e.g., lm_head, embed_tokens for production PTQ)
+        for exclude_pattern in self.config.exclude_modules:
+            if exclude_pattern.lower() in name_lower:
                 return False
 
         # For deadzone, we target the decoder layer output (the whole layer)
