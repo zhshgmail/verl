@@ -510,7 +510,16 @@ All v3.x experiments use DAPO algorithm with 1 epoch.
 
 | ID | Quant | Algorithm | Overlong Penalty | Script | Status |
 |----|-------|-----------|------------------|--------|--------|
-| **E3a (v3.0)** | MXFP4 | DAPO | buffer=256, penalty=0.5 | `test_mxfp4_v3.0_dapo.sh` | RUNNING |
+| **E3a (v3.0)** | MXFP4 | DAPO | buffer=256, penalty=0.5 | `test_mxfp4_v3.0_dapo.sh` | RUNNING (started 2026-01-09 02:27 UTC) |
+
+### v3.0 Verified Configuration (from training log):
+```
+[RayPPOTrainer] HW error injection initialized: scale=1e-05, type=mxfp4, point=weight, targets=['linear']
+[HW Error] Registered 196 hooks on actor model: exclude=['lm_head', 'embed_tokens']
+clip_ratio_high: 0.25
+overlong_buffer: {'enable': True, 'len': 256, 'penalty_factor': 0.5}
+filter_groups: enabled
+```
 
 ### v3.0 Key Settings:
 ```yaml
@@ -538,6 +547,21 @@ trainer.total_epochs: 1  # DAPO standard
 - No response length explosion (overlong penalty)
 - Final accuracy closer to peak (~73%) vs E2a/E2b decline
 - Stable entropy (less collapse)
+
+### Monitoring Commands:
+```bash
+# Check training progress
+ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'grep -E \"Training Progress|step:.*val-core\" /tmp/mxfp4_v3.0_dapo/training.log | tail -10'"
+
+# Check response length (should stay ~200-250, not 400+)
+ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'grep \"response_length/mean\" /tmp/mxfp4_v3.0_dapo/training.log | tail -5'"
+
+# Check entropy (should stay ~0.25+, not collapse to 0.11)
+ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'grep \"actor/entropy\" /tmp/mxfp4_v3.0_dapo/training.log | tail -5'"
+
+# Check overlong penalty activation
+ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'grep \"overlong\" /tmp/mxfp4_v3.0_dapo/training.log | tail -5'"
+```
 
 ### Quick Start Commands:
 ```bash
