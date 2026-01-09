@@ -1,8 +1,8 @@
 # MXFP4/NVFP4 Quantization Experiment Registry
 
-**Date**: 2026-01-08
+**Date**: 2026-01-09
 **Branch**: `feature/npu-aqn-test`
-**Status**: NVFP4 v1 in progress
+**Status**: MXFP4 v2 completed - lm_head fix verified
 
 ---
 
@@ -21,7 +21,7 @@
 | **Exp 1D** | MXFP4 W4A16 | Linear | 0.001→0.00001 | **66.49%** | **YES** | `exp1d_linear_tiny_66.49.log` |
 | **Exp 1E** | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **62.32%** | **YES** | `exp1e_rmsnorm_62.32.log` |
 | **NVFP4 v1** | NVFP4 W4A16 | RMSNorm | 0.05→0.0005 | **COLLAPSED (7.66%)** | **YES** | `nvfp4_v1_collapsed_7.66pct.log` |
-| **MXFP4 v2** | MXFP4 W4A16 | None | - | **TBD** | **NO (fixed)** | `mxfp4_v2_no_aqn_TBD.log` |
+| **MXFP4 v2** | MXFP4 W4A16 | None | - | **65.96%** | **NO (fixed)** | `mxfp4_v2_no_aqn_65.96.log` |
 
 ---
 
@@ -315,7 +315,7 @@ notes: |
   Next: Try MXFP4 v2 with lm_head excluded (the fix).
 ```
 
-### 2.8 MXFP4 v2 - No AQN (with lm_head fix) - PENDING
+### 2.8 MXFP4 v2 - No AQN (with lm_head fix) - COMPLETED
 ```yaml
 experiment_id: mxfp4_v2
 date: 2026-01-09
@@ -327,24 +327,51 @@ hw_error_injection:
   error_type: mxfp4
   injection_point: weight
   target_modules: ["linear"]
-  exclude_modules: ["lm_head", "embed_tokens"]  # FIX APPLIED!
+  exclude_modules: ["lm_head", "embed_tokens"]  # FIX APPLIED AND VERIFIED!
   apply_during: both
 
 noise_injection:
   enabled: false  # NO AQN - baseline test
 
 training:
-  total_epochs: 2  # Reduced for faster iteration
+  total_epochs: 2
+  total_steps: 116
 
 result:
-  final_accuracy: TBD
-  status: pending
+  final_accuracy: 65.96%
+  peak_accuracy: 73.16% (step 40)
+  accuracy_drop: -10.01% (from baseline), -4.09% (from MXFP4-only with bug)
+  training_time: 1h 40m
+  entropy_range: 0.09-0.37 (stable)
+  status: completed
+
+validation_progression:
+  step_0: 8.57%   # VERY LOW - MXFP4 at inference degrades model significantly
+  step_20: 71.49%
+  step_40: 73.16%  # PEAK
+  step_60: 69.98%
+  step_80: 64.14%
+  step_100: 66.26%
+  step_116: 65.96%  # FINAL
+
+known_issues:
+  - step_0 = 8.57% is concerning (MXFP4 applied during initial validation)
+  - Model recovers to 73.16% (step 40) but then degrades
+  - Final accuracy (65.96%) is LOWER than MXFP4-only with lm_head bug (70.05%)
 
 notes: |
-  First experiment with lm_head exclusion fix.
-  Tests pure MXFP4 quantization without AQN.
-  Compare with previous MXFP4-only (70.05%) which had lm_head bug.
-  Expected: ~70% or better (lm_head excluded = better precision on output).
+  UNEXPECTED RESULT: lm_head exclusion did NOT improve accuracy!
+  - MXFP4-only (with lm_head bug): 70.05%
+  - MXFP4 v2 (lm_head excluded): 65.96%
+
+  Possible explanations:
+  1. 2 epochs vs 3 epochs (less training time)
+  2. MXFP4 at inference (step 0 = 8.57%) indicates severe degradation
+  3. The lm_head exclusion may help inference but not training
+
+  The step_0 = 8.57% is the key finding: MXFP4 quantization during
+  validation severely degrades model performance before any training.
+  Training recovers but doesn't reach baseline levels.
 ```
 
 ---
@@ -363,10 +390,18 @@ notes: |
 
 ### 3.3 Accuracy Ranking (MXFP4)
 1. Baseline (no quant): **75.97%**
-2. MXFP4-only: **70.05%**
+2. MXFP4-only (lm_head bug, 3ep): **70.05%**
 3. MXFP4 + AQN (original): **67.48%**
 4. Exp 1D (Linear sigma=0.001): **66.49%**
-5. Exp 1E (RMSNorm AQN): **62.32%** (worst)
+5. **MXFP4 v2 (lm_head fixed, 2ep): 65.96%**
+6. Exp 1E (RMSNorm AQN): **62.32%** (worst)
+
+### 3.5 lm_head Fix Impact
+- **Result**: lm_head exclusion did NOT improve accuracy
+- **MXFP4-only (with bug)**: 70.05% (3 epochs)
+- **MXFP4 v2 (fixed)**: 65.96% (2 epochs)
+- **Caveat**: Different epoch counts make direct comparison difficult
+- **Key observation**: Step 0 = 8.57% shows MXFP4 at inference is destructive
 
 ### 3.4 Bug Discovery
 - **lm_head quantization**: Was being quantized (should be excluded)
@@ -388,7 +423,8 @@ All logs are archived to: `/home/zheng/workspace/verl/logs/mxfp4_nvfp4_experimen
 | `exp1c_linear_collapsed.log` | Exp 1C | 315KB | archived |
 | `exp1d_linear_tiny_66.49.log` | Exp 1D | 808KB | archived |
 | `exp1e_rmsnorm_62.32.log` | Exp 1E | 985KB | archived |
-| `nvfp4_v1_aqn_inprogress.log` | NVFP4 v1 | 656KB | in_progress |
+| `nvfp4_v1_collapsed_7.66pct.log` | NVFP4 v1 | 656KB | archived |
+| `mxfp4_v2_no_aqn_65.96.log` | MXFP4 v2 | ~600KB | archived |
 
 **Archive Script**: `scripts/archive_experiment_logs.sh`
 
@@ -396,11 +432,12 @@ All logs are archived to: `/home/zheng/workspace/verl/logs/mxfp4_nvfp4_experimen
 
 ## 5. Next Steps
 
-1. **Complete NVFP4 v1**: Let current experiment finish (baseline with lm_head bug)
-2. **Archive logs**: Fetch all logs from A100 server
-3. **Run NVFP4 v2**: With `exclude_modules=['lm_head', 'embed_tokens']`
-4. **Run SRDD scan**: Verify actual NVFP4 error rate
-5. **Compare v1 vs v2**: Measure lm_head quantization impact
+1. ~~**Complete NVFP4 v1**~~: COLLAPSED at 7.66% (lm_head bug confirmed destructive)
+2. ~~**Archive logs**~~: All logs archived
+3. ~~**Run MXFP4 v2**~~: Completed at 65.96% (lm_head fix verified)
+4. **Run MXFP4 v3 (3 epochs)**: Fair comparison with original MXFP4-only
+5. **Investigate step 0 = 8.57%**: Why is MXFP4 at inference so destructive?
+6. **Consider NVFP4 v2**: With lm_head fix, may perform better
 
 ---
 
