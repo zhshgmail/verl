@@ -724,7 +724,86 @@ All v4.x experiments use NVFP4 quantization with DAPO algorithm for **comparison
 
 ---
 
-## 8. References
+## 8. v5.x Series: NVFP4 + LoRA Experiments (QeRL Methodology Replication)
+
+All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replicate QeRL's exact methodology.
+
+> **Key Insight from QeRL Analysis**: QeRL compares "NVFP4 + AQN" vs "16-bit LoRA", NOT "quantized vs quantized+AQN".
+> Our v4.x experiments compared NVFP4+AQN vs NVFP4 (both full fine-tuning), which is a different comparison.
+> v5.x experiments replicate QeRL's approach: base model with NVFP4 fake quant + trainable 16-bit LoRA adapters.
+
+| ID | Quant | LoRA | AQN | Script | Result | Status |
+|----|-------|------|-----|--------|--------|--------|
+| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | TBD | 🔲 PENDING |
+| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
+
+### QeRL Methodology Explanation
+
+**QeRL's Training Setup**:
+1. **Base model weights**: Frozen, fake-quantized to NVFP4 during forward pass
+2. **LoRA adapters**: 16-bit (trainable), NOT quantized
+3. **AQN**: Gaussian noise injection helps LoRA learn quantization-robust features
+
+**Why This Matters**:
+- QeRL reports 8%+ improvement with AQN
+- But they compare: NVFP4+AQN vs 16-bit LoRA (baseline)
+- Our v4.x compared: NVFP4+AQN vs NVFP4 (both full fine-tuning)
+- v5.x replicates QeRL's exact comparison for proper validation
+
+### v5.x Configuration
+
+```yaml
+# LoRA settings (16-bit, like QeRL)
+actor_rollout_ref.model.lora_rank: 32
+actor_rollout_ref.model.lora_alpha: 16
+# target_modules defaults to "all-linear"
+
+# NVFP4 fake quantization (base model only)
+trainer.hw_error_injection.enabled: True
+trainer.hw_error_injection.error_type: nvfp4
+trainer.hw_error_injection.injection_point: weight
+trainer.hw_error_injection.target_modules: ["linear"]
+
+# AQN (v5.1 only)
+trainer.noise_injection.enabled: True  # v5.0: False
+trainer.noise_injection.sigma_start: 0.05
+trainer.noise_injection.sigma_end: 0.0005
+trainer.noise_injection.num_stages: 10
+trainer.noise_injection.layer_types: ["rmsnorm"]
+```
+
+### Expected Outcomes
+
+Based on QeRL's findings:
+- **E5a (LoRA baseline)**: Should show degradation from fake quantization during training
+- **E5b (LoRA + AQN)**: Should significantly outperform E5a if QeRL's theory holds
+- **Expected AQN benefit**: 5-10% improvement (based on QeRL's reported results)
+
+### Comparison Matrix (When Complete)
+
+| Experiment | Method | AQN | Expected | Notes |
+|------------|--------|-----|----------|-------|
+| E4a | Full FT + NVFP4 | No | 72.55% | Completed |
+| E4b | Full FT + NVFP4 + AQN | Yes | 72.02% | Completed |
+| E5a | LoRA + NVFP4 | No | TBD | QeRL baseline |
+| E5b | LoRA + NVFP4 + AQN | Yes | TBD | QeRL method |
+
+### Quick Start Commands
+
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull personal feature/npu-aqn-test
+
+# Run v5.x experiments
+bash scripts/test_nvfp4_v5.0_dapo_lora.sh 8  # E5a: LoRA baseline
+bash scripts/test_nvfp4_v5.1_dapo_lora_aqn.sh 8  # E5b: LoRA + AQN
+```
+
+---
+
+## 9. References
 
 ### Active Documentation
 - [MXFP4_AQN_NEXT_STEPS.md](MXFP4_AQN_NEXT_STEPS.md) - Detailed experiment plan and results
