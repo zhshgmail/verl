@@ -2,7 +2,47 @@
 
 **Date**: 2026-01-09
 **Branch**: `feature/npu-aqn-test`
-**Status**: MXFP4 v2 completed - lm_head fix verified
+**Status**: E2b completed (68.84%) - Infrastructure fixes needed before further experiments
+
+---
+
+## ⚠️ CRITICAL PROJECT CONTEXT
+
+### Final Goal
+**Find proper MXFP4 W4A16 (or W4Axx) training recipe for Ascend NPU**
+
+### Key Constraints
+1. **GPU/NVFP4 is NOT a solution** - only validation/comparison tool
+2. **Ascend NPU uses MXFP4** - we cannot switch formats in production
+3. **HW Error Noise rationale**: Hardware heterogeneous differences (GPU vs NPU, different chip batches) are treated as error noise
+4. **NVFP4 experiments**: Only to validate AQN approach works, NOT as alternative to MXFP4
+
+### Current Blocker: Reward Hacking
+All experiments show **response length explosion** in epoch 2:
+- Step 40: 215 tokens, 73.24% accuracy
+- Step 100: 410 tokens, 66.34% accuracy (+91% length, -7% accuracy)
+
+**Entropy collapse** (0.27 → 0.11) indicates model exploits verbosity, not reasoning.
+
+### Required Infrastructure Fixes (Before More Experiments)
+1. **Use DAPO instead of PPO/GRPO** - Built-in overlong penalty + dynamic sampling
+2. **Keep 1 epoch** - DAPO doesn't solve entropy collapse, 21% MXFP4 error compounds
+3. **Response length penalty** - DAPO's overlong_buffer handles this
+4. **Quantize Reference model** - Actor/Ref consistency for KL divergence (future)
+
+### DAPO Analysis (2026-01-09)
+
+**Key Finding**: DAPO prevents **length explosion** but NOT **entropy collapse**.
+
+| DAPO Feature | Length Hack | Entropy Collapse |
+|--------------|-------------|------------------|
+| Overlong Buffer Penalty | ✅ Fixes | ❌ No effect |
+| Asymmetric Clipping | ⚠️ Partial | ❌ No effect |
+| Token-level Loss | ✅ Fixes | ❌ No effect |
+| Dynamic Sampling | ✅ Helps | ❌ No effect |
+
+**Recommendation**: Use DAPO with **1 epoch** (not 2). DAPO paper uses 1 epoch for all experiments.
+MXFP4's 21% error compounds over epochs regardless of DAPO protections.
 
 ---
 
@@ -434,19 +474,70 @@ All logs are archived to: `/home/zheng/workspace/verl/logs/mxfp4_nvfp4_experimen
 
 All experiments use 2 epochs and have `exclude_modules=['lm_head', 'embed_tokens']`.
 
-| ID | Quant | AQN Type | AQN Sigma | Script | Status |
-|----|-------|----------|-----------|--------|--------|
-| **v2.0** | MXFP4 | None | - | `test_mxfp4_v2_no_aqn.sh` | **65.96%** |
-| **v2.1** | MXFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_mxfp4_v2.1_rmsnorm_aqn.sh` | PENDING |
-| **v2.2** | MXFP4 | Linear | 0.001→0.00001 | `test_mxfp4_v2.2_linear_aqn.sh` | PENDING |
-| **v2.3** | NVFP4 | None | - | `test_nvfp4_v2.3_baseline.sh` | PENDING |
-| **v2.4** | NVFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_nvfp4_v2.4_rmsnorm_aqn.sh` | PENDING |
+**⚠️ PAUSED**: Reward hacking confounds results. Need infrastructure fixes first.
 
-### Execution Order:
-1. **v2.1** - MXFP4 + RMSNorm AQN (QeRL style) - FIRST
-2. **v2.2** - MXFP4 + Linear AQN
-3. **v2.3** - NVFP4 baseline
-4. **v2.4** - NVFP4 + RMSNorm AQN
+| ID | Quant | AQN Type | AQN Sigma | Script | Status | Notes |
+|----|-------|----------|-----------|--------|--------|-------|
+| **E2a (v2.0)** | MXFP4 | None | - | `test_mxfp4_v2_no_aqn.sh` | **65.96%** | Peak 73.16% @ step 40 |
+| **E2b (v2.1)** | MXFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_mxfp4_v2.1_rmsnorm_aqn.sh` | **68.84%** | Peak 73.24% @ step 40 |
+| **E2c (v2.2)** | MXFP4 | Linear | 0.001→0.00001 | `test_mxfp4_v2.2_linear_aqn.sh` | PAUSED | Wait for infra fix |
+| **E2d (v2.3)** | NVFP4 | None | - | `test_nvfp4_v2.3_baseline.sh` | PAUSED | **VALIDATION ONLY** |
+| **E2e (v2.4)** | NVFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_nvfp4_v2.4_rmsnorm_aqn.sh` | PAUSED | **VALIDATION ONLY** |
+
+### E2a vs E2b Comparison (Confounded by Reward Hack)
+
+| Metric | E2a (no AQN) | E2b (RMSNorm AQN) |
+|--------|--------------|-------------------|
+| Peak (step 40) | 73.16% | 73.24% |
+| Final (step 116) | 65.96% | 68.84% |
+| Decline from peak | -7.20% | -4.40% |
+| Response length @ 100 | ~400 tokens | ~410 tokens |
+| Entropy @ 100 | ~0.12 | ~0.11 |
+
+**Observation**: Both experiments show same reward hacking pattern. AQN may help slightly (2.88% better final), but confounded by epoch-2 verbosity exploitation.
+
+### Execution Order (REVISED):
+1. ~~v2.1~~ ✓ E2b completed (68.84%)
+2. **v3.0 (E3a)** - DAPO + MXFP4, 1 epoch (IN PROGRESS)
+3. If v3.0 successful, continue with v3.1 (DAPO + MXFP4 + AQN)
+4. NVFP4 experiments only for validation (NOT solution)
+
+---
+
+## 6. v3.x Series: DAPO-based Experiments
+
+All v3.x experiments use DAPO algorithm with 1 epoch.
+
+| ID | Quant | Algorithm | Overlong Penalty | Script | Status |
+|----|-------|-----------|------------------|--------|--------|
+| **E3a (v3.0)** | MXFP4 | DAPO | buffer=256, penalty=0.5 | `test_mxfp4_v3.0_dapo.sh` | RUNNING |
+
+### v3.0 Key Settings:
+```yaml
+# DAPO overlong penalty (prevents length explosion)
+reward_model.overlong_buffer.enable: True
+reward_model.overlong_buffer.len: 256
+reward_model.overlong_buffer.penalty_factor: 0.5
+
+# Asymmetric clipping (reduced for MXFP4 stability)
+actor.clip_ratio_low: 0.2
+actor.clip_ratio_high: 0.25  # DAPO default is 0.28
+
+# Token-level loss
+actor.loss_agg_mode: "token-mean"
+
+# Dynamic sampling
+algorithm.filter_groups.enable: True
+algorithm.filter_groups.metric: acc
+
+# Training
+trainer.total_epochs: 1  # DAPO standard
+```
+
+### Expected Outcomes:
+- No response length explosion (overlong penalty)
+- Final accuracy closer to peak (~73%) vs E2a/E2b decline
+- Stable entropy (less collapse)
 
 ### Quick Start Commands:
 ```bash
