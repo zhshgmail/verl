@@ -57,15 +57,20 @@ bash scripts/test_nvfp4_w4a16_training.sh 8
 
 ## 2. Experiment Status
 
-| Experiment | Config | Result | Status |
-|------------|--------|--------|--------|
-| Baseline | No MXFP4, No AQN | 75.97% | Completed |
-| MXFP4-only | W4A16, No AQN | 70.05% | Completed |
-| MXFP4+AQN (original) | W4A16, AQN on RMSNorm | 67.48% | Completed (AQN hurt!) |
-| **1A** | W4A16, AQN on Linear (sigma=0.05) | **Collapsed at step 19** | Failed |
-| **1C** | W4A16, AQN on Linear (sigma=0.005) | **Partial collapse at step 19** | Failed |
-| **1D** | W4A16, AQN on Linear (sigma=0.001) | **66.49% (STABLE!)** | Completed |
-| **1E** | W4A16, AQN on RMSNorm (QeRL default) | **62.32% (WORST!)** | Completed |
+> **⚠️ KNOWN ISSUE**: All MXFP4/NVFP4 experiments below have `lm_head` quantized (should be excluded).
+> This bug was identified by Gemini review on 2026-01-09 and fixed in commit `d8c25492`.
+> Production PTQ recipes exclude `lm_head` and `embed_tokens` from quantization.
+> Results may improve when re-run with the fix (`exclude_modules=['lm_head', 'embed_tokens']`).
+
+| Experiment | Config | Result | Status | lm_head Bug |
+|------------|--------|--------|--------|-------------|
+| Baseline | No MXFP4, No AQN | 75.97% | Completed | N/A |
+| MXFP4-only | W4A16, No AQN | 70.05% | Completed | **YES** |
+| MXFP4+AQN (original) | W4A16, AQN on RMSNorm | 67.48% | Completed (AQN hurt!) | **YES** |
+| **1A** | W4A16, AQN on Linear (sigma=0.05) | **Collapsed at step 19** | Failed | **YES** |
+| **1C** | W4A16, AQN on Linear (sigma=0.005) | **Partial collapse at step 19** | Failed | **YES** |
+| **1D** | W4A16, AQN on Linear (sigma=0.001) | **66.49% (STABLE!)** | Completed | **YES** |
+| **1E** | W4A16, AQN on RMSNorm (QeRL default) | **62.32% (WORST!)** | Completed | **YES** |
 
 ### 2.1 Experiment 1D Results (2026-01-09)
 

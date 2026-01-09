@@ -8,16 +8,19 @@
 
 ## Quick Reference
 
-| Experiment | Quant Type | AQN Target | Sigma | Result | Log File |
-|------------|------------|------------|-------|--------|----------|
-| Baseline | None | None | - | **75.97%** | `baseline_clean_75.97.log` |
-| MXFP4-only | MXFP4 W4A16 | None | - | **70.05%** | `mxfp4_only_70.05.log` |
-| MXFP4+AQN (orig) | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **67.48%** | `mxfp4_aqn_orig_67.48.log` |
-| Exp 1A | MXFP4 W4A16 | Linear | 0.05→0.0005 | **COLLAPSED** | `exp1a_linear_collapsed.log` |
-| Exp 1C | MXFP4 W4A16 | Linear | 0.005→0.00005 | **COLLAPSED** | `exp1c_linear_collapsed.log` |
-| **Exp 1D** | MXFP4 W4A16 | Linear | 0.001→0.00001 | **66.49%** | `exp1d_linear_tiny_66.49.log` |
-| **Exp 1E** | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **62.32%** | `exp1e_rmsnorm_62.32.log` |
-| **NVFP4 v1** | NVFP4 W4A16 | RMSNorm | 0.05→0.0005 | **TBD** | `nvfp4_v1_aqn_TBD.log` |
+> **⚠️ KNOWN ISSUE (Fixed in commit `d8c25492`)**: All experiments below have `lm_head` quantized.
+> Production PTQ recipes exclude `lm_head` and `embed_tokens`. Results may improve with fix.
+
+| Experiment | Quant Type | AQN Target | Sigma | Result | lm_head Bug | Log File |
+|------------|------------|------------|-------|--------|-------------|----------|
+| Baseline | None | None | - | **75.97%** | N/A | `baseline_clean_75.97.log` |
+| MXFP4-only | MXFP4 W4A16 | None | - | **70.05%** | **YES** | `mxfp4_only_70.05.log` |
+| MXFP4+AQN (orig) | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **67.48%** | **YES** | `mxfp4_aqn_orig_67.48.log` |
+| Exp 1A | MXFP4 W4A16 | Linear | 0.05→0.0005 | **COLLAPSED** | **YES** | `exp1a_linear_collapsed.log` |
+| Exp 1C | MXFP4 W4A16 | Linear | 0.005→0.00005 | **COLLAPSED** | **YES** | `exp1c_linear_collapsed.log` |
+| **Exp 1D** | MXFP4 W4A16 | Linear | 0.001→0.00001 | **66.49%** | **YES** | `exp1d_linear_tiny_66.49.log` |
+| **Exp 1E** | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **62.32%** | **YES** | `exp1e_rmsnorm_62.32.log` |
+| **NVFP4 v1** | NVFP4 W4A16 | RMSNorm | 0.05→0.0005 | **TBD** | **YES** | `nvfp4_v1_aqn_TBD.log` |
 
 ---
 
