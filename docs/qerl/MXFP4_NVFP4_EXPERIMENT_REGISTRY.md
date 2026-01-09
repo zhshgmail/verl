@@ -20,7 +20,8 @@
 | Exp 1C | MXFP4 W4A16 | Linear | 0.005→0.00005 | **COLLAPSED** | **YES** | `exp1c_linear_collapsed.log` |
 | **Exp 1D** | MXFP4 W4A16 | Linear | 0.001→0.00001 | **66.49%** | **YES** | `exp1d_linear_tiny_66.49.log` |
 | **Exp 1E** | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **62.32%** | **YES** | `exp1e_rmsnorm_62.32.log` |
-| **NVFP4 v1** | NVFP4 W4A16 | RMSNorm | 0.05→0.0005 | **TBD** | **YES** | `nvfp4_v1_aqn_TBD.log` |
+| **NVFP4 v1** | NVFP4 W4A16 | RMSNorm | 0.05→0.0005 | **COLLAPSED (7.66%)** | **YES** | `nvfp4_v1_collapsed_7.66pct.log` |
+| **MXFP4 v2** | MXFP4 W4A16 | None | - | **TBD** | **NO (fixed)** | `mxfp4_v2_no_aqn_TBD.log` |
 
 ---
 
@@ -264,10 +265,10 @@ notes: |
   Conclusion: MXFP4 error is too high for AQN to be effective.
 ```
 
-### 2.7 NVFP4 v1 - RMSNorm AQN (with lm_head bug)
+### 2.7 NVFP4 v1 - RMSNorm AQN (with lm_head bug) - COLLAPSED
 ```yaml
 experiment_id: nvfp4_v1
-date: 2026-01-08
+date: 2026-01-09
 script: test_nvfp4_w4a16_training.sh
 output_dir: /tmp/nvfp4_w4a16_aqn
 
@@ -276,7 +277,7 @@ hw_error_injection:
   error_type: nvfp4
   injection_point: weight
   target_modules: ["linear"]
-  exclude_modules: []  # BUG: lm_head was included (fixed in v2)
+  exclude_modules: []  # BUG: lm_head was included - CAUSED COLLAPSE
   apply_during: both
 
 noise_injection:
@@ -287,26 +288,63 @@ noise_injection:
   layer_types: ["rmsnorm"]
 
 result:
-  final_accuracy: TBD (in progress, ~55%)
-  status: in_progress
+  final_accuracy: 7.66% (COLLAPSED)
+  peak_accuracy: 72.55% (step 60)
+  collapse_start: step 100
+  status: STOPPED (collapsed)
 
 validation_progression:
-  step_0: 75.97%
   step_20: 67.63%
   step_40: 71.11%
-  step_60: 72.55%
+  step_60: 72.55%  # PEAK
   step_80: 70.05%
+  step_100: 53.83%  # COLLAPSE BEGINS
+  step_120: 17.13%
+  step_140: 7.66%   # NEAR-RANDOM
 
 known_issues:
-  - lm_head is being quantized (should be excluded)
-  - embed_tokens potentially affected
-  - This run serves as baseline for v2 comparison
+  - lm_head quantization CAUSED COLLAPSE
+  - Model degraded from 72.55% to 7.66% in 80 steps
+  - Collapse accelerated in epoch 2
 
 notes: |
-  NVFP4 has ~1% relative error (vs ~21% for MXFP4).
-  Early results (72.55% at step 60) are promising.
-  NOTE: This experiment has lm_head quantization bug.
-  Fix applied to hw_error_injection.py for v2.
+  CRITICAL FINDING: lm_head quantization is DESTRUCTIVE.
+  Model performed well initially (72.55% at step 60).
+  Collapse began at step 100 (epoch 1→2 transition).
+  Entropy dropped to 0.01 (near-deterministic wrong outputs).
+  Next: Try MXFP4 v2 with lm_head excluded (the fix).
+```
+
+### 2.8 MXFP4 v2 - No AQN (with lm_head fix) - PENDING
+```yaml
+experiment_id: mxfp4_v2
+date: 2026-01-09
+script: test_mxfp4_v2_no_aqn.sh
+output_dir: /tmp/mxfp4_v2_no_aqn
+
+hw_error_injection:
+  enabled: true
+  error_type: mxfp4
+  injection_point: weight
+  target_modules: ["linear"]
+  exclude_modules: ["lm_head", "embed_tokens"]  # FIX APPLIED!
+  apply_during: both
+
+noise_injection:
+  enabled: false  # NO AQN - baseline test
+
+training:
+  total_epochs: 2  # Reduced for faster iteration
+
+result:
+  final_accuracy: TBD
+  status: pending
+
+notes: |
+  First experiment with lm_head exclusion fix.
+  Tests pure MXFP4 quantization without AQN.
+  Compare with previous MXFP4-only (70.05%) which had lm_head bug.
+  Expected: ~70% or better (lm_head excluded = better precision on output).
 ```
 
 ---

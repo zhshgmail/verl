@@ -74,6 +74,7 @@ class HWErrorConfig:
                 - 'deadzone': MXFP4 deadzone - values < threshold*max are zeroed
                 - 'mxfp4': Full MXFP4 fake quantization (E2M1K8B32, ~21% error)
                 - 'nvfp4': NVFP4 fake quantization (E4M3 scale, ~1% error, QeRL compatible)
+                - 'fp8': FP8 E4M3 fake quantization (~0.1% error, highest precision)
             injection_point: Where to inject error (like quant_compute fake quantization)
                 - 'input': Inject error to operator INPUT activations (before computation)
                           Like fake quantization: y = operator(x + error)
@@ -118,9 +119,9 @@ class HWErrorConfig:
         self.mxfp4_stochastic_rounding = mxfp4_stochastic_rounding
         self.mxfp4_block_2d = mxfp4_block_2d
         self.nvfp4_stochastic_rounding = nvfp4_stochastic_rounding
-        # Default exclusion for MXFP4/NVFP4: exclude lm_head and embed_tokens
+        # Default exclusion for MXFP4/NVFP4/FP8: exclude lm_head and embed_tokens
         # This follows production PTQ recipes that keep these layers in FP16
-        if exclude_modules is None and error_type in ('mxfp4', 'nvfp4'):
+        if exclude_modules is None and error_type in ('mxfp4', 'nvfp4', 'fp8'):
             self.exclude_modules = ['lm_head', 'embed_tokens']
         else:
             self.exclude_modules = exclude_modules or []
@@ -136,6 +137,9 @@ class HWErrorConfig:
         if self.error_type == 'nvfp4':
             return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"sr={self.nvfp4_stochastic_rounding}, "
+                    f"targets={self.target_modules}, exclude={self.exclude_modules}, layers={self.target_layers})")
+        if self.error_type == 'fp8':
+            return (f"HWErrorConfig(enabled={self.enabled}, type={self.error_type}, "
                     f"targets={self.target_modules}, exclude={self.exclude_modules}, layers={self.target_layers})")
         return (f"HWErrorConfig(enabled={self.enabled}, scale={self.error_scale}, "
                 f"type={self.error_type}, targets={self.target_modules}, layers={self.target_layers})")
@@ -205,6 +209,19 @@ class HWErrorInjector:
             except ImportError as e:
                 raise ImportError(f"NVFP4 error type requires verl.utils.nvfp4_quant: {e}")
 
+        # Initialize FP8 quantizer if needed
+        self._fp8_quantize = None
+        if config.error_type == 'fp8':
+            try:
+                from verl.utils.fp8_quant import fp8_quantize, FP8Config
+                self._fp8_config = FP8Config()
+                self._fp8_quantize = fp8_quantize
+                if config.injection_point == 'output':
+                    logger.warning("[FP8] injection_point='output' will apply quant AFTER computation")
+                logger.info(f"[FP8] Initialized FP8 E4M3 quantizer: injection={config.injection_point}")
+            except ImportError as e:
+                raise ImportError(f"FP8 error type requires verl.utils.fp8_quant: {e}")
+
     def set_phase(self, phase: str):
         """Set current execution phase for conditional injection."""
         assert phase in ['rollout', 'training', 'both']
@@ -266,6 +283,11 @@ class HWErrorInjector:
 
         elif self.config.error_type == 'nvfp4':
             # Full NVFP4 fake quantization
+            # Return None to signal special handling needed
+            return None  # Special case handled in hook
+
+        elif self.config.error_type == 'fp8':
+            # Full FP8 E4M3 fake quantization
             # Return None to signal special handling needed
             return None  # Special case handled in hook
 
@@ -366,6 +388,37 @@ class HWErrorInjector:
 
         return quantized, stats
 
+    def _apply_fp8(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+        """
+        Apply FP8 E4M3 fake quantization to tensor.
+
+        FP8 E4M3 features:
+        - 4 exponent bits, 3 mantissa bits
+        - Per-tensor quantization (no blocks)
+        - ~0.1% relative error (highest precision)
+
+        Args:
+            tensor: Input tensor
+
+        Returns:
+            Tuple of (quantized tensor, stats dict)
+        """
+        if self._fp8_quantize is None:
+            raise RuntimeError("FP8 quantizer not initialized")
+
+        # Apply FP8 quantization
+        quantized = self._fp8_quantize(tensor, config=self._fp8_config)
+
+        # Compute error statistics
+        error = (quantized - tensor).abs()
+        stats = {
+            'mean_error': error.mean().item(),
+            'max_error': error.max().item(),
+            'relative_error': (error / (tensor.abs() + 1e-10)).mean().item(),
+        }
+
+        return quantized, stats
+
     def _extract_layer_id(self, name: str) -> Optional[int]:
         """Extract layer ID from module name like 'model.layers.15.mlp.down_proj'."""
         import re
@@ -398,9 +451,9 @@ class HWErrorInjector:
                 return True
             return False
 
-        # For MXFP4/NVFP4, use target_modules (default to 'linear' for all linear layers)
+        # For MXFP4/NVFP4/FP8, use target_modules (default to 'linear' for all linear layers)
         # This is different from deadzone which targets whole decoder layers
-        if self.config.error_type in ('mxfp4', 'nvfp4'):
+        if self.config.error_type in ('mxfp4', 'nvfp4', 'fp8'):
             # Default to linear layers if not specified
             targets = self.config.target_modules
             if not targets or targets == ['rmsnorm']:
@@ -481,12 +534,14 @@ class HWErrorInjector:
                     return (modified,) + rest
                 return modified
 
-            # Handle MXFP4/NVFP4 specially (full fake quantization)
-            if self.config.error_type in ('mxfp4', 'nvfp4'):
+            # Handle MXFP4/NVFP4/FP8 specially (full fake quantization)
+            if self.config.error_type in ('mxfp4', 'nvfp4', 'fp8'):
                 if self.config.error_type == 'mxfp4':
                     modified, quant_stats = self._apply_mxfp4(tensor_to_modify)
-                else:
+                elif self.config.error_type == 'nvfp4':
                     modified, quant_stats = self._apply_nvfp4(tensor_to_modify)
+                else:
+                    modified, quant_stats = self._apply_fp8(tensor_to_modify)
 
                 # Track statistics
                 if name not in self.stats:
@@ -570,12 +625,14 @@ class HWErrorInjector:
             if not isinstance(first_input, torch.Tensor):
                 return input
 
-            # Handle MXFP4/NVFP4 specially (full fake quantization)
-            if self.config.error_type in ('mxfp4', 'nvfp4'):
+            # Handle MXFP4/NVFP4/FP8 specially (full fake quantization)
+            if self.config.error_type in ('mxfp4', 'nvfp4', 'fp8'):
                 if self.config.error_type == 'mxfp4':
                     modified_input, quant_stats = self._apply_mxfp4(first_input)
-                else:
+                elif self.config.error_type == 'nvfp4':
                     modified_input, quant_stats = self._apply_nvfp4(first_input)
+                else:
+                    modified_input, quant_stats = self._apply_fp8(first_input)
 
                 # Track statistics
                 if name not in self.stats:
