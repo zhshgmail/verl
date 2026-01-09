@@ -430,14 +430,37 @@ All logs are archived to: `/home/zheng/workspace/verl/logs/mxfp4_nvfp4_experimen
 
 ---
 
-## 5. Next Steps
+## 5. v2.x Series Experiment Plan (lm_head fix applied)
 
-1. ~~**Complete NVFP4 v1**~~: COLLAPSED at 7.66% (lm_head bug confirmed destructive)
-2. ~~**Archive logs**~~: All logs archived
-3. ~~**Run MXFP4 v2**~~: Completed at 65.96% (lm_head fix verified)
-4. **Run MXFP4 v3 (3 epochs)**: Fair comparison with original MXFP4-only
-5. **Investigate step 0 = 8.57%**: Why is MXFP4 at inference so destructive?
-6. **Consider NVFP4 v2**: With lm_head fix, may perform better
+All experiments use 2 epochs and have `exclude_modules=['lm_head', 'embed_tokens']`.
+
+| ID | Quant | AQN Type | AQN Sigma | Script | Status |
+|----|-------|----------|-----------|--------|--------|
+| **v2.0** | MXFP4 | None | - | `test_mxfp4_v2_no_aqn.sh` | **65.96%** |
+| **v2.1** | MXFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_mxfp4_v2.1_rmsnorm_aqn.sh` | PENDING |
+| **v2.2** | MXFP4 | Linear | 0.001→0.00001 | `test_mxfp4_v2.2_linear_aqn.sh` | PENDING |
+| **v2.3** | NVFP4 | None | - | `test_nvfp4_v2.3_baseline.sh` | PENDING |
+| **v2.4** | NVFP4 | RMSNorm (QeRL) | 0.05→0.0005 | `test_nvfp4_v2.4_rmsnorm_aqn.sh` | PENDING |
+
+### Execution Order:
+1. **v2.1** - MXFP4 + RMSNorm AQN (QeRL style) - FIRST
+2. **v2.2** - MXFP4 + Linear AQN
+3. **v2.3** - NVFP4 baseline
+4. **v2.4** - NVFP4 + RMSNorm AQN
+
+### Quick Start Commands:
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull personal feature/npu-aqn-test
+
+# Run experiments in order:
+bash scripts/test_mxfp4_v2.1_rmsnorm_aqn.sh 8  # First
+bash scripts/test_mxfp4_v2.2_linear_aqn.sh 8
+bash scripts/test_nvfp4_v2.3_baseline.sh 8
+bash scripts/test_nvfp4_v2.4_rmsnorm_aqn.sh 8
+```
 
 ---
 
