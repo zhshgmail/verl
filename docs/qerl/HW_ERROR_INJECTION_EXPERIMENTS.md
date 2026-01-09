@@ -1903,3 +1903,140 @@ Checkpoints are stored on `/data` partition (28T, symlinked from `/home`):
 - Robustness evaluation script: `scripts/eval_robustness.sh`
 - Clean evaluation Python script: `scripts/clean_eval_checkpoint.py`
 - quant_compute library: Fake quantization reference implementation
+
+---
+
+## E7b: Qwen3-30B with 5% Error Injection (Completed)
+
+**Date**: 2026-01-08
+**Configuration:**
+- Model: Qwen3-30B-A3B-Base (30B parameter MoE model)
+- Dataset: GSM8K math problems
+- Algorithm: GRPO (Group Relative Policy Optimization) with PPO
+- Error Injection: 5e-2 relative_gaussian (5% relative error)
+- Parallelism: 8 GPUs, Expert Parallelism (EP=8)
+- Training: 58 steps (1 epoch), batch_size=128, n_responses=16
+- Environment: `VERL_NOISY_OPS_ENABLED=1`, `VERL_NOISY_OPS_SCALE=5e-2`
+
+### Training Progress
+
+**Performance Timeline (Selected Steps):**
+
+| Step | OOD Accuracy | Training Reward | Entropy | KL Divergence | Grad Norm | Response Length (avg) |
+|------|--------------|-----------------|---------|---------------|-----------|----------------------|
+| 30 | **79.08%** | 84.13% | 0.051 | 0.029 | 16.96 | 94.2 tokens |
+| 40 | - | - | 0.217 | 0.070 | 31.88 | 82.6 tokens |
+| 58 (final) | **33.59%** | 40.58% | 0.114 | 0.134 | 88.73 | 55.6 tokens |
+
+### Final Results (Step 58)
+
+**Validation Performance:**
+- **Final OOD Accuracy**: **33.59%** on GSM8K test set
+- **Training Reward**: 40.58% (mean critic score)
+- **Training Time**: 12 hours 44 minutes (790.54s per step average)
+
+**Training Dynamics (Final Step):**
+- Entropy: 0.114 (maintains exploration)
+- Policy Gradient Clip Fraction: 13.16% (high, aggressive updates)
+- KL Divergence: 0.134 (within bounds but elevated)
+- Gradient Norm: 88.73 (elevated but stable)
+- Average Response Length: 55.6 tokens (decreased from ~90 mid-training)
+
+### Key Observations
+
+#### 1. Severe Performance Degradation
+**Timeline of degradation:**
+- **Step 30**: 79.08% OOD accuracy (healthy performance)
+- **Step 58**: 33.59% OOD accuracy (**-45.49% absolute drop**)
+
+This represents a dramatic collapse in model performance during the second half of training.
+
+#### 2. Training Instability Indicators
+
+**Mid-training (Step 30-40):**
+- Entropy increased from 0.051 → 0.217 (4.2x increase, excessive exploration)
+- KL divergence increased from 0.029 → 0.070 (policy drift)
+- Gradient norm increased from 16.96 → 31.88 (gradient instability)
+
+**Final stage (Step 40-58):**
+- Entropy decreased to 0.114 (partial stabilization)
+- KL divergence continued rising to 0.134 (policy continued drifting)
+- Gradient norm spiked to 88.73 (5.2x increase from baseline)
+- Clip fraction increased to 13.16% (very aggressive policy updates)
+
+#### 3. Response Pattern Changes
+
+**Response length progression:**
+- Initial: ~95 tokens (steps 29-30)
+- Mid-training: Peaked at 94 tokens with outliers up to 7891 tokens (step 35)
+- Final: Collapsed to 55.6 tokens (step 58)
+
+The model appears to have learned to generate shorter, less accurate responses as training progressed.
+
+#### 4. Comparison with Baselines
+
+| Model | Error Injection | Final OOD Accuracy | Notes |
+|-------|----------------|-------------------|-------|
+| E7a (7B baseline) | None | 90.67% | Clean training |
+| E7b (7B + noise) | 5e-2 (5%) | 88.70% | -1.97% degradation |
+| E7c (7B + noise + AQN) | 5e-2 (5%) | 89.50% | +0.80% recovery with AQN |
+| **E7b (30B + noise)** | **5e-2 (5%)** | **33.59%** | **-45.49% severe collapse** |
+
+**Critical finding**: The 30B MoE model shows **dramatically worse robustness** to 5% error injection compared to the 7B dense model.
+
+### Analysis and Hypotheses
+
+#### Why did the 30B MoE model collapse while 7B remained stable?
+
+**Hypothesis 1: MoE Architecture Sensitivity**
+- MoE models use **router networks** to select experts
+- 5% noise in router logits could cause **incorrect expert selection**
+- Cascading errors: wrong expert → wrong computation → corrupted gradients
+- 30B MoE has 8 experts per layer; routing errors compound across layers
+
+**Hypothesis 2: Expert Parallelism Amplifies Errors**
+- Configuration uses EP=8 (expert parallelism across 8 GPUs)
+- All-to-all communication between GPUs for expert routing
+- Numerical errors may accumulate during inter-GPU communication
+- Gradient synchronization across experts may be unstable with noise
+
+**Hypothesis 3: Larger Model = Larger Error Accumulation**
+- 30B model has ~20x more parameters than 7B
+- More layers (32+ vs 28) means more error accumulation opportunities
+- Deeper gradient backpropagation is more sensitive to numerical noise
+
+**Hypothesis 4: Training Hyperparameters Mismatch**
+- Learning rate (1e-6) may be too aggressive for noisy gradients
+- No gradient clipping visible in configuration
+- Clip ratios (0.2-0.28) may be too wide for unstable training
+
+### Conclusions
+
+1. **MoE models are NOT robust to 5% computational noise** - Unlike dense models, the 30B MoE showed catastrophic degradation.
+
+2. **The degradation is progressive** - Performance was reasonable at step 30 (79%) but collapsed by step 58 (34%), suggesting cumulative instability.
+
+3. **Current AQN approach may not be sufficient** - While AQN helped the 7B model (+0.80%), this experiment suggests the 30B MoE requires different or stronger stabilization techniques.
+
+4. **Expert routing is a vulnerability** - MoE architectures introduce additional failure modes through router networks that may be highly sensitive to noise.
+
+### Recommendations
+
+**Immediate Actions:**
+1. **Test E7c-style AQN on 30B model** - Verify if AQN can stabilize the 30B MoE training
+2. **Reduce error scale** - Try 1e-2 (1%) or 2.5e-2 (2.5%) to find stability threshold
+3. **Add gradient clipping** - Constrain gradient norms to prevent explosive updates
+4. **Reduce learning rate** - Try 5e-7 or 1e-7 for more conservative updates
+
+**Research Directions:**
+1. **Router-specific noise analysis** - Instrument router layers separately to measure sensitivity
+2. **Expert-level error injection** - Test if noise in specific experts causes disproportionate harm
+3. **Per-layer noise scheduling** - Gradually increase noise tolerance layer-by-layer
+4. **Alternative architectures** - Compare dense 30B vs MoE 30B robustness
+
+### Checkpoint Location
+- Final checkpoint: `/data1/verl/checkpoints/moe_aqn/E7-Qwen3-30B-GSM8K-error-injection-aqn/global_step_58/`
+- Tensorboard logs: `/data1/verl/tensorboard_log/`
+- Training script: `/home/bruceli/projects/verl/run_e7b_qwen3_30b.sh`
+- Output log: `/data1/verl/log/e7b_training_output.log`
+
