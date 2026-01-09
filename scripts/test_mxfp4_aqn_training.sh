@@ -9,11 +9,12 @@
 # 3. Run SRDD scan AFTER training (compare metrics)
 #
 # Usage:
-#   bash scripts/test_mxfp4_aqn_training.sh [N_GPUS] [AQN_GAMMA]
+#   bash scripts/test_mxfp4_aqn_training.sh [N_GPUS] [SIGMA_START] [SIGMA_END] [NUM_STAGES]
 #
 # Examples:
-#   bash scripts/test_mxfp4_aqn_training.sh 8 0.2    # 8 GPUs, AQN gamma=0.2
-#   bash scripts/test_mxfp4_aqn_training.sh 4 0.1    # 4 GPUs, AQN gamma=0.1
+#   bash scripts/test_mxfp4_aqn_training.sh 8         # 8 GPUs, QeRL defaults (0.05→0.0005, 10 stages)
+#   bash scripts/test_mxfp4_aqn_training.sh 4 0.05   # 4 GPUs, custom sigma_start
+#   bash scripts/test_mxfp4_aqn_training.sh 4 0.1 0.001 5  # Custom all params
 
 set -x
 
@@ -22,7 +23,11 @@ export WANDB_MODE=offline
 
 # Configuration
 N_GPUS=${1:-8}
-AQN_GAMMA=${2:-0.2}  # Based on SRDD scan: ~36% relative error suggests gamma 0.1-0.3
+# AQN sigma values (QeRL defaults: sigma_start=0.05, sigma_end=0.0005)
+# Note: sigma_end must be > 0 to avoid breaking exponential decay schedule
+AQN_SIGMA_START=${2:-0.05}
+AQN_SIGMA_END=${3:-0.0005}
+AQN_NUM_STAGES=${4:-10}
 
 # Model and data paths (A100 server)
 MODEL_PATH=${MODEL_PATH:-"/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306"}
@@ -40,7 +45,9 @@ echo "  Model: ${MODEL_PATH}"
 echo "  Train data: ${TRAIN_DATA}"
 echo "  Val data: ${VAL_DATA}"
 echo "  N GPUs: ${N_GPUS}"
-echo "  AQN Gamma: ${AQN_GAMMA}"
+echo "  AQN sigma_start: ${AQN_SIGMA_START}"
+echo "  AQN sigma_end: ${AQN_SIGMA_END}"
+echo "  AQN num_stages: ${AQN_NUM_STAGES}"
 echo "  Output: ${OUTPUT_DIR}"
 echo "============================================================"
 
@@ -94,11 +101,13 @@ COMMON_ARGS="
     trainer.project_name=mxfp4_aqn_test
     trainer.n_gpus_per_node=${N_GPUS}
     trainer.val_before_train=True
-    trainer.save_freq=100
+    trainer.save_freq=50
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints
 "
 
 # MXFP4 Fake Quantization config (applies to both rollout and training)
+# Note: Default target_modules=['rmsnorm'] from config will be used
+# For linear layers targeting, we need to override via command line
 MXFP4_ARGS="
     trainer.hw_error_injection.enabled=True
     trainer.hw_error_injection.error_type=mxfp4
@@ -106,21 +115,23 @@ MXFP4_ARGS="
 "
 
 # AQN (Adaptive Quantization Noise) config
-# Uses sigma_trend for linear decay from gamma to 0
-# Format: [gamma, gamma*0.75, gamma*0.5, gamma*0.25, 0] over training
+# Uses trainer.noise_injection with sigma_start -> sigma_end decay over num_stages
+# QeRL defaults: sigma_start=0.05, sigma_end=0.0005, num_stages=10
+# Note: Use ++ prefix to override existing config keys (not + which adds new keys)
 AQN_ARGS="
-    actor_rollout_ref.rollout.noise_injection_enabled=True
-    actor_rollout_ref.rollout.noise_injection_sigma_trend=[${AQN_GAMMA},$(echo "${AQN_GAMMA}*0.75" | bc),$(echo "${AQN_GAMMA}*0.5" | bc),$(echo "${AQN_GAMMA}*0.25" | bc),0]
-    actor_rollout_ref.rollout.noise_injection_total_steps=500
-    actor_rollout_ref.rollout.noise_injection_target_modules=['linear']
+    ++trainer.noise_injection.enabled=True
+    ++trainer.noise_injection.sigma_start=${AQN_SIGMA_START}
+    ++trainer.noise_injection.sigma_end=${AQN_SIGMA_END}
+    ++trainer.noise_injection.num_stages=${AQN_NUM_STAGES}
 "
 
 python3 -m verl.trainer.main_ppo \
     --config-name=ppo_trainer \
     ${COMMON_ARGS} \
     ${MXFP4_ARGS} \
+    'trainer.hw_error_injection.target_modules=["linear"]' \
     ${AQN_ARGS} \
-    trainer.experiment_name=mxfp4_aqn_gamma${AQN_GAMMA} \
+    trainer.experiment_name=mxfp4_aqn_sigma${AQN_SIGMA_START} \
     2>&1 | tee ${OUTPUT_DIR}/training.log
 
 # Step 3: Run SRDD scan AFTER training

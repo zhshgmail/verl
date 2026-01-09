@@ -508,9 +508,82 @@ All experiments use 2 epochs and have `exclude_modules=['lm_head', 'embed_tokens
 
 All v3.x experiments use DAPO algorithm with 1 epoch.
 
-| ID | Quant | Algorithm | Overlong Penalty | Script | Status |
-|----|-------|-----------|------------------|--------|--------|
-| **E3a (v3.0)** | MXFP4 | DAPO | buffer=256, penalty=0.5 | `test_mxfp4_v3.0_dapo.sh` | RUNNING (started 2026-01-09 02:27 UTC) |
+| ID | Quant | Algorithm | AQN | Script | Result | Status |
+|----|-------|-----------|-----|--------|--------|--------|
+| **E3a (v3.0)** | MXFP4 | DAPO | None | `test_mxfp4_v3.0_dapo.sh` | **73.77%** | ✅ COMPLETED |
+| **E3b (v3.1)** | MXFP4 | DAPO | RMSNorm | `test_mxfp4_v3.1_dapo_aqn.sh` | **74.22%** | ✅ COMPLETED |
+
+### E3a (v3.0) Results - DAPO + MXFP4 (No AQN)
+
+| Metric | Value | vs E2a (no DAPO) |
+|--------|-------|------------------|
+| **Final Accuracy** | **73.77%** | +7.81% |
+| **Entropy** | 0.32 | vs 0.12 (3x higher) |
+| **Response Length** | 237 tokens | vs 410 (no explosion!) |
+| **Peak Accuracy** | 73.77% (step 29) | No decline! |
+
+**Key Success**: DAPO's overlong penalty prevented reward hacking. Final accuracy equals peak.
+
+### E3b (v3.1) Results - DAPO + MXFP4 + RMSNorm AQN
+
+| Metric | Value | vs E3a |
+|--------|-------|--------|
+| **Final Accuracy** | **74.22%** | +0.45% |
+| **Entropy** | 0.32 | Same |
+| **Response Length** | 234 tokens | Same |
+| **Peak Accuracy** | 74.22% (step 29) | No decline! |
+
+**Key Finding**: AQN provides small additional benefit (+0.45%) on top of DAPO.
+
+### v3.x vs v2.x Comparison
+
+| Metric | E2a (PPO) | E2b (PPO+AQN) | E3a (DAPO) | E3b (DAPO+AQN) |
+|--------|-----------|---------------|------------|----------------|
+| Final Acc | 65.96% | 68.84% | **73.77%** | **74.22%** |
+| Peak Acc | 73.16% | 73.24% | 73.77% | 74.22% |
+| Decline | -7.20% | -4.40% | **0%** | **0%** |
+| Entropy | 0.12 | 0.11 | **0.32** | **0.32** |
+| Resp Len | 410 | 410 | **237** | **234** |
+
+**Conclusion**: DAPO solves reward hacking. Final accuracy matches peak with stable entropy and response length.
+
+### SRDD Quantization Comparison (Original vs E3a vs E3b)
+
+**Scan Date**: 2026-01-09
+
+| Metric | Original Weights | E3a (DAPO) | E3b (DAPO+AQN) | Change |
+|--------|-----------------|------------|----------------|--------|
+| **Accuracy** | **8.57%** | **73.77%** | **74.22%** | +65.65% |
+| **SQNR (dB)** | 16.9±0.4 | 16.9±0.4 | **17.0±0.4** | +0.1 dB |
+| **Deadzone (%)** | 22.88 | 22.88 | **22.87** | -0.01% |
+| **Relative Error (%)** | 36.41 | 36.41 | **36.39** | -0.02% |
+| **Problematic Layers** | 28/28 | 28/28 | 28/28 | No change |
+
+> **Note**: "Original Weights" accuracy (8.57%) is from E2a step 0 - the original model evaluated with MXFP4 fake quantization applied, before any training. Baseline without MXFP4 is 75.97%.
+
+**Per-Layer SQNR Comparison** (selected layers):
+| Layer | Original | E3a | E3b | Best |
+|-------|----------|-----|-----|------|
+| Layer 27 (worst) | 15.7 dB | 15.7 dB | 15.7 dB | Same |
+| Layer 26 | 16.2 dB | 16.2 dB | 16.1 dB | Original |
+| Layer 15 (high err) | 16.9 dB | 16.9 dB | 17.2 dB | **E3b (+0.3)** |
+| Layer 1 (best) | 18.1 dB | 18.1 dB | 18.2 dB | **E3b (+0.1)** |
+
+**Key Insight**: Training provides **massive accuracy recovery** (+65.65%) but does NOT improve quantization metrics!
+
+| What Changes | Original→E3b | Impact |
+|--------------|--------------|--------|
+| **Accuracy** | 8.57%→74.22% | **+65.65% recovery** |
+| SQNR | 16.9→17.0 dB | +0.1 dB (negligible) |
+| Deadzone | 22.88→22.87% | -0.01% (negligible) |
+| Rel Error | 36.41→36.39% | -0.02% (negligible) |
+
+**Interpretation**:
+- **MXFP4 quantization destroys the original model** (75.97%→8.57%, -67.4%)
+- **Training recovers almost all accuracy** (8.57%→74.22%, +65.65%)
+- **Quantization properties stay the same** - all 28 layers still fail thresholds
+- Model learns to **work with** quantization error through **behavioral adaptation**, not by changing weight distributions
+- AQN provides small additional benefit (+0.45%) and tiny SQNR improvement (+0.1 dB)
 
 ### v3.0 Verified Configuration (from training log):
 ```
@@ -579,8 +652,88 @@ bash scripts/test_nvfp4_v2.4_rmsnorm_aqn.sh 8
 
 ---
 
-## 6. References
+## 7. v4.x Series: NVFP4 DAPO Experiments (Comparison)
 
-- [MXFP4_AQN_NEXT_STEPS.md](MXFP4_AQN_NEXT_STEPS.md) - Detailed experiment plan
-- [SRDD_MXFP4_QUANT_EXPERIMENT.md](SRDD_MXFP4_QUANT_EXPERIMENT.md) - SRDD scan results
-- [HW_ERROR_INJECTION_EXPERIMENTS.md](HW_ERROR_INJECTION_EXPERIMENTS.md) - Previous E5/E7 experiments
+All v4.x experiments use NVFP4 quantization with DAPO algorithm for **comparison purposes only**.
+
+> **IMPORTANT**: NVFP4 is NOT a solution for Ascend NPU - it's only used to validate the AQN approach.
+> NVFP4 has ~1% relative error vs MXFP4's ~21% error.
+
+| ID | Quant | Algorithm | AQN | Script | Result | Status |
+|----|-------|-----------|-----|--------|--------|--------|
+| **E4a (v4.0)** | NVFP4 | DAPO | None | `test_nvfp4_v4.0_dapo.sh` | **72.55%** | ✅ COMPLETED |
+| **E4b (v4.1)** | NVFP4 | DAPO | RMSNorm | `test_nvfp4_v4.1_dapo_aqn.sh` | **72.02%** | ✅ COMPLETED |
+
+### E4a (v4.0) Results - DAPO + NVFP4 (No AQN)
+
+| Metric | Value | vs E3a (MXFP4) |
+|--------|-------|----------------|
+| **Final Accuracy** | **72.55%** | -1.22% |
+| **Step 0 (before training)** | 7.66% | Similar to MXFP4 (8.57%) |
+| **Entropy** | 0.31 | Similar |
+| **Response Length** | 248 tokens | Similar |
+
+### E4b (v4.1) Results - DAPO + NVFP4 + RMSNorm AQN
+
+| Metric | Value | vs E4a |
+|--------|-------|--------|
+| **Final Accuracy** | **72.02%** | **-0.53%** |
+| **Step 0 (before training)** | 8.04% | Similar |
+| **Entropy** | 0.31 | Same |
+| **Response Length** | 230 tokens | Similar |
+
+> **Note**: Final accuracy obtained by explicit evaluation on merged checkpoint (step 20 showed 66.64% but final is 72.02%).
+
+### MXFP4 vs NVFP4 Comparison
+
+| Metric | E3a (MXFP4) | E3b (MXFP4+AQN) | E4a (NVFP4) | E4b (NVFP4+AQN) |
+|--------|-------------|-----------------|-------------|-----------------|
+| Final Acc | 73.77% | **74.22%** | 72.55% | 72.02% |
+| AQN Benefit | - | **+0.45%** | - | **-0.53%** |
+| Entropy | 0.32 | 0.32 | 0.31 | 0.31 |
+| Resp Len | 237 | 234 | 248 | 230 |
+
+### Key Finding: AQN Impact Varies by Quantization Type
+
+| Quantization | Without AQN | With AQN | AQN Impact |
+|--------------|-------------|----------|------------|
+| **MXFP4** (~21% error) | 73.77% | 74.22% | **+0.45%** (helps) |
+| **NVFP4** (~1% error) | 72.55% | 72.02% | **-0.53%** (neutral/slight hurt) |
+
+**Interpretation**:
+- **MXFP4**: AQN provides small benefit (+0.45%) - high quantization error benefits from noise training
+- **NVFP4**: AQN has minimal impact (-0.53%) - low quantization error doesn't benefit from additional noise
+- **Conclusion**: AQN is most useful when quantization error is high (like MXFP4); for low-error formats like NVFP4, it's neutral
+
+### Key Observations
+
+1. **NVFP4 step 0 accuracy (7.66%) ≈ MXFP4 step 0 (8.57%)**
+   - Both quantization formats destroy the original model similarly before training
+   - NVFP4's lower relative error (~1% vs ~21%) doesn't translate to better initial accuracy
+   - This suggests the accuracy loss is dominated by a few critical layers, not average error
+
+2. **AQN has minimal impact on NVFP4 (-0.53%)**
+   - Unlike the misleading step 20 result (66.64%), final evaluation shows 72.02%
+   - AQN neither helps nor hurts significantly when quantization error is low
+   - This confirms AQN is specifically useful for high-error quantization like MXFP4
+
+3. **MXFP4 slightly outperforms NVFP4 after training**
+   - E3a (MXFP4): 73.77% vs E4a (NVFP4): 72.55%
+   - Training can compensate for quantization error effectively
+   - The behavioral adaptation approach works regardless of quantization format
+
+---
+
+## 8. References
+
+### Active Documentation
+- [MXFP4_AQN_NEXT_STEPS.md](MXFP4_AQN_NEXT_STEPS.md) - Detailed experiment plan and results
+- [SRDD_MXFP4_QUANT_EXPERIMENT.md](SRDD_MXFP4_QUANT_EXPERIMENT.md) - SRDD scan methodology
+- [AQN_EXPERIMENT_SUMMARY_CN.md](AQN_EXPERIMENT_SUMMARY_CN.md) - AQN experiments summary (Chinese)
+- [A100_QUICK_REFERENCE.md](A100_QUICK_REFERENCE.md) - Quick server access reference
+
+### Archived Documentation (in `archive/`)
+- `archive/QeRL_R3_AQN_Documentation.md` - Original branch documentation (2025-12-24)
+
+### Related HW Error Experiments (separate track)
+- [HW_ERROR_INJECTION_EXPERIMENTS.md](HW_ERROR_INJECTION_EXPERIMENTS.md) - E5/E7/E8 noisy_ops experiments (includes forward-only noise findings)
