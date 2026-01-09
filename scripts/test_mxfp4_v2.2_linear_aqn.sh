@@ -79,11 +79,11 @@ python3 -m verl.trainer.main_ppo \
     trainer.hw_error_injection.injection_point=weight \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
-    trainer.noise_injection.enabled=True \
-    trainer.noise_injection.sigma_start=0.001 \
-    trainer.noise_injection.sigma_end=0.00001 \
-    trainer.noise_injection.num_stages=10 \
-    'trainer.noise_injection.layer_types=["linear"]' \
+    ++trainer.noise_injection.enabled=True \
+    ++trainer.noise_injection.sigma_start=0.001 \
+    ++trainer.noise_injection.sigma_end=0.00001 \
+    ++trainer.noise_injection.num_stages=10 \
+    '++trainer.noise_injection.layer_types=["linear"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
     trainer.project_name=mxfp4_v2.2_linear_aqn \
     trainer.experiment_name=mxfp4_v2.2_linear_aqn_2ep \

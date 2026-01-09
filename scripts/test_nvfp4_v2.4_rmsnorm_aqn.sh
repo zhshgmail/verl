@@ -82,11 +82,11 @@ python3 -m verl.trainer.main_ppo \
     trainer.hw_error_injection.injection_point=weight \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
-    trainer.noise_injection.enabled=True \
-    trainer.noise_injection.sigma_start=0.05 \
-    trainer.noise_injection.sigma_end=0.0005 \
-    trainer.noise_injection.num_stages=10 \
-    'trainer.noise_injection.layer_types=["rmsnorm"]' \
+    ++trainer.noise_injection.enabled=True \
+    ++trainer.noise_injection.sigma_start=0.05 \
+    ++trainer.noise_injection.sigma_end=0.0005 \
+    ++trainer.noise_injection.num_stages=10 \
+    '++trainer.noise_injection.layer_types=["rmsnorm"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
     trainer.project_name=nvfp4_v2.4_rmsnorm_aqn \
     trainer.experiment_name=nvfp4_v2.4_rmsnorm_aqn_2ep \
