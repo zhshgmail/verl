@@ -1,8 +1,8 @@
 # MXFP4 + AQN Next Steps Plan
 
 **Date**: 2026-01-09
-**Last Updated**: 2026-01-09 (Exp 1D Complete)
-**Status**: Exp 1D Completed, Running Exp 1E
+**Last Updated**: 2026-01-09 (Exp 1D & 1E Complete)
+**Status**: MXFP4 experiments complete, proceeding to NVFP4
 **Reference**: Gemini Expert Review
 
 ---
@@ -65,7 +65,7 @@ bash scripts/test_nvfp4_w4a16_training.sh 8
 | **1A** | W4A16, AQN on Linear (sigma=0.05) | **Collapsed at step 19** | Failed |
 | **1C** | W4A16, AQN on Linear (sigma=0.005) | **Partial collapse at step 19** | Failed |
 | **1D** | W4A16, AQN on Linear (sigma=0.001) | **66.49% (STABLE!)** | Completed |
-| **1E** | W4A16, AQN on RMSNorm (QeRL default) | TBD | **Next** |
+| **1E** | W4A16, AQN on RMSNorm (QeRL default) | **62.32% (WORST!)** | Completed |
 
 ### 2.1 Experiment 1D Results (2026-01-09)
 
@@ -96,6 +96,33 @@ bash scripts/test_nvfp4_w4a16_training.sh 8
 - Step 140: 66.59%
 - Step 160: 67.02%
 - Step 174: **66.49%** (final)
+
+### 2.2 Experiment 1E Results (2026-01-09)
+
+**CONCLUSION: QeRL's RMSNorm AQN does NOT help with MXFP4's high error rate!**
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Final Accuracy | **62.32%** | WORST of all experiments! |
+| Training Stability | STABLE | No collapse (entropy 0.073 at end) |
+| Runtime | 2h 41m | 174 steps, 3 epochs |
+| Sigma Range | 0.05 → 0.0005 | QeRL default schedule |
+| Checkpoint | global_step_174 | Saved successfully |
+
+**Key Findings:**
+1. **RMSNorm AQN hurts MXFP4 training**: 62.32% < 66.49% (Exp 1D) < 70.05% (MXFP4-only)
+2. **~21% MXFP4 error is too high**: AQN cannot compensate for such large quantization error
+3. **QeRL's approach needs lower error format**: NVFP4 (~1% error) is the logical next step
+4. **All MXFP4+AQN variants underperform MXFP4-only**: AQN adds training noise without benefit
+
+**Accuracy Ranking (worst to best):**
+1. Exp 1E (RMSNorm AQN): **62.32%** ← Worst
+2. Exp 1D (Linear AQN sigma=0.001): **66.49%**
+3. Original MXFP4+AQN: **67.48%**
+4. MXFP4-only: **70.05%** ← Best with MXFP4
+5. Baseline (no quant): **75.97%**
+
+**Next Action**: Try NVFP4 (21x lower error than MXFP4). With ~1% relative error, AQN should be effective.
 
 ---
 
