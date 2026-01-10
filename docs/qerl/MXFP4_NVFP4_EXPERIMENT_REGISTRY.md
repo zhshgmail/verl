@@ -734,8 +734,20 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 
 | ID | Quant | LoRA | AQN | Script | Result | Status |
 |----|-------|------|-----|--------|--------|--------|
-| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | TBD | 🔲 PENDING |
-| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
+| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | **32.75%** | ✅ COMPLETED |
+| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔄 RUNNING |
+
+### E5a Results - LoRA + NVFP4 (No AQN)
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Step 0 (before training)** | 7.58% | Similar to full FT (7.66%) |
+| **Final (step 29)** | **32.75%** | Much lower than full FT (72.55%) |
+| Entropy | 0.45 | Healthy |
+| Response length | 217 tokens | No length explosion |
+
+**Critical Finding**: LoRA with NVFP4 fake quant achieves only **32.75%** vs full fine-tuning's **72.55%**.
+This suggests LoRA adapters struggle to compensate for quantization error when the base model is quantized.
 
 ### QeRL Methodology Explanation
 
