@@ -791,14 +791,47 @@ Based on QeRL's findings:
 - **E5b (LoRA + AQN)**: Should significantly outperform E5a if QeRL's theory holds
 - **Expected AQN benefit**: 5-10% improvement (based on QeRL's reported results)
 
-### Comparison Matrix (When Complete)
+### Comparison Matrix
 
-| Experiment | Method | AQN | Expected | Notes |
-|------------|--------|-----|----------|-------|
-| E4a | Full FT + NVFP4 | No | 72.55% | Completed |
-| E4b | Full FT + NVFP4 + AQN | Yes | 72.02% | Completed |
-| E5a | LoRA + NVFP4 | No | TBD | QeRL baseline |
-| E5b | LoRA + NVFP4 + AQN | Yes | TBD | QeRL method |
+| Experiment | Method | AQN | Result | Notes |
+|------------|--------|-----|--------|-------|
+| E4a | Full FT + NVFP4 | No | **72.55%** | Completed |
+| E4b | Full FT + NVFP4 + AQN | Yes | **72.02%** | Completed |
+| E5a | LoRA + NVFP4 | No | **32.75%** | ⚠️ Much lower than full FT |
+| E5b | LoRA + NVFP4 + AQN | Yes | TBD | Running |
+
+### Key Finding: LoRA Struggles with Quantized Base Model
+
+**E5a result (32.75%) is dramatically lower than E4a (72.55%)**. This is a 40% gap!
+
+Possible explanations:
+1. **LoRA adapters can't compensate for quantized base model errors** - the small parameter count (~1%) may be insufficient to correct quantization-induced errors throughout the network
+2. **Gradient flow issue** - fake quantization during forward pass may disrupt gradient signals that LoRA adapters depend on
+3. **Implementation difference from QeRL** - need to verify our setup matches QeRL's exactly
+
+This finding contradicts QeRL's reported success with NVFP4+LoRA. We need to investigate if our implementation differs from QeRL's approach.
+
+---
+
+## 9. v6.x Series: MXFP4 + LoRA Experiments (Ascend NPU Target)
+
+All v6.x experiments use **MXFP4** (21% error) with 16-bit LoRA - our actual target for Ascend NPU.
+
+> **Note**: v5.x used NVFP4 (1% error) to match QeRL's setup. v6.x tests our real deployment target.
+
+| ID | Quant | LoRA | AQN | Script | Result | Status |
+|----|-------|------|-----|--------|--------|--------|
+| **E6a (v6.0)** | MXFP4 | rank=32, alpha=16 | None | `test_mxfp4_v6.0_dapo_lora.sh` | TBD | 🔲 PENDING |
+| **E6b (v6.1)** | MXFP4 | rank=32, alpha=16 | RMSNorm | `test_mxfp4_v6.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
+
+### Why MXFP4 LoRA Experiments?
+
+We're comparing **apples (MXFP4, 21% error) to oranges (NVFP4, 1% error)**:
+- QeRL targets NVFP4 deployment
+- We target MXFP4 deployment (Ascend NPU)
+- MXFP4 has 20x higher quantization error than NVFP4
+
+If LoRA struggles with NVFP4 (32.75%), MXFP4 results may be even worse.
 
 ### Quick Start Commands
 
@@ -811,11 +844,15 @@ git pull personal feature/npu-aqn-test
 # Run v5.x experiments
 bash scripts/test_nvfp4_v5.0_dapo_lora.sh 8  # E5a: LoRA baseline
 bash scripts/test_nvfp4_v5.1_dapo_lora_aqn.sh 8  # E5b: LoRA + AQN
+
+# Run v6.x MXFP4 experiments (our real target)
+bash scripts/test_mxfp4_v6.0_dapo_lora.sh 8  # E6a: MXFP4 LoRA baseline
+bash scripts/test_mxfp4_v6.1_dapo_lora_aqn.sh 8  # E6b: MXFP4 LoRA + AQN
 ```
 
 ---
 
-## 9. References
+## 10. References
 
 ### Active Documentation
 - [MXFP4_AQN_NEXT_STEPS.md](MXFP4_AQN_NEXT_STEPS.md) - Detailed experiment plan and results
