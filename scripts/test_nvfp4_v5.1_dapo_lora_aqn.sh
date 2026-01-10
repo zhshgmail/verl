@@ -155,7 +155,7 @@ python3 -m recipe.dapo.main_dapo \
     trainer.hw_error_injection.injection_point=weight \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
-    'trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
+    '++trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
     ++trainer.noise_injection.enabled=True \
     ++trainer.noise_injection.sigma_start=0.05 \
     ++trainer.noise_injection.sigma_end=0.0005 \

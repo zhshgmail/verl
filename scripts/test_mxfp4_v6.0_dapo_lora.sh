@@ -147,7 +147,7 @@ python3 -m recipe.dapo.main_dapo \
     trainer.hw_error_injection.injection_point=weight \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
-    'trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
+    '++trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
     trainer.project_name=mxfp4_v6.0_dapo_lora \
     trainer.experiment_name=mxfp4_v6.0_dapo_lora_1ep \
