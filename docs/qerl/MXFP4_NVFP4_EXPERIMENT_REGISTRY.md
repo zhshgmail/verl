@@ -2,7 +2,34 @@
 
 **Date**: 2026-01-11
 **Branch**: `feature/npu-aqn-test`
-**Status**: E5a: 63.84%, E5b: 66.11% completed. E6a/E6b (MXFP4+LoRA) and E7a/E7b (BF16+LoRA) scripts ready.
+**Status**: Running E7a (BF16+LoRA baseline), then E6a/E6b (MXFP4+LoRA)
+
+---
+
+## 🎯 CURRENT FOCUS: MXFP4+LoRA vs BF16+LoRA Baseline
+
+### Objective
+Compare MXFP4 quantized LoRA training against pure BF16 LoRA baseline to measure:
+1. Accuracy degradation from MXFP4 quantization
+2. AQN recovery potential
+
+### Experiment Plan (2026-01-11)
+
+| Order | Experiment | Config | Expected | Purpose |
+|-------|------------|--------|----------|---------|
+| 1 | **E7a** | BF16 + LoRA | ~75-76% | **BASELINE** |
+| 2 | **E6a** | MXFP4 + LoRA | ~55-65% | Quantization impact |
+| 3 | **E6b** | MXFP4 + LoRA + AQN | E6a + 2-5% | AQN recovery |
+
+### Key Questions
+1. **How much does MXFP4 degrade LoRA?** (E7a vs E6a)
+2. **Can AQN recover the loss?** (E6a vs E6b)
+3. **Is MXFP4+LoRA+AQN viable?** (E6b vs E7a gap acceptable?)
+
+### Scripts Ready
+- `scripts/test_bf16_v7.0_dapo_lora.sh` - E7a
+- `scripts/test_mxfp4_v6.0_dapo_lora.sh` - E6a
+- `scripts/test_mxfp4_v6.1_dapo_lora_aqn.sh` - E6b
 
 ---
 
