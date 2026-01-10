@@ -5,13 +5,13 @@
 # Date: 2026-01-09
 #
 # Key Changes from v4.0:
-# - Adds RMSNorm AQN noise injection (sigma 0.05 -> 0.0005)
+# - Adds RMSNorm AQN noise injection (sigma 0.01 -> 0.0001, QeRL exact values)
 #
 # Configuration:
 # - NVFP4 W4A16 quantization (~1% error, 21x better than MXFP4)
 # - lm_head and embed_tokens EXCLUDED
 # - DAPO overlong penalty: buffer=256, penalty=0.5
-# - RMSNorm AQN: sigma 0.05 -> 0.0005 (10 stages)
+# - RMSNorm AQN: sigma 0.01 -> 0.0001 (10 stages, QeRL exact values)
 # - 1 epoch (DAPO standard)
 #
 # Compare with:
@@ -76,7 +76,7 @@ echo "  - DAPO overlong penalty: buffer=${overlong_buffer_len}, penalty=${overlo
 echo "  - Asymmetric clipping: low=${clip_ratio_low}, high=${clip_ratio_high}"
 echo "  - Token-level loss: ${loss_agg_mode}"
 echo "  - Dynamic sampling: filter_groups enabled"
-echo "  - RMSNorm AQN: sigma 0.05 -> 0.0005 (10 stages)"
+echo "  - RMSNorm AQN: sigma 0.01 -> 0.0001 (QeRL exact values)"
 echo "  - 1 epoch (DAPO standard)"
 echo ""
 echo "Compare with MXFP4 DAPO experiments:"
@@ -141,8 +141,8 @@ python3 -m recipe.dapo.main_dapo \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
     ++trainer.noise_injection.enabled=True \
-    ++trainer.noise_injection.sigma_start=0.05 \
-    ++trainer.noise_injection.sigma_end=0.0005 \
+    ++trainer.noise_injection.sigma_start=0.01 \
+    ++trainer.noise_injection.sigma_end=0.0001 \
     ++trainer.noise_injection.num_stages=10 \
     '++trainer.noise_injection.layer_types=["rmsnorm"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \

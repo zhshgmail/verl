@@ -12,7 +12,7 @@
 # - Response length: 237 tokens (stable!)
 #
 # v3.1 Changes:
-# - Add RMSNorm AQN (sigma 0.05 -> 0.0005, QeRL style)
+# - Add RMSNorm AQN (sigma 0.01 -> 0.0001, QeRL exact values)
 # - Keep all DAPO settings from v3.0
 #
 # Usage:
@@ -69,7 +69,7 @@ echo "Key settings:"
 echo "  - MXFP4 W4A16 quantization"
 echo "  - exclude_modules=['lm_head', 'embed_tokens']"
 echo "  - DAPO overlong penalty: buffer=${overlong_buffer_len}, penalty=${overlong_penalty_factor}"
-echo "  - RMSNorm AQN: sigma 0.05 -> 0.0005 (QeRL style)"
+echo "  - RMSNorm AQN: sigma 0.01 -> 0.0001 (QeRL exact values)"
 echo "  - 1 epoch"
 echo ""
 echo "Comparing with v3.0 (73.77%, no AQN)"
@@ -132,8 +132,8 @@ python3 -m recipe.dapo.main_dapo \
     trainer.hw_error_injection.apply_during=both \
     'trainer.hw_error_injection.target_modules=["linear"]' \
     ++trainer.noise_injection.enabled=True \
-    ++trainer.noise_injection.sigma_start=0.05 \
-    ++trainer.noise_injection.sigma_end=0.0005 \
+    ++trainer.noise_injection.sigma_start=0.01 \
+    ++trainer.noise_injection.sigma_end=0.0001 \
     ++trainer.noise_injection.num_stages=10 \
     '++trainer.noise_injection.layer_types=["rmsnorm"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
