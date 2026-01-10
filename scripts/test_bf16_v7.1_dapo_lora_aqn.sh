@@ -1,29 +1,26 @@
 #!/bin/bash
-# MXFP4 v6.1: DAPO with 16-bit LoRA + AQN (Ascend NPU target)
+# BF16 v7.1: DAPO with 16-bit LoRA + AQN (test AQN without quantization)
 #
-# Experiment ID: v6.1 (E6b)
-# Date: 2026-01-10
+# Experiment ID: v7.1 (E7b)
+# Date: 2026-01-11
 #
 # Motivation:
-# - MXFP4 is our target for Ascend NPU (21% relative error)
-# - E5a showed LoRA works with quantized base model (63.84% vs 72.55% full FT)
-# - QeRL suggests AQN helps LoRA learn quantization robustness
-# - This tests if AQN can help LoRA with high-error MXFP4
+# - QeRL shows AQN helps with quantization error
+# - This experiment tests: does AQN help when there's NO quantization?
+# - If AQN only helps when quantization is present, E7b ≈ E7a
+# - If AQN provides general regularization, E7b > E7a
 #
 # Configuration:
-# - MXFP4 W4A16 fake quantization on linear layers (~21% error)
+# - NO quantization (pure BF16 weights)
 # - 16-bit LoRA (rank=32, alpha=16) on all linear layers
-# - lm_head and embed_tokens EXCLUDED from quantization
-# - RMSNorm AQN: sigma 0.01 -> 0.0001 (QeRL exact values, 10 stages)
-# - DAPO algorithm (same as v3.x/v4.x/v5.x)
+# - DAPO algorithm (same as other experiments)
+# - RMSNorm AQN: sigma 0.01 -> 0.0001 (QeRL exact values)
 # - 1 epoch (DAPO standard)
 #
-# Key Question: Can AQN help LoRA with high-error MXFP4?
-# - If E6b >> E6a: AQN is critical for LoRA + MXFP4
-# - If E6b ≈ E6a: AQN doesn't help with LoRA
+# This tests whether AQN provides benefit beyond quantization robustness.
 #
 # Usage:
-#   bash scripts/test_mxfp4_v6.1_dapo_lora_aqn.sh [N_GPUS]
+#   bash scripts/test_bf16_v7.1_dapo_lora_aqn.sh [N_GPUS]
 
 set -x
 
@@ -35,7 +32,7 @@ MODEL_PATH=${MODEL_PATH:-"/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruc
 TRAIN_DATA=${TRAIN_DATA:-"/data/z00637938/gsm8k/train.parquet"}
 VAL_DATA=${VAL_DATA:-"/data/z00637938/gsm8k/test.parquet"}
 
-OUTPUT_DIR="/tmp/mxfp4_v6.1_dapo_lora_aqn"
+OUTPUT_DIR="/tmp/bf16_v7.1_dapo_lora_aqn"
 mkdir -p ${OUTPUT_DIR}
 
 # DAPO-specific settings
@@ -71,19 +68,23 @@ gen_batch_size=256
 ppo_mini_batch_size=32
 n_resp_per_prompt=8
 
-# LoRA settings (16-bit)
+# LoRA settings (16-bit, like QeRL)
 lora_rank=32
 lora_alpha=16
 
-echo "=== MXFP4 v6.1: DAPO + 16-bit LoRA + AQN (Ascend NPU Target) ==="
+echo "=== BF16 v7.1: DAPO + 16-bit LoRA + AQN (AQN without Quantization) ==="
 echo "Key settings:"
-echo "  - MXFP4 W4A16 fake quantization (~21% error - HIGH)"
+echo "  - NO quantization (pure BF16 weights)"
 echo "  - 16-bit LoRA: rank=${lora_rank}, alpha=${lora_alpha}"
-echo "  - exclude_modules=['lm_head', 'embed_tokens']"
+echo "  - DAPO overlong penalty: buffer=${overlong_buffer_len}, penalty=${overlong_penalty_factor}"
+echo "  - Asymmetric clipping: low=${clip_ratio_low}, high=${clip_ratio_high}"
+echo "  - Token-level loss: ${loss_agg_mode}"
 echo "  - RMSNorm AQN: sigma 0.01 -> 0.0001 (QeRL exact values)"
 echo "  - 1 epoch (DAPO standard)"
 echo ""
-echo "Key Question: Can AQN help LoRA with high-error MXFP4?"
+echo "This tests if AQN helps without quantization:"
+echo "  - E7a (BF16 + LoRA): TBD"
+echo "  - E7b (BF16 + LoRA + AQN): this experiment"
 
 python3 -m recipe.dapo.main_dapo \
     data.train_files=${TRAIN_DATA} \
@@ -139,27 +140,22 @@ python3 -m recipe.dapo.main_dapo \
     trainer.n_gpus_per_node=${N_GPUS} \
     trainer.val_before_train=True \
     trainer.save_freq=50 \
-    trainer.hw_error_injection.enabled=True \
-    trainer.hw_error_injection.error_type=mxfp4 \
-    trainer.hw_error_injection.injection_point=weight \
-    trainer.hw_error_injection.apply_during=both \
-    'trainer.hw_error_injection.target_modules=["linear"]' \
-    '++trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
+    trainer.hw_error_injection.enabled=False \
     ++trainer.noise_injection.enabled=True \
     ++trainer.noise_injection.sigma_start=0.01 \
     ++trainer.noise_injection.sigma_end=0.0001 \
     ++trainer.noise_injection.num_stages=10 \
     '++trainer.noise_injection.layer_types=["rmsnorm"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
-    trainer.project_name=mxfp4_v6.1_dapo_lora_aqn \
-    trainer.experiment_name=mxfp4_v6.1_dapo_lora_aqn_1ep \
+    trainer.project_name=bf16_v7.1_dapo_lora_aqn \
+    trainer.experiment_name=bf16_v7.1_dapo_lora_aqn_1ep \
     2>&1 | tee ${OUTPUT_DIR}/training.log
 
 echo ""
-echo "MXFP4 v6.1 DAPO + LoRA + AQN experiment complete!"
+echo "BF16 v7.1 DAPO + LoRA + AQN experiment complete!"
 echo "Results in: ${OUTPUT_DIR}"
 echo ""
 echo "Compare with:"
-echo "  - E6a (MXFP4 + LoRA, no AQN): TBD"
-echo "  - E3a (MXFP4 full FT, no AQN): 73.77%"
-echo "  - E3b (MXFP4 full FT + AQN): 74.22%"
+echo "  - E7a (BF16 + LoRA): TBD"
+echo "  - E5a (NVFP4 + LoRA): 63.84%"
+echo "  - E5b (NVFP4 + LoRA + AQN): 66.11%"

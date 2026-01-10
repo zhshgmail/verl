@@ -19,7 +19,7 @@
 #
 # Comparison targets:
 # - E3a (MXFP4 full FT): 73.77%
-# - E5a (NVFP4 LoRA): 32.75%
+# - E5a (NVFP4 LoRA): 63.84%
 #
 # Usage:
 #   bash scripts/test_mxfp4_v6.0_dapo_lora.sh [N_GPUS]
@@ -85,8 +85,8 @@ echo "  - 1 epoch (DAPO standard)"
 echo ""
 echo "Comparison:"
 echo "  - E3a (MXFP4 full FT): 73.77%"
-echo "  - E5a (NVFP4 LoRA): 32.75%"
-echo "  - Expected: Even lower than E5a due to higher MXFP4 error"
+echo "  - E5a (NVFP4 LoRA): 63.84%"
+echo "  - E5b (NVFP4 LoRA + AQN): 66.11%"
 
 python3 -m recipe.dapo.main_dapo \
     data.train_files=${TRAIN_DATA} \

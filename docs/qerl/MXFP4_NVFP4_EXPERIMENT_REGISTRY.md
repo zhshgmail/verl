@@ -1,8 +1,8 @@
 # MXFP4/NVFP4 Quantization Experiment Registry
 
-**Date**: 2026-01-10
+**Date**: 2026-01-11
 **Branch**: `feature/npu-aqn-test`
-**Status**: All sigma re-runs completed - E3b: 74.37%, E4b: 72.63%, E5b: 66.11%
+**Status**: E5a: 63.84%, E5b: 66.11% completed. E6a/E6b (MXFP4+LoRA) and E7a/E7b (BF16+LoRA) scripts ready.
 
 ---
 
@@ -757,20 +757,20 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 
 | ID | Quant | LoRA | AQN | Sigma | Script | Result | Status |
 |----|-------|------|-----|-------|--------|--------|--------|
-| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | N/A | `test_nvfp4_v5.0_dapo_lora.sh` | **~64%** | ✅ COMPLETED (fixed) |
+| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | N/A | `test_nvfp4_v5.0_dapo_lora.sh` | **63.84%** | ✅ COMPLETED (fixed) |
 | **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | ✅ 0.01→0.0001 | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | **66.11%** | ✅ COMPLETED (+2.27% vs E5a) |
 
 ### E5a Results - LoRA + NVFP4 (No AQN)
 
 > **⚠️ BUG FIX (commit `2d7f6ef1`)**: Original E5a (32.75%) had LoRA adapters being quantized.
-> Fixed by properly passing `exclude_modules` through config chain. Re-run achieved ~64%.
+> Fixed by properly passing `exclude_modules` through config chain. Re-run achieved 63.84%.
 
 | Metric | Value (Fixed) | Value (Broken) | Notes |
 |--------|---------------|----------------|-------|
 | **Step 0 (before training)** | 8.11% | 7.58% | Similar |
 | **Step 20 validation** | **63.84%** | - | Significant improvement |
 | **Step 28 training batch** | **64.26%** | - | Final training accuracy |
-| **Final (step 29)** | **~64%** | 32.75% | **+31% after fix!** |
+| **Final (step 29)** | **63.84%** | 32.75% | **+31% after fix!** |
 | Entropy | 0.38 | 0.45 | Both healthy |
 | Response length | 238 tokens | 217 tokens | No length explosion |
 | HW Error hooks | 392 | 784 | 392 LoRA modules now excluded |
@@ -781,7 +781,7 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 - **Fix**: Added `exclude_modules` propagation in `ray_trainer.py`, `fsdp_workers.py`, and `vllm_rollout.py`
 - **Verification**: Hook count dropped from 784 to 392 (exactly 392 LoRA modules excluded)
 
-**Result**: LoRA with NVFP4 fake quant now achieves **~64%** (88% of full fine-tuning's 72.55%).
+**Result**: LoRA with NVFP4 fake quant now achieves **63.84%** (88% of full fine-tuning's 72.55%).
 
 ### QeRL Methodology Explanation
 
@@ -870,7 +870,7 @@ We're comparing **apples (MXFP4, 21% error) to oranges (NVFP4, 1% error)**:
 - We target MXFP4 deployment (Ascend NPU)
 - MXFP4 has 20x higher quantization error than NVFP4
 
-If LoRA struggles with NVFP4 (32.75%), MXFP4 results may be even worse.
+E5a (NVFP4+LoRA) achieved 63.84%, so MXFP4 with higher error may be lower.
 
 ### Quick Start Commands
 
@@ -891,7 +891,64 @@ bash scripts/test_mxfp4_v6.1_dapo_lora_aqn.sh 8  # E6b: MXFP4 LoRA + AQN
 
 ---
 
-## 10. References
+## 10. v7.x Series: BF16 + LoRA Experiments (Pure Baseline)
+
+All v7.x experiments use **NO quantization** (pure BF16) with 16-bit LoRA - the baseline for QeRL comparison.
+
+> **Why BF16 + LoRA?**: QeRL Table 1a shows "BF16 + LoRA" as 76.1% baseline (3B model).
+> This is the CRITICAL baseline that all quantized methods compare against.
+
+| ID | Quant | LoRA | AQN | Script | Result | Status |
+|----|-------|------|-----|--------|--------|--------|
+| **E7a (v7.0)** | None (BF16) | rank=32, alpha=16 | None | `test_bf16_v7.0_dapo_lora.sh` | TBD | 🔲 PENDING |
+| **E7b (v7.1)** | None (BF16) | rank=32, alpha=16 | RMSNorm | `test_bf16_v7.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
+
+### Why E7b (BF16 + LoRA + AQN)?
+
+Tests whether AQN provides benefit **without** quantization:
+- If E7b ≈ E7a: AQN only helps with quantization error (expected)
+- If E7b > E7a: AQN provides general regularization benefit (unexpected)
+
+### Complete Experiment Matrix (LoRA Series)
+
+| ID | Quant | AQN | Expected | Status |
+|----|-------|-----|----------|--------|
+| **E7a** | None (BF16) | No | ~75-76% (baseline) | 🔲 PENDING |
+| **E7b** | None (BF16) | Yes | ~75-76% (same as E7a) | 🔲 PENDING |
+| **E5a** | NVFP4 (1%) | No | Slight drop | **63.84%** |
+| **E5b** | NVFP4 (1%) | Yes | +2-3% vs E5a | **66.11%** (+2.27%) |
+| **E6a** | MXFP4 (21%) | No | Lower than E5a | 🔲 PENDING |
+| **E6b** | MXFP4 (21%) | Yes | +X% vs E6a | 🔲 PENDING |
+
+### Experiment Execution Order (Recommended)
+
+1. **E7a** (BF16 + LoRA) - Establish baseline first
+2. **E6a** (MXFP4 + LoRA) - Our target without AQN
+3. **E6b** (MXFP4 + LoRA + AQN) - Our target with AQN
+4. **E7b** (BF16 + LoRA + AQN) - Optional, tests AQN without quant
+
+### Quick Start Commands
+
+```bash
+ssh root@90.90.102.18
+docker exec -it verl-r3-test bash
+cd /home/z00637938/workspace/verl
+git pull personal feature/npu-aqn-test
+
+# BF16 baseline (most important)
+bash scripts/test_bf16_v7.0_dapo_lora.sh 8  # E7a: BF16 + LoRA baseline
+
+# MXFP4 target (our real goal)
+bash scripts/test_mxfp4_v6.0_dapo_lora.sh 8  # E6a: MXFP4 + LoRA
+bash scripts/test_mxfp4_v6.1_dapo_lora_aqn.sh 8  # E6b: MXFP4 + LoRA + AQN
+
+# Optional
+bash scripts/test_bf16_v7.1_dapo_lora_aqn.sh 8  # E7b: BF16 + LoRA + AQN
+```
+
+---
+
+## 11. References
 
 ### Active Documentation
 - [MXFP4_AQN_NEXT_STEPS.md](MXFP4_AQN_NEXT_STEPS.md) - Detailed experiment plan and results
