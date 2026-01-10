@@ -15,7 +15,7 @@
 # - NVFP4 W4A16 fake quantization on linear layers
 # - 16-bit LoRA (rank=32, alpha=16) on all linear layers
 # - lm_head and embed_tokens EXCLUDED from quantization
-# - RMSNorm AQN: sigma 0.05 -> 0.0005 (10 stages)
+# - RMSNorm AQN: sigma 0.01 -> 0.0001 (10 stages) - EXACT QeRL values
 # - DAPO algorithm (same as v4.x)
 # - 1 epoch (DAPO standard)
 #
@@ -86,7 +86,7 @@ echo "  - 16-bit LoRA: rank=${lora_rank}, alpha=${lora_alpha}"
 echo "  - exclude_modules=['lm_head', 'embed_tokens']"
 echo "  - DAPO overlong penalty: buffer=${overlong_buffer_len}, penalty=${overlong_penalty_factor}"
 echo "  - Asymmetric clipping: low=${clip_ratio_low}, high=${clip_ratio_high}"
-echo "  - RMSNorm AQN: sigma 0.05 -> 0.0005 (10 stages)"
+echo "  - RMSNorm AQN: sigma 0.01 -> 0.0001 (10 stages) - EXACT QeRL values"
 echo "  - 1 epoch (DAPO standard)"
 echo ""
 echo "QeRL methodology replication:"
@@ -157,8 +157,8 @@ python3 -m recipe.dapo.main_dapo \
     'trainer.hw_error_injection.target_modules=["linear"]' \
     '++trainer.hw_error_injection.exclude_modules=["lm_head", "embed_tokens", "lora_A", "lora_B"]' \
     ++trainer.noise_injection.enabled=True \
-    ++trainer.noise_injection.sigma_start=0.05 \
-    ++trainer.noise_injection.sigma_end=0.0005 \
+    ++trainer.noise_injection.sigma_start=0.01 \
+    ++trainer.noise_injection.sigma_end=0.0001 \
     ++trainer.noise_injection.num_stages=10 \
     '++trainer.noise_injection.layer_types=["rmsnorm"]' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
@@ -171,7 +171,7 @@ echo "NVFP4 v5.1 DAPO + LoRA + AQN experiment complete!"
 echo "Results in: ${OUTPUT_DIR}"
 echo ""
 echo "Compare with:"
-echo "  - E5a (NVFP4 + LoRA, no AQN): TBD"
+echo "  - E5a (NVFP4 + LoRA, no AQN): ~64%"
 echo "  - E4a (NVFP4 + full FT, no AQN): 72.55%"
 echo "  - E4b (NVFP4 + full FT + AQN): 72.02%"
 echo ""
