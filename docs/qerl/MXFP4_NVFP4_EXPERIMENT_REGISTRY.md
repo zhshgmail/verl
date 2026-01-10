@@ -15,11 +15,11 @@ Compare MXFP4 quantized LoRA training against pure BF16 LoRA baseline to measure
 
 ### Experiment Plan (2026-01-11)
 
-| Order | Experiment | Config | Expected | Purpose |
-|-------|------------|--------|----------|---------|
-| 1 | **E7a** | BF16 + LoRA | ~75-76% | **BASELINE** |
-| 2 | **E6a** | MXFP4 + LoRA | ~55-65% | Quantization impact |
-| 3 | **E6b** | MXFP4 + LoRA + AQN | E6a + 2-5% | AQN recovery |
+| Order | Experiment | Config | Result | Purpose |
+|-------|------------|--------|--------|---------|
+| 1 | **E7a** | BF16 + LoRA | **71.27%** ✅ | **BASELINE** |
+| 2 | **E6a** | MXFP4 + LoRA | 🔄 RUNNING | Quantization impact |
+| 3 | **E6b** | MXFP4 + LoRA + AQN | PENDING | AQN recovery |
 
 ### Key Questions
 1. **How much does MXFP4 degrade LoRA?** (E7a vs E6a)
