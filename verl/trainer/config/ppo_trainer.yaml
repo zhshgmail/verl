@@ -261,6 +261,11 @@ trainer:
     # For deadzone: leave empty (targets decoder layers directly)
     target_modules: ['rmsnorm']
 
+    # Modules to exclude from error injection
+    # Default excludes lm_head and embed_tokens (production PTQ best practice)
+    # For LoRA: add 'lora_A', 'lora_B' to keep adapters in FP16
+    exclude_modules: ['lm_head', 'embed_tokens']
+
     # Target layers for injection (null = all layers)
     # Example: [15] for SRDD-guided injection on layer 15
     target_layers: null
