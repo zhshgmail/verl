@@ -395,6 +395,7 @@ class vLLMAsyncRollout(BaseRollout):
                     error_type=hw_config_dict.get('error_type', 'relative_gaussian'),
                     injection_point=hw_config_dict.get('injection_point', 'output'),  # output for deadzone
                     target_modules=list(hw_config_dict.get('target_modules', ['rmsnorm'])),
+                    exclude_modules=list(hw_config_dict.get('exclude_modules') or []) or None,
                     target_layers=target_layers,  # e.g., [15] for SRDD-guided injection
                     apply_during=hw_config_dict.get('apply_during', 'rollout'),
                     deadzone_threshold=hw_config_dict.get('deadzone_threshold', 0.01),

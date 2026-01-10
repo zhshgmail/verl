@@ -395,12 +395,18 @@ class RayPPOTrainer:
             if target_layers is not None:
                 target_layers = list(target_layers)
 
+            # Get exclude_modules - convert OmegaConf ListConfig to Python list if needed
+            exclude_modules = hw_config.get('exclude_modules', None)
+            if exclude_modules is not None:
+                exclude_modules = list(exclude_modules)
+
             self.hw_error_injection_config = {
                 'enabled': True,
                 'error_scale': hw_config.get('error_scale', 1e-5),
                 'error_type': hw_config.get('error_type', 'relative_gaussian'),
                 'injection_point': hw_config.get('injection_point', 'input'),
                 'target_modules': list(hw_config.get('target_modules', ['rmsnorm'])),
+                'exclude_modules': exclude_modules,  # Modules to exclude from quantization (e.g., lora_A, lora_B)
                 'target_layers': target_layers,  # For SRDD-guided layer-specific injection
                 'apply_during': hw_config.get('apply_during', 'rollout'),
                 'deadzone_threshold': hw_config.get('deadzone_threshold', 0.01),
@@ -409,7 +415,8 @@ class RayPPOTrainer:
                   f"scale={self.hw_error_injection_config['error_scale']}, "
                   f"type={self.hw_error_injection_config['error_type']}, "
                   f"point={self.hw_error_injection_config['injection_point']}, "
-                  f"targets={self.hw_error_injection_config['target_modules']}")
+                  f"targets={self.hw_error_injection_config['target_modules']}, "
+                  f"exclude={self.hw_error_injection_config['exclude_modules']}")
 
         # Initialize operator-level noisy ops config (actual enabling happens in worker)
         # NOTE: With VERL_NOISY_OPS_TRAINING_ONLY=1, noisy ops is enabled in actor workers
