@@ -2,7 +2,7 @@
 
 **Date**: 2026-01-10
 **Branch**: `feature/npu-aqn-test`
-**Status**: E5a completed (~64%) after LoRA exclusion fix - E5b running
+**Status**: E5b completed (66.11%) - AQN provides +2.27% over E5a baseline
 
 ---
 
@@ -20,7 +20,7 @@
 |----|----------------|------------|-----------------|
 | **E3b (MXFP4+AQN)** | 74.22% | 0.05→0.0005 ❌ | **Re-run with 0.01→0.0001** |
 | **E4b (NVFP4+AQN)** | 72.02% | 0.05→0.0005 ❌ | **Re-run with 0.01→0.0001** |
-| **E5b (LoRA+AQN)** | Running | 0.01→0.0001 ✅ | First experiment with correct sigma |
+| **E5b (LoRA+AQN)** | **66.11%** | 0.01→0.0001 ✅ | ✅ First experiment with correct sigma - **+2.27% vs E5a** |
 
 ### Why This Matters
 - QeRL's sigma schedule is carefully tuned for their methodology
@@ -759,7 +759,7 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 | ID | Quant | LoRA | AQN | Sigma | Script | Result | Status |
 |----|-------|------|-----|-------|--------|--------|--------|
 | **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | N/A | `test_nvfp4_v5.0_dapo_lora.sh` | **~64%** | ✅ COMPLETED (fixed) |
-| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | ✅ 0.01→0.0001 | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔄 RUNNING (correct QeRL sigma) |
+| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | ✅ 0.01→0.0001 | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | **66.11%** | ✅ COMPLETED (+2.27% vs E5a) |
 
 ### E5a Results - LoRA + NVFP4 (No AQN)
 
