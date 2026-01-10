@@ -1,8 +1,8 @@
 # MXFP4/NVFP4 Quantization Experiment Registry
 
-**Date**: 2026-01-09
+**Date**: 2026-01-10
 **Branch**: `feature/npu-aqn-test`
-**Status**: E2b completed (68.84%) - Infrastructure fixes needed before further experiments
+**Status**: E5a completed (~64%) after LoRA exclusion fix - E5b pending
 
 ---
 
@@ -734,20 +734,31 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 
 | ID | Quant | LoRA | AQN | Script | Result | Status |
 |----|-------|------|-----|--------|--------|--------|
-| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | **32.75%** | ✅ COMPLETED |
-| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔄 RUNNING |
+| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | **~64%** | ✅ COMPLETED (fixed) |
+| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
 
 ### E5a Results - LoRA + NVFP4 (No AQN)
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| **Step 0 (before training)** | 7.58% | Similar to full FT (7.66%) |
-| **Final (step 29)** | **32.75%** | Much lower than full FT (72.55%) |
-| Entropy | 0.45 | Healthy |
-| Response length | 217 tokens | No length explosion |
+> **⚠️ BUG FIX (commit `2d7f6ef1`)**: Original E5a (32.75%) had LoRA adapters being quantized.
+> Fixed by properly passing `exclude_modules` through config chain. Re-run achieved ~64%.
 
-**Critical Finding**: LoRA with NVFP4 fake quant achieves only **32.75%** vs full fine-tuning's **72.55%**.
-This suggests LoRA adapters struggle to compensate for quantization error when the base model is quantized.
+| Metric | Value (Fixed) | Value (Broken) | Notes |
+|--------|---------------|----------------|-------|
+| **Step 0 (before training)** | 8.11% | 7.58% | Similar |
+| **Step 20 validation** | **63.84%** | - | Significant improvement |
+| **Step 28 training batch** | **64.26%** | - | Final training accuracy |
+| **Final (step 29)** | **~64%** | 32.75% | **+31% after fix!** |
+| Entropy | 0.38 | 0.45 | Both healthy |
+| Response length | 238 tokens | 217 tokens | No length explosion |
+| HW Error hooks | 392 | 784 | 392 LoRA modules now excluded |
+
+**Critical Bug Found & Fixed**:
+- **Problem**: `exclude_modules` config wasn't being passed through the config chain
+- **Impact**: LoRA adapters (`lora_A`, `lora_B`) were being fake-quantized along with base model
+- **Fix**: Added `exclude_modules` propagation in `ray_trainer.py`, `fsdp_workers.py`, and `vllm_rollout.py`
+- **Verification**: Hook count dropped from 784 to 392 (exactly 392 LoRA modules excluded)
+
+**Result**: LoRA with NVFP4 fake quant now achieves **~64%** (88% of full fine-tuning's 72.55%).
 
 ### QeRL Methodology Explanation
 
@@ -797,19 +808,24 @@ Based on QeRL's findings:
 |------------|--------|-----|--------|-------|
 | E4a | Full FT + NVFP4 | No | **72.55%** | Completed |
 | E4b | Full FT + NVFP4 + AQN | Yes | **72.02%** | Completed |
-| E5a | LoRA + NVFP4 | No | **32.75%** | ⚠️ Much lower than full FT |
-| E5b | LoRA + NVFP4 + AQN | Yes | TBD | Running |
+| E5a | LoRA + NVFP4 | No | **~64%** | ✅ Fixed - LoRA in FP16 |
+| E5b | LoRA + NVFP4 + AQN | Yes | TBD | Pending |
 
-### Key Finding: LoRA Struggles with Quantized Base Model
+### Key Finding: LoRA Works Well When Kept in FP16
 
-**E5a result (32.75%) is dramatically lower than E4a (72.55%)**. This is a 40% gap!
+**After fixing the exclude_modules bug, E5a achieves ~64% (88% of full FT's 72.55%)**.
 
-Possible explanations:
-1. **LoRA adapters can't compensate for quantized base model errors** - the small parameter count (~1%) may be insufficient to correct quantization-induced errors throughout the network
-2. **Gradient flow issue** - fake quantization during forward pass may disrupt gradient signals that LoRA adapters depend on
-3. **Implementation difference from QeRL** - need to verify our setup matches QeRL's exactly
+The critical implementation detail (matching QeRL):
+- **Base model weights**: Fake-quantized to NVFP4 during forward pass
+- **LoRA adapters (`lora_A`, `lora_B`)**: MUST remain in FP16, NOT quantized
+- **Verification**: Hook count should be ~half of full model (392 vs 784)
 
-This finding contradicts QeRL's reported success with NVFP4+LoRA. We need to investigate if our implementation differs from QeRL's approach.
+**Original bug**: Our `exclude_modules` config wasn't being passed through:
+1. `ray_trainer.py` - wasn't extracting `exclude_modules` from trainer config
+2. `fsdp_workers.py` - wasn't passing `exclude_modules` to HWErrorConfig
+3. `vllm_rollout.py` - wasn't passing `exclude_modules` to HWErrorConfig
+
+**Fix commit**: `2d7f6ef1` - Added proper exclude_modules propagation through config chain.
 
 ---
 
