@@ -2,7 +2,31 @@
 
 **Date**: 2026-01-10
 **Branch**: `feature/npu-aqn-test`
-**Status**: E5a completed (~64%) after LoRA exclusion fix - E5b pending
+**Status**: E5a completed (~64%) after LoRA exclusion fix - E5b running
+
+---
+
+## 🚨 CRITICAL: AQN Sigma Values Need Re-evaluation
+
+**Discovery (2026-01-10)**: Our sigma values were 5x higher than QeRL's exact values.
+
+| Parameter | Our Experiments (E3b, E4b) | QeRL Paper | Difference |
+|-----------|---------------------------|------------|------------|
+| `sigma_start` | 0.05 | **0.01** | 5x higher |
+| `sigma_end` | 0.0005 | **0.0001** | 5x higher |
+
+### Experiments Affected - NEED RE-RUN
+| ID | Current Result | Sigma Used | Action Required |
+|----|----------------|------------|-----------------|
+| **E3b (MXFP4+AQN)** | 74.22% | 0.05→0.0005 ❌ | **Re-run with 0.01→0.0001** |
+| **E4b (NVFP4+AQN)** | 72.02% | 0.05→0.0005 ❌ | **Re-run with 0.01→0.0001** |
+| **E5b (LoRA+AQN)** | Running | 0.01→0.0001 ✅ | First experiment with correct sigma |
+
+### Why This Matters
+- QeRL's sigma schedule is carefully tuned for their methodology
+- Higher sigma = more noise = potentially different training dynamics
+- Results from E3b/E4b may not be comparable to QeRL's claims
+- Need to establish proper baseline with correct sigma values
 
 ---
 
@@ -51,11 +75,11 @@ MXFP4's 21% error compounds over epochs regardless of DAPO protections.
 > **⚠️ KNOWN ISSUE (Fixed in commit `d8c25492`)**: All experiments below have `lm_head` quantized.
 > Production PTQ recipes exclude `lm_head` and `embed_tokens`. Results may improve with fix.
 
-| Experiment | Quant Type | AQN Target | Sigma | Result | lm_head Bug | Log File |
-|------------|------------|------------|-------|--------|-------------|----------|
-| Baseline | None | None | - | **75.97%** | N/A | `baseline_clean_75.97.log` |
-| MXFP4-only | MXFP4 W4A16 | None | - | **70.05%** | **YES** | `mxfp4_only_70.05.log` |
-| MXFP4+AQN (orig) | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **67.48%** | **YES** | `mxfp4_aqn_orig_67.48.log` |
+| Experiment | Quant Type | AQN Target | Sigma | Result | lm_head Bug | Sigma Issue | Log File |
+|------------|------------|------------|-------|--------|-------------|-------------|----------|
+| Baseline | None | None | - | **75.97%** | N/A | N/A | `baseline_clean_75.97.log` |
+| MXFP4-only | MXFP4 W4A16 | None | - | **70.05%** | **YES** | N/A | `mxfp4_only_70.05.log` |
+| MXFP4+AQN (orig) | MXFP4 W4A16 | RMSNorm | 0.05→0.0005 | **67.48%** | **YES** | ⚠️ 5x high | `mxfp4_aqn_orig_67.48.log` |
 | Exp 1A | MXFP4 W4A16 | Linear | 0.05→0.0005 | **COLLAPSED** | **YES** | `exp1a_linear_collapsed.log` |
 | Exp 1C | MXFP4 W4A16 | Linear | 0.005→0.00005 | **COLLAPSED** | **YES** | `exp1c_linear_collapsed.log` |
 | **Exp 1D** | MXFP4 W4A16 | Linear | 0.001→0.00001 | **66.49%** | **YES** | `exp1d_linear_tiny_66.49.log` |
@@ -508,10 +532,10 @@ All experiments use 2 epochs and have `exclude_modules=['lm_head', 'embed_tokens
 
 All v3.x experiments use DAPO algorithm with 1 epoch.
 
-| ID | Quant | Algorithm | AQN | Script | Result | Status |
-|----|-------|-----------|-----|--------|--------|--------|
-| **E3a (v3.0)** | MXFP4 | DAPO | None | `test_mxfp4_v3.0_dapo.sh` | **73.77%** | ✅ COMPLETED |
-| **E3b (v3.1)** | MXFP4 | DAPO | RMSNorm | `test_mxfp4_v3.1_dapo_aqn.sh` | **74.22%** | ✅ COMPLETED |
+| ID | Quant | Algorithm | AQN | Sigma | Script | Result | Status |
+|----|-------|-----------|-----|-------|--------|--------|--------|
+| **E3a (v3.0)** | MXFP4 | DAPO | None | N/A | `test_mxfp4_v3.0_dapo.sh` | **73.77%** | ✅ COMPLETED |
+| **E3b (v3.1)** | MXFP4 | DAPO | RMSNorm | ⚠️ 0.05→0.0005 | `test_mxfp4_v3.1_dapo_aqn.sh` | **74.22%** | ⚠️ NEEDS RE-RUN (sigma 5x too high) |
 
 ### E3a (v3.0) Results - DAPO + MXFP4 (No AQN)
 
@@ -659,10 +683,10 @@ All v4.x experiments use NVFP4 quantization with DAPO algorithm for **comparison
 > **IMPORTANT**: NVFP4 is NOT a solution for Ascend NPU - it's only used to validate the AQN approach.
 > NVFP4 has ~1% relative error vs MXFP4's ~21% error.
 
-| ID | Quant | Algorithm | AQN | Script | Result | Status |
-|----|-------|-----------|-----|--------|--------|--------|
-| **E4a (v4.0)** | NVFP4 | DAPO | None | `test_nvfp4_v4.0_dapo.sh` | **72.55%** | ✅ COMPLETED |
-| **E4b (v4.1)** | NVFP4 | DAPO | RMSNorm | `test_nvfp4_v4.1_dapo_aqn.sh` | **72.02%** | ✅ COMPLETED |
+| ID | Quant | Algorithm | AQN | Sigma | Script | Result | Status |
+|----|-------|-----------|-----|-------|--------|--------|--------|
+| **E4a (v4.0)** | NVFP4 | DAPO | None | N/A | `test_nvfp4_v4.0_dapo.sh` | **72.55%** | ✅ COMPLETED |
+| **E4b (v4.1)** | NVFP4 | DAPO | RMSNorm | ⚠️ 0.05→0.0005 | `test_nvfp4_v4.1_dapo_aqn.sh` | **72.02%** | ⚠️ NEEDS RE-RUN (sigma 5x too high) |
 
 ### E4a (v4.0) Results - DAPO + NVFP4 (No AQN)
 
@@ -732,10 +756,10 @@ All v5.x experiments use **16-bit LoRA** with NVFP4 fake quantization to replica
 > Our v4.x experiments compared NVFP4+AQN vs NVFP4 (both full fine-tuning), which is a different comparison.
 > v5.x experiments replicate QeRL's approach: base model with NVFP4 fake quant + trainable 16-bit LoRA adapters.
 
-| ID | Quant | LoRA | AQN | Script | Result | Status |
-|----|-------|------|-----|--------|--------|--------|
-| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | `test_nvfp4_v5.0_dapo_lora.sh` | **~64%** | ✅ COMPLETED (fixed) |
-| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔲 PENDING |
+| ID | Quant | LoRA | AQN | Sigma | Script | Result | Status |
+|----|-------|------|-----|-------|--------|--------|--------|
+| **E5a (v5.0)** | NVFP4 | rank=32, alpha=16 | None | N/A | `test_nvfp4_v5.0_dapo_lora.sh` | **~64%** | ✅ COMPLETED (fixed) |
+| **E5b (v5.1)** | NVFP4 | rank=32, alpha=16 | RMSNorm | ✅ 0.01→0.0001 | `test_nvfp4_v5.1_dapo_lora_aqn.sh` | TBD | 🔄 RUNNING (correct QeRL sigma) |
 
 ### E5a Results - LoRA + NVFP4 (No AQN)
 
@@ -787,10 +811,10 @@ trainer.hw_error_injection.error_type: nvfp4
 trainer.hw_error_injection.injection_point: weight
 trainer.hw_error_injection.target_modules: ["linear"]
 
-# AQN (v5.1 only)
+# AQN (v5.1 only) - CORRECTED to match QeRL exactly
 trainer.noise_injection.enabled: True  # v5.0: False
-trainer.noise_injection.sigma_start: 0.05
-trainer.noise_injection.sigma_end: 0.0005
+trainer.noise_injection.sigma_start: 0.01   # QeRL exact value (was 0.05)
+trainer.noise_injection.sigma_end: 0.0001   # QeRL exact value (was 0.0005)
 trainer.noise_injection.num_stages: 10
 trainer.noise_injection.layer_types: ["rmsnorm"]
 ```
