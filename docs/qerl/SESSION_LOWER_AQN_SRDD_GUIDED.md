@@ -84,7 +84,7 @@ noisy_ops:
 | ID | Config | sigma_start | sigma_end | HW Error | Status |
 |----|--------|-------------|-----------|----------|--------|
 | E5b | Epoch-aware AQN (current) | 0.05 | 0.0005 | 5% matmul | **70.58%** (done) |
-| **E5c** | Lower AQN | **0.01** | **0.00001** | 5% matmul | PLANNED |
+| **E5c** | Lower AQN | **0.01** | **0.00001** | 5% matmul | **67.48%** (done, -3.1%) |
 | E5d | QeRL-exact AQN | 0.01 | 0.0001 | 5% matmul | PLANNED |
 
 ### Implementation
@@ -113,7 +113,7 @@ Use SRDD scan results to guide WHERE and HOW STRONG to inject AQN:
 
 | ID | Config | Description | Expected |
 |----|--------|-------------|----------|
-| E9a | Targeted AQN | Only inject to layers 14-17 | Faster training |
+| E9a | Targeted AQN | Only inject to layers 14-17 | **68.54%** ✅ (+1.06% vs E5c) |
 | E9b | Variable sigma | σ scaled by SRDD error | Better accuracy |
 | E9c | Combined | Targeted + variable sigma | Best of both |
 
@@ -215,6 +215,50 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core' /tmp/no
 ---
 
 ## Status Updates
+
+### 2026-01-12 03:15 UTC - E9a COMPLETED ✅
+- **E9a Final: 68.54%** (vs E5c: 67.48%, vs E5b: 70.58%)
+- **Key Finding**: Targeted AQN (4 layers) outperformed uniform AQN (all layers) by +1.06%!
+- Validation trend: 7.51% → 60.50% → 63.99% → 67.70% → 66.41% → 65.81% → **68.54%**
+- **Conclusion**: SRDD-guided layer targeting is effective - targeting high-error layers (14-17) produces better results than uniform noise across all layers with lower sigma
+
+### 2026-01-12 01:30 UTC - E9a Targeted AQN Started
+- E9a: Only inject AQN to layers 14-17 (high-error layers from SRDD)
+- Config: default_multiplier=0.0, layers 14-17 get multiplier=1.0
+- Sigma: 0.01→0.00001 (same as E5c)
+- Log: `/tmp/noisy_ops_srdd_targeted.log`
+- Hypothesis: targeted AQN may reduce overhead while maintaining robustness
+
+### 2026-01-12 00:55 UTC - E5c COMPLETED ✅
+- **Final accuracy: 67.48%** (vs E5b: 70.58%)
+- **Gap: -3.1%** - Lower AQN is less effective than original
+- Complete validation trend:
+  - Step 0: 9.40% → Step 20: 60.88% → Step 40: 66.26%
+  - Step 60: 67.02% → Step 80: 65.73% → Step 100: 66.72%
+  - **Step 116 (final): 67.48%**
+- **Conclusion**: Lower sigma (0.01→0.00001) reduces AQN benefit
+- Original AQN (0.05→0.0005) remains optimal for noisy_ops 5% matmul
+
+### 2026-01-11 00:05 UTC - E5c Step 60 Validation Result
+- **Step 60 validation: 67.02%** (+0.76% from step 40)
+- Training now in epoch 2, step 61/116 (53%)
+- ETA: ~45min remaining
+- Validation trend: 9.40% → 60.88% → 66.26% → **67.02%**
+- Next validation checkpoint: step 80
+
+### 2026-01-11 23:45 UTC - E5c Step 40 Validation Result
+- **Step 40 validation: 66.26%** (+5.38% from step 20)
+- Training progressing at step 42/116 (36%)
+- ETA: ~1h remaining
+- Validation trend: 9.40% → 60.88% → **66.26%**
+- Next validation checkpoint: step 58 (end of epoch 1)
+
+### 2026-01-11 23:25 UTC - E5c Step 20 Validation Result
+- **Step 20 validation: 60.88%** (vs E5b final: 70.58%)
+- Training progressing normally at step 22/116 (19%)
+- ETA: ~1h 45min remaining
+- Score trend: 9.4% → 25.8% → 45.2% → 60.9% → (continuing)
+- Next validation checkpoint: step 40
 
 ### 2026-01-11 23:10 UTC - SRDD-Guided AQN Implemented
 - Implemented layer-specific sigma support in `noise_injection.py`
