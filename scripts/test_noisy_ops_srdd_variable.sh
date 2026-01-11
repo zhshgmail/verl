@@ -118,7 +118,7 @@ python3 -m verl.trainer.main_ppo \
     ++trainer.noise_injection.stages_per_epoch=5 \
     ++trainer.noise_injection.layer_sigma_config.enabled=True \
     ++trainer.noise_injection.layer_sigma_config.default_multiplier=1.0 \
-    '++trainer.noise_injection.layer_sigma_config.layer_multipliers={"10": 1.2, "11": 1.2, "12": 1.2, "13": 1.2, "14": 1.5, "15": 1.5, "16": 1.5, "17": 1.5, "18": 1.2, "19": 1.2, "20": 1.2, "21": 1.2}' \
+    '++trainer.noise_injection.layer_sigma_config.layer_multipliers={10: 1.2, 11: 1.2, 12: 1.2, 13: 1.2, 14: 1.5, 15: 1.5, 16: 1.5, 17: 1.5, 18: 1.2, 19: 1.2, 20: 1.2, 21: 1.2}' \
     trainer.experiment_name=noisy_ops_srdd_variable_${ERROR_SCALE}
 
 echo "=== E9b Test Complete ==="

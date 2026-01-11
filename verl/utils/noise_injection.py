@@ -206,9 +206,14 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
 
         layer_idx = _extract_layer_idx(name)
         if layer_idx is not None:
-            # Try to find multiplier by layer index (as string key)
+            # Try to find multiplier by layer index (both string and int keys for Hydra compat)
             layer_key = str(layer_idx)
-            multiplier = layer_multipliers.get(layer_key, default_multiplier)
+            if layer_key in layer_multipliers:
+                multiplier = layer_multipliers[layer_key]
+            elif layer_idx in layer_multipliers:
+                multiplier = layer_multipliers[layer_idx]
+            else:
+                multiplier = default_multiplier
         else:
             multiplier = default_multiplier
 

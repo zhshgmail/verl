@@ -103,7 +103,7 @@ echo "  E9a (noise + targeted AQN layers 14-17): TBD"
 echo ""
 
 # SRDD-guided layer sigma config for targeted AQN (only layers 14-17)
-# Using Hydra's nested dict syntax
+# Using Hydra's nested key syntax for layer_multipliers
 python3 -m verl.trainer.main_ppo \
     --config-name=ppo_trainer \
     ${COMMON_ARGS} \
@@ -117,7 +117,7 @@ python3 -m verl.trainer.main_ppo \
     ++trainer.noise_injection.stages_per_epoch=5 \
     ++trainer.noise_injection.layer_sigma_config.enabled=True \
     ++trainer.noise_injection.layer_sigma_config.default_multiplier=0.0 \
-    '++trainer.noise_injection.layer_sigma_config.layer_multipliers={"14": 1.0, "15": 1.0, "16": 1.0, "17": 1.0}' \
+    '++trainer.noise_injection.layer_sigma_config.layer_multipliers={14: 1.0, 15: 1.0, 16: 1.0, 17: 1.0}' \
     trainer.experiment_name=noisy_ops_srdd_targeted_${ERROR_SCALE}
 
 echo "=== E9a Test Complete ==="
