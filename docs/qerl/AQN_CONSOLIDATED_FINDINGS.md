@@ -154,16 +154,16 @@ Train models with fake quantization to prepare for low-precision deployment. Two
 
 ### 3.3 Layer Targeting Strategy (Expert-Revised)
 
-**Key Expert Finding**: Sigma magnitude is **3x more important** than layer selection.
+**Key Finding (Updated with E9b)**: SRDD-variable sigma **outperforms** uniform high sigma!
 - E5b (high σ=0.05, all layers): 70.58%
 - E9a (low σ=0.01, targeted): 68.54% (-2.04%)
+- **E9b (variable σ, SRDD-weighted): 71.19% (+0.61% vs E5b!)**
 
-**Recommended Hierarchy**:
+**Recommended Hierarchy (Revised)**:
 
-1. **Production (Tier 1)**: Uniform AQN with high sigma
-   - Apply σ=0.05→0.0005 to ALL layers
-   - Simple, proven most effective
-   - **Best accuracy: E5b = 70.58%**
+1. **Production (Tier 1)**: SRDD-Variable sigma (Best)
+   - Apply SRDD-weighted multipliers (1.5x high-error, 1.2x medium)
+   - **Best accuracy: E9b = 71.19%**
 
 2. **Cost-Sensitive (Tier 2)**: 40-60% Depth Heuristic
    ```python
@@ -337,14 +337,15 @@ Backward: ∂L/∂x ← W_frozen^T (quantized!) ← ∂L/∂y
 | 2026-01-11 | E5b-LoRA | NVFP4 + LoRA + AQN | **66.11%** |
 | 2026-01-11 | E7a | BF16 + LoRA (baseline) | 71.27% |
 | 2026-01-12 | E5c | Lower AQN (σ=0.01→0.00001) | 67.48% |
-| 2026-01-12 | E9a | SRDD-Targeted AQN | **68.54%** |
+| 2026-01-12 | E9a | SRDD-Targeted AQN (low σ) | **68.54%** |
+| 2026-01-12 | **E9b** | **SRDD-Variable sigma** | **71.19%** (BEST!) |
 
 ### 5.2 Running Experiments
 
 | Date | ID | Description | Status |
 |------|-----|-------------|--------|
-| 2026-01-12 | E9b | SRDD-Variable sigma | Training... |
-| 2026-01-11 | E6b | MXFP4 + LoRA + AQN | Queued |
+| 2026-01-12 | E12 | MXFP4 + LoRA + high-σ AQN | Training... |
+| 2026-01-12 | E9a-high-σ | SRDD-Targeted + high σ | Queued |
 
 ---
 
