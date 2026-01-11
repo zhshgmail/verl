@@ -175,10 +175,12 @@ def generate_expert_gaussian_noise(
 - [x] Run E5c experiment (RUNNING)
 - [ ] Record results
 
-### Phase 2: SRDD-Guided AQN (Next)
-- [ ] Implement layer-specific sigma in `noise_injection.py`
-- [ ] Create SRDD-based sigma config
-- [ ] Run E9a/E9b/E9c experiments
+### Phase 2: SRDD-Guided AQN (IMPLEMENTED)
+- [x] Implement layer-specific sigma in `noise_injection.py`
+- [x] Create SRDD-based sigma configs (full and targeted)
+- [x] Create E9a/E9b experiment scripts
+- [x] Git commit and push to personal remote
+- [ ] Run E9a/E9b experiments after E5c completes
 - [ ] Analyze results
 
 ---
@@ -213,6 +215,13 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core' /tmp/no
 ---
 
 ## Status Updates
+
+### 2026-01-11 23:10 UTC - SRDD-Guided AQN Implemented
+- Implemented layer-specific sigma support in `noise_injection.py`
+- Added `layer_sigma_config` parameter with per-layer multipliers
+- Created sigma config files: `configs/srdd_sigma_qwen2.5_1.5b*.json`
+- Created experiment scripts: `scripts/test_noisy_ops_srdd_*.sh`
+- Git commit: `e6ff94f0` pushed to personal remote
 
 ### 2026-01-11 22:51 UTC - E5c Re-Started (NumPy Fix)
 - Fixed NumPy/Numba incompatibility: downgraded NumPy 2.4.1 → 2.2.6
