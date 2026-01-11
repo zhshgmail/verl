@@ -261,7 +261,28 @@ Performance differences come from **training dynamics** (gradient quality),
 not from changes in weight distributions. AQN improves gradient flow during
 training, but doesn't alter the final weight quantization characteristics.
 
-### 5.5 SRDD JSON Files Location
+### 5.5 MXFP4-Baked Base + LoRA Experiments
+
+To test if LoRA learns to compensate for quantization error, we:
+1. Applied MXFP4 fake quant to base weights (baking in ~21% quant error)
+2. Merged with LoRA adapters from different training methods
+3. Ran SRDD on all combinations
+
+**Results:**
+
+| Model | SQNR (dB) | Rel Error (%) | Notes |
+|-------|-----------|---------------|-------|
+| BF16 Base (original) | 16.9±0.4 | 36.41% | Original base model |
+| MXFP4-Baked Base | 18.0±0.9 | 37.54% | After quant→dequant |
+| + E7a LoRA (BF16-trained) | 18.0±0.9 | 37.54% | Identical to base |
+| + E6a LoRA (MXFP4-trained) | 18.0±0.9 | 37.54% | Identical to base |
+| + E6b LoRA (MXFP4+AQN) | 18.0±0.9 | 37.54% | Identical to base |
+
+**Key Finding**: All LoRA-merged models show identical SRDD metrics.
+LoRA adapters (rank=32, ~0.1% of parameters) are too small to
+significantly alter the model's quantization characteristics.
+
+### 5.6 SRDD JSON Files Location
 
 ```
 docs/qerl/srdd_results/
@@ -358,14 +379,83 @@ docs/qerl/srdd_results/
    - Consider Full FT instead of LoRA (73.77% vs 65.88%)
    - Or use lower quantization error format (NVFP4 if available)
 
-3. **Future experiments**:
-   - Test higher LoRA rank (64, 128) with MXFP4
-   - Try MXFP8 as middle ground
-   - Longer training (2+ epochs) with AQN
+---
+
+## 9. SRDD-Guided AQN: Proposed Experiments
+
+### 9.1 SRDD Layer Analysis
+
+From our scans, MXFP4 quantization error varies by layer:
+
+| Layer Range | Relative Error | Deadzone | Priority |
+|-------------|----------------|----------|----------|
+| **Layer 14-17** | 40.8-42.7% | 27-29% | **HIGH** - Most sensitive |
+| **Layer 10-13** | 38.5-40.6% | 25-27% | MEDIUM |
+| **Layer 18-21** | 37.2-40.3% | 24-27% | MEDIUM |
+| **Layer 0-9, 22-27** | 28.5-37.1% | 16-24% | LOW |
+
+### 9.2 Proposed Experiment Ideas
+
+**Idea 1: SRDD-Guided Variable AQN Sigma**
+
+Instead of uniform sigma across all layers, scale AQN noise by SRDD error:
+
+```python
+# Proposed: Layer-specific sigma based on SRDD relative error
+layer_sigma = {
+    14: 0.015,  # High error → more noise
+    15: 0.015,
+    16: 0.015,
+    17: 0.015,
+    # Other layers: 0.01 (baseline)
+}
+```
+
+**Idea 2: Targeted AQN (High-Error Layers Only)**
+
+Only inject AQN to layers with >40% relative error:
+
+```yaml
+noise_injection:
+  target_layers: [14, 15, 16, 17]  # SRDD top-4 error layers
+  sigma_start: 0.01
+  sigma_end: 0.0001
+```
+
+**Idea 3: Lower AQN Sigma (QeRL Paper Values)**
+
+Current experiments use QeRL values. Compare with even lower sigma:
+
+| Config | sigma_start | sigma_end | Hypothesis |
+|--------|-------------|-----------|------------|
+| Current | 0.01 | 0.0001 | QeRL baseline |
+| **E8a** | 0.005 | 0.00005 | Less noise, better convergence? |
+| **E8b** | 0.001 | 0.00001 | Minimal noise |
+
+### 9.3 Expected Benefits
+
+| Approach | Speed | Accuracy | Rationale |
+|----------|-------|----------|-----------|
+| Global AQN (current) | 1x | Baseline | Standard approach |
+| Targeted AQN (4 layers) | ~1.7x | ≥Baseline | Focus on problematic layers |
+| Variable sigma | 1x | >Baseline | More noise where needed |
+
+### 9.4 Implementation Notes
+
+From `SRDD_GUIDED_AQN_EXPERIMENT_DESIGN.md` PoC results:
+- SRDD detection: 100% accurate for deadzone ≥0.3%
+- Targeted AQN (1 layer): **71% faster** than global AQN (8.9 vs 5.2 it/s)
+- Training loss: Similar across all methods (needs RL eval for true comparison)
+
+### 9.5 Next Steps
+
+1. **E8a**: MXFP4 + LoRA + Lower AQN (σ=0.005→0.00005)
+2. **E8b**: MXFP4 + LoRA + Targeted AQN (layers 14-17 only)
+3. **E8c**: MXFP4 + LoRA + Variable sigma (SRDD-guided)
 
 ---
 
-## 9. Appendix: Raw Validation Results
+## 10. Appendix: Raw Validation Results
 
 ### E7a (BF16+LoRA)
 ```
