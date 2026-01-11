@@ -216,6 +216,13 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core' /tmp/no
 
 ## Status Updates
 
+### 2026-01-12 03:20 UTC - E9b Variable Sigma Started
+- E9b: Scale sigma by SRDD error per layer
+- Config: layers 14-17 get 1.5x, layers 10-13/18-21 get 1.2x, others 1.0x
+- Sigma: 0.01→0.00001 (same as E5c, E9a)
+- Log: `/tmp/noisy_ops_srdd_variable.log`
+- Hypothesis: variable sigma may provide better robustness than targeted-only
+
 ### 2026-01-12 03:15 UTC - E9a COMPLETED ✅
 - **E9a Final: 68.54%** (vs E5c: 67.48%, vs E5b: 70.58%)
 - **Key Finding**: Targeted AQN (4 layers) outperformed uniform AQN (all layers) by +1.06%!
