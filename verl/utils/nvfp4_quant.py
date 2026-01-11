@@ -5,16 +5,25 @@ This module provides NVFP4 (NVIDIA FP4) quantization implementation for
 simulating quantization effects during SRDD scans and AQN training.
 
 NVFP4 Format:
-- 4-bit values with 16-element blocks
-- E4M3 shared exponent (higher precision than MXFP4's E8M0)
-- ~1% relative error vs ~21% for MXFP4
+- 4-bit values (E2M1) with 16-element blocks
+- E4M3 shared exponent per block (higher precision scale than MXFP4's E8M0)
 
 Key differences from MXFP4:
 | Feature | MXFP4 | NVFP4 |
 |---------|-------|-------|
 | Block size | 32 | 16 |
 | Scale format | E8M0 (8-bit exp, 0-bit mantissa) | E4M3 (4-bit exp, 3-bit mantissa) |
-| Relative error | ~21% | ~1% |
+
+Quantization Quality (validated on Qwen2.5-1.5B-Instruct):
+| Metric | NVFP4 | MXFP4 | Notes |
+|--------|-------|-------|-------|
+| SQNR (dB) | 18.83 | 18.59 | NVFP4 slightly better |
+| MSE | 0.000011 | 0.000012 | NVFP4 slightly better |
+| Cosine Sim | 0.9949 | 0.9945 | Nearly identical |
+| Deadzone | 13.23% | 9.43% | NVFP4 creates more zeros |
+
+Note: The simple "relative error" metric can be misleading due to NVFP4's
+smaller group size creating more zeros. Use SQNR for accurate comparison.
 
 Usage:
     from verl.utils.nvfp4_quant import nvfp4_quantize
