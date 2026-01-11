@@ -72,7 +72,7 @@ def _detect_moe_model(model):
     return False
 
 
-def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, is_moe=None, verbose=True, layer_types=None):
+def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_modules=None, exclude_patterns=None, is_moe=None, verbose=True, layer_types=None, layer_sigma_config=None):
     """
     Generate and apply Gaussian noise to model layers for quantization-aware training.
 
@@ -93,6 +93,11 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         - layer_types=['linear']: Target Linear only (align with W4A16 quantization)
         - layer_types=['rmsnorm', 'linear']: Target both
 
+    SRDD-Guided Layer-Specific Sigma (NEW):
+        - layer_sigma_config: Dict with layer-specific sigma multipliers
+        - Allows different noise levels based on SRDD error analysis
+        - High-error layers get higher sigma, low-error layers get lower
+
     Args:
         model: The model to inject noise into (typically vLLM inference model)
         step: Current training step
@@ -103,6 +108,15 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         is_moe: Whether model is MoE (None = auto-detect)
         verbose: Whether to print noise injection info
         layer_types: List of layer types to target ['rmsnorm', 'linear'] (None = ['rmsnorm'])
+        layer_sigma_config: Dict for SRDD-guided layer-specific sigma (optional):
+            {
+                "enabled": True,
+                "default_multiplier": 1.0,  # Default for unlisted layers
+                "layer_multipliers": {
+                    "14": 1.5, "15": 1.5, "16": 1.5, "17": 1.5,  # High error
+                    "10": 1.2, "11": 1.2, ...  # Medium error
+                }
+            }
 
     Example:
         >>> # Auto-detect model type (recommended)
@@ -113,6 +127,10 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         >>>
         >>> # Force MoE model behavior
         >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, is_moe=True)
+        >>>
+        >>> # SRDD-guided layer-specific sigma (E9b)
+        >>> srdd_config = {"enabled": True, "layer_multipliers": {"14": 1.5, "15": 1.5}}
+        >>> generate_expert_gaussian_noise(model, step=100, total_step=1000, sigma_trend=sigma_trend, layer_sigma_config=srdd_config)
     """
     # Auto-detect model type if not specified
     if is_moe is None:
@@ -133,13 +151,22 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
 
     sigma_id, sigma = get_sigma_by_step(step, total_step, sigma_trend)
 
+    # SRDD-guided layer-specific sigma setup
+    use_layer_sigma = layer_sigma_config is not None and layer_sigma_config.get("enabled", False)
+    default_multiplier = 1.0
+    layer_multipliers = {}
+    if use_layer_sigma:
+        default_multiplier = layer_sigma_config.get("default_multiplier", 1.0)
+        layer_multipliers = layer_sigma_config.get("layer_multipliers", {})
+
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
             model_type = "MoE" if is_moe else "Dense"
             target_desc = target_modules if target_modules else "ALL"
             layer_type_desc = layer_types if layer_types else ["rmsnorm"]
+            srdd_desc = f", SRDD-guided={len(layer_multipliers)} layers" if use_layer_sigma else ""
             # Use print() to ensure visibility regardless of logging level
-            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, LayerTypes: {layer_type_desc}, Target: {target_desc}")
+            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, LayerTypes: {layer_type_desc}, Target: {target_desc}{srdd_desc}")
 
     if sigma == 0:
         return
@@ -147,6 +174,45 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
     # Default layer_types to ['rmsnorm'] for backward compatibility (QeRL default)
     if layer_types is None:
         layer_types = ['rmsnorm']
+
+    # Helper: extract layer index from module name
+    import re
+    def _extract_layer_idx(name):
+        """
+        Extract layer index from module name.
+        Examples:
+            'model.layers.14.post_attention_layernorm' -> 14
+            'model.layers.7.mlp.gate_proj' -> 7
+            'transformer.h.3.ln_1' -> 3
+        Returns None if no layer index found.
+        """
+        # Common patterns: layers.N, h.N, blocks.N
+        patterns = [
+            r'layers\.(\d+)\.',      # Qwen, LLaMA style
+            r'h\.(\d+)\.',           # GPT-2 style
+            r'blocks\.(\d+)\.',      # Some other models
+            r'layer\.(\d+)\.',       # Generic
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, name)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _get_sigma_for_layer(name, base_sigma):
+        """Get sigma for a specific layer, applying SRDD-guided multiplier if configured."""
+        if not use_layer_sigma:
+            return base_sigma
+
+        layer_idx = _extract_layer_idx(name)
+        if layer_idx is not None:
+            # Try to find multiplier by layer index (as string key)
+            layer_key = str(layer_idx)
+            multiplier = layer_multipliers.get(layer_key, default_multiplier)
+        else:
+            multiplier = default_multiplier
+
+        return base_sigma * multiplier
 
     # Detect RMSNorm by class name (works with vLLM's model implementations)
     # vLLM uses its own model classes, not transformers', so we check class name
@@ -217,10 +283,18 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
 
         weight_tensor = module.weight
 
+        # Get layer-specific sigma (SRDD-guided if configured)
+        layer_sigma = _get_sigma_for_layer(name, sigma)
+
+        # Skip if layer sigma is 0 (for targeted AQN)
+        if layer_sigma == 0:
+            skipped_count += 1
+            continue
+
         # Generate noise
         noise = torch.normal(
             mean=0,
-            std=sigma,
+            std=layer_sigma,
             size=weight_tensor.shape,
             dtype=torch.float32
         ).to(weight_tensor.device)
@@ -235,13 +309,18 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         noise_count += 1
 
         if verbose and noise_count <= 3:  # Log first few for debugging
-            logger.debug(f"Applied noise to: {name}")
+            layer_idx = _extract_layer_idx(name)
+            if use_layer_sigma:
+                logger.debug(f"Applied noise to: {name} (layer={layer_idx}, sigma={layer_sigma:.6f})")
+            else:
+                logger.debug(f"Applied noise to: {name}")
 
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
             # Use print() to ensure visibility regardless of logging level
             layer_type_str = "+".join(layer_types)
-            print(f"[AQN] Applied noise to {noise_count} {layer_type_str} layers (skipped {skipped_count} excluded layers)")
+            srdd_suffix = " (SRDD-guided)" if use_layer_sigma else ""
+            print(f"[AQN] Applied noise to {noise_count} {layer_type_str} layers (skipped {skipped_count} excluded layers){srdd_suffix}")
 
 
 def get_sigma_schedule(sigma_start=0.01, sigma_end=0.001, num_stages=10):

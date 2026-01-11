@@ -156,6 +156,8 @@ class vLLMAsyncRollout(BaseRollout):
             'epoch_ranges': epoch_ranges,
             'stages_per_epoch': getattr(config, 'noise_injection_stages_per_epoch', 5),
             'steps_per_epoch': getattr(config, 'noise_injection_steps_per_epoch', 0),
+            # SRDD-guided layer-specific sigma config (optional)
+            'layer_sigma_config': self._parse_layer_sigma_config(getattr(config, 'noise_injection_layer_sigma_config', None)),
         }
         if self.noise_injection_config['enabled']:
             # Use print() to ensure visibility regardless of logging level
@@ -179,6 +181,24 @@ class vLLMAsyncRollout(BaseRollout):
             if hasattr(hw_config, 'items'):
                 hw_config = dict(hw_config)
             print(f"[HW Error] HW error injection enabled: {hw_config}")
+
+    def _parse_layer_sigma_config(self, config):
+        """Parse layer_sigma_config from OmegaConf or dict format."""
+        if config is None:
+            return None
+
+        # Convert OmegaConf to dict if needed
+        if hasattr(config, 'items'):
+            config = dict(config)
+
+        if not isinstance(config, dict):
+            return None
+
+        # Ensure layer_multipliers is a regular dict with string keys
+        if 'layer_multipliers' in config and hasattr(config['layer_multipliers'], 'items'):
+            config['layer_multipliers'] = {str(k): v for k, v in dict(config['layer_multipliers']).items()}
+
+        return config
 
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
@@ -348,6 +368,7 @@ class vLLMAsyncRollout(BaseRollout):
                                 target_modules=self.noise_injection_config.get('target_modules'),
                                 exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
                                 layer_types=self.noise_injection_config.get('layer_types'),
+                                layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
                                 verbose=True
                             )
                 else:
@@ -366,6 +387,7 @@ class vLLMAsyncRollout(BaseRollout):
                             target_modules=self.noise_injection_config.get('target_modules'),
                             exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
                             layer_types=self.noise_injection_config.get('layer_types'),
+                            layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
                             verbose=True
                         )
 

@@ -169,10 +169,10 @@ def generate_expert_gaussian_noise(
 ## Execution Checklist
 
 ### Phase 1: Lower AQN (Today)
-- [ ] Create `scripts/test_noisy_ops_aqn_lower.sh` (E5c)
-- [ ] Git commit and push to personal remote
-- [ ] SSH to A100 and pull code
-- [ ] Run E5c experiment
+- [x] Create `scripts/test_noisy_ops_aqn_lower.sh` (E5c)
+- [x] Git commit and push to personal remote
+- [x] SSH to A100 and pull code
+- [x] Run E5c experiment (RUNNING)
 - [ ] Record results
 
 ### Phase 2: SRDD-Guided AQN (Next)
@@ -214,11 +214,16 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core' /tmp/no
 
 ## Status Updates
 
-### 2026-01-11 22:00 UTC - E5c Started
-- E5c experiment running on A100 (verl-r3-test container)
+### 2026-01-11 22:51 UTC - E5c Re-Started (NumPy Fix)
+- Fixed NumPy/Numba incompatibility: downgraded NumPy 2.4.1 → 2.2.6
+- E5c experiment re-launched successfully
 - Log file: `/tmp/noisy_ops_aqn_lower.log`
-- Expected runtime: ~2 hours
-- Config: sigma 0.01→0.00001, 5% matmul noise, epoch-aware
+- Ray started, vLLM initializing, AQN enabled
+- Config confirmed: sigma_start=0.01, sigma_end=0.00001
+
+### 2026-01-11 22:00 UTC - E5c Started (Failed)
+- Initial attempt failed due to NumPy version incompatibility
+- Error: "Numba needs NumPy 2.2 or less. Got NumPy 2.4"
 
 ### 2026-01-11 Initial Setup
 - SRDD/fake quant validation completed
