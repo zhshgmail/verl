@@ -119,9 +119,50 @@ Use SRDD scan results to guide WHERE and HOW STRONG to inject AQN:
 
 ### Implementation Approach
 
-1. **Modify `noise_injection.py`** to accept layer-specific sigma
-2. **Create SRDD config file** mapping layer → sigma multiplier
-3. **Run experiments** on HW error setup (5% matmul)
+#### Step 1: Create SRDD-to-Sigma Mapping
+
+Based on SRDD scan results, create a mapping of layer → sigma multiplier:
+
+```python
+# Example: srdd_sigma_config.json
+{
+    "base_sigma": 0.01,  # Base sigma value
+    "layer_multipliers": {
+        # High error layers (14-17): 1.5x
+        "14": 1.5, "15": 1.5, "16": 1.5, "17": 1.5,
+        # Medium error layers (10-13, 18-21): 1.2x
+        "10": 1.2, "11": 1.2, "12": 1.2, "13": 1.2,
+        "18": 1.2, "19": 1.2, "20": 1.2, "21": 1.2,
+        # Low error layers: 1.0x (default)
+    }
+}
+```
+
+#### Step 2: Modify `noise_injection.py`
+
+Add layer-specific sigma support to `generate_expert_gaussian_noise`:
+
+```python
+def generate_expert_gaussian_noise(
+    model, step, total_step, sigma_trend,
+    ...,
+    layer_sigma_config=None,  # NEW: SRDD-guided config
+):
+    """
+    If layer_sigma_config provided:
+      - base_sigma: base sigma value
+      - layer_multipliers: dict mapping layer_id -> sigma multiplier
+    """
+    # For each layer, compute: sigma = base_sigma * multiplier
+```
+
+#### Step 3: Create Experiment Scripts
+
+| Script | Config | Description |
+|--------|--------|-------------|
+| `test_noisy_ops_srdd_targeted.sh` | Only layers 14-17 | E9a: Targeted AQN |
+| `test_noisy_ops_srdd_variable.sh` | Variable sigma per layer | E9b: SRDD-guided sigma |
+| `test_noisy_ops_srdd_combined.sh` | Both targeted + variable | E9c: Combined |
 
 ---
 
@@ -173,10 +214,31 @@ ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core' /tmp/no
 
 ## Status Updates
 
+### 2026-01-11 22:00 UTC - E5c Started
+- E5c experiment running on A100 (verl-r3-test container)
+- Log file: `/tmp/noisy_ops_aqn_lower.log`
+- Expected runtime: ~2 hours
+- Config: sigma 0.01→0.00001, 5% matmul noise, epoch-aware
+
 ### 2026-01-11 Initial Setup
 - SRDD/fake quant validation completed
 - Session document created
 - Planning lower AQN experiments
+
+---
+
+## Monitoring E5c
+
+```bash
+# Check progress
+ssh root@90.90.102.18 "docker exec verl-r3-test grep -E 'step:|val-core|Training Progress' /tmp/noisy_ops_aqn_lower.log | tail -20"
+
+# Check AQN sigma decay
+ssh root@90.90.102.18 "docker exec verl-r3-test grep -i 'sigma\|noise' /tmp/noisy_ops_aqn_lower.log | tail -10"
+
+# Full tail
+ssh root@90.90.102.18 "docker exec verl-r3-test tail -50 /tmp/noisy_ops_aqn_lower.log"
+```
 
 ---
 
