@@ -447,11 +447,30 @@ From `SRDD_GUIDED_AQN_EXPERIMENT_DESIGN.md` PoC results:
 - Targeted AQN (1 layer): **71% faster** than global AQN (8.9 vs 5.2 it/s)
 - Training loss: Similar across all methods (needs RL eval for true comparison)
 
-### 9.5 Next Steps
+### 9.5 Critical Finding: NVFP4 vs MXFP4 Error Analysis
+
+Direct measurement on Qwen2.5-1.5B-Instruct weights (196 layers):
+
+| Format | Average Relative Error | vs Expected |
+|--------|------------------------|-------------|
+| MXFP4 | **21.77%** | ✓ Matches ~21% claim |
+| NVFP4 | **26.51%** | ⚠️ 1.22x WORSE than MXFP4 |
+
+**This explains training results:**
+- E5a (NVFP4+LoRA): 63.84% - worse due to higher quant error
+- E6a (MXFP4+LoRA): 65.88% - better due to lower quant error
+
+**Root cause analysis:**
+- The "NVFP4 ~1% error" claim may be for different conditions
+- Our nvfp4_quant.py implementation needs review
+- Both formats show high relative error on small weight values
+
+### 9.6 Next Steps
 
 1. **E8a**: MXFP4 + LoRA + Lower AQN (σ=0.005→0.00005)
 2. **E8b**: MXFP4 + LoRA + Targeted AQN (layers 14-17 only)
 3. **E8c**: MXFP4 + LoRA + Variable sigma (SRDD-guided)
+4. **Bug fix**: Review nvfp4_quant.py implementation
 
 ---
 
