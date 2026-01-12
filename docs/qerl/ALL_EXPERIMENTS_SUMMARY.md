@@ -59,10 +59,13 @@ These experiments extend 1-epoch runs to 2 epochs to study longer training effec
 | **E7a-2ep** | LoRA | 71.27% | **73.84%** @step40 | ⚠️ Needs Rerun | BF16 + LoRA (ended early at 69%) |
 | **E3a-2ep** | Quant | 73.77% | **72.78%** | ✅ Complete | MXFP4 + Full FT (-0.99%) |
 | **E3b-2ep** | Quant | 74.37% | **70.05%** | ✅ Complete | MXFP4 + Full FT + AQN (-4.32%, dropped late) |
-| **E8a-2ep** | Quant | 74.75% | **7.66%** @step0 | 🔄 Running | BF16 + Full FT |
-| **E12-2ep** | LoRA | 72.48% | - | ⏳ Not in batch | MXFP4 + LoRA + AQN-high (run next) |
+| **E8a-2ep** | Quant | 74.75% | **75.97%** @step40 | ⚠️ Needs Rerun | BF16 + Full FT (+1.22%, ended early) |
+| **E12-2ep** | LoRA | 72.48% | - | ⏳ Pending | MXFP4 + LoRA + AQN-high (run in v3 batch) |
 
-**Key Finding**: 2-epoch training significantly improves LoRA results (+5-7% accuracy).
+**Key Findings**:
+- 2-epoch training significantly improves LoRA results (+5-7% accuracy)
+- Full FT results show mixed results: E8a improved (+1.22%), but E3a/E3b degraded
+- E3b-2ep shows potential overfitting (dropped from 73.24% at step50 to 70.05% at step58)
 
 ---
 

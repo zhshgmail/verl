@@ -101,12 +101,12 @@ bash scripts/test_bf16_v8.0_dapo_fullft_2ep.sh 8      # E8a-2ep
 | E7a-2ep | `test_bf16_v7.0_dapo_lora_2ep.sh` | ⚠️ Ended Early | Jan 11 16:30 | Jan 11 18:01 | 73.84% @step40 (69%) |
 | E3a-2ep | `test_mxfp4_v3.0_dapo_2ep.sh` | ✅ Complete | Jan 11 18:01 | Jan 11 19:09 | **72.78%** (-0.99%) |
 | E3b-2ep | `test_mxfp4_v3.1_dapo_aqn_2ep.sh` | ✅ Complete | Jan 11 19:09 | Jan 11 20:15 | **70.05%** (-4.32%, dropped) |
-| E8a-2ep | `test_bf16_v8.0_dapo_fullft_2ep.sh` | 🔄 Running | Jan 11 20:15 | - | 7.66% @step0 |
-| E12-2ep | `test_mxfp4_v6.2_dapo_lora_aqn_high_sigma_2ep.sh` | ⏳ Not in batch | - | - | Run after v2 batch |
+| E8a-2ep | `test_bf16_v8.0_dapo_fullft_2ep.sh` | ⚠️ Ended Early | Jan 11 20:15 | Jan 11 20:54 | **75.97%** @step40 (+1.22%) |
+| E12-2ep | `test_mxfp4_v6.2_dapo_lora_aqn_high_sigma_2ep.sh` | ⏳ Pending | - | - | Run in v3 batch |
 
-**Auto-runner**: `run_all_2ep_experiments_v2.sh` running on A100
+**v2 batch**: `run_all_2ep_experiments_v2.sh` - COMPLETED
 **Master log**: `/tmp/2ep_experiments_master/master.log`
-**Next**: Run v3 script for E12-2ep after v2 batch completes
+**Next**: Run v3 script for E12-2ep and reruns (E7a-2ep, E8a-2ep)
 
 ---
 
