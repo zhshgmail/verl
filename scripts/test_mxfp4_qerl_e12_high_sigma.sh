@@ -66,10 +66,11 @@ enable_filter_groups=True
 filter_groups_metric=acc
 max_num_gen_batches=5
 
-# QeRL-style batch sizes (SMALL for more steps)
-train_batch_size=2
-gen_batch_size=2
-ppo_mini_batch_size=2
+# Balanced batch sizes (~230 steps per epoch)
+# 7473 samples / 32 = 234 steps (4x more than 2ep's 58 steps)
+train_batch_size=32
+gen_batch_size=32
+ppo_mini_batch_size=16
 n_resp_per_prompt=8
 
 # LoRA settings (16-bit)
@@ -81,22 +82,22 @@ sigma_start=0.05
 sigma_end=0.0005
 num_stages=10
 
-echo "=== E12-qerl: QeRL-Style MXFP4 + LoRA + High Sigma AQN ==="
+echo "=== E12-qerl: MXFP4 + LoRA + High Sigma AQN (Balanced BS) ==="
 echo ""
-echo "QeRL-style configuration:"
-echo "  - gen_batch_size: 2 (was 256)"
-echo "  - train_batch_size: 2 (was 128)"
-echo "  - total_epochs: 1 (was 2)"
-echo "  - Expected steps: ~3,736 (was 58)"
-echo "  - test_freq: 200 (~18 evals + final)"
+echo "Balanced configuration (more steps than 2ep, faster than QeRL bs=2):"
+echo "  - gen_batch_size: 32 (was 256)"
+echo "  - train_batch_size: 32 (was 128)"
+echo "  - total_epochs: 1"
+echo "  - Expected steps: ~234 (4x more than 2ep's 58 steps)"
+echo "  - test_freq: 20 (~11 evals + final)"
 echo ""
 echo "AQN settings (HIGH sigma, step-based):"
 echo "  - sigma: ${sigma_start} → ${sigma_end} (5x higher than E6b)"
 echo "  - num_stages: ${num_stages}"
-echo "  - epoch_aware: disabled (QeRL style)"
+echo "  - epoch_aware: disabled (step-based K-stage decay)"
 echo ""
 echo "Previous E12-2ep: 72.93% (58 steps)"
-echo "Hypothesis: High sigma + more steps = better exploration"
+echo "Hypothesis: 4x more steps + high sigma = better exploration"
 echo ""
 
 python3 -m recipe.dapo.main_dapo \
@@ -116,7 +117,7 @@ python3 -m recipe.dapo.main_dapo \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size} \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.actor.use_kl_loss=${use_kl_loss} \
     actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
     actor_rollout_ref.actor.clip_ratio_low=${clip_ratio_low} \
@@ -127,7 +128,7 @@ python3 -m recipe.dapo.main_dapo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
@@ -135,7 +136,7 @@ python3 -m recipe.dapo.main_dapo \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=1.0 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
@@ -149,7 +150,7 @@ python3 -m recipe.dapo.main_dapo \
     reward_model.overlong_buffer.log=True \
     trainer.critic_warmup=0 \
     trainer.total_epochs=1 \
-    trainer.test_freq=200 \
+    trainer.test_freq=20 \
     trainer.n_gpus_per_node=${N_GPUS} \
     trainer.val_before_train=True \
     trainer.save_freq=500 \
