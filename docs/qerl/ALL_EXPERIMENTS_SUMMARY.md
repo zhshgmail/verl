@@ -34,17 +34,17 @@
 | **E9a** | HW | `HW_5pct_AQN_SRDD-targeted_sigma0.01_70.58` | 70.58% | 2 | Yes | targeted | No | BF16 | AQN on specific layers only |
 | **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | targeted | No | BF16 | High σ=0.05 start |
 | **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | variable | No | BF16 | **BEST HW** - per-layer multipliers |
-| **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75_BASELINE` | **74.75%** | 1 | No | No | No | BF16 | DAPO Full FT baseline |
+| **E8a** | Quant | `Q_BF16_DAPO_fullFT_2ep_75.97` | **75.97%** | 2 | No | No | No | BF16 | DAPO Full FT baseline |
 | **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_73.77` | 73.77% | 1 | No | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
 | **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_74.37` | 74.37% | 1 | Yes | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
 | **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
 | **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
-| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | No | Yes | BF16 | BF16 LoRA baseline |
+| **E7a** | LoRA | `LoRA_BF16_DAPO_2ep_73.84` | **73.84%** | 2 | No | No | Yes | BF16 | BF16 LoRA baseline |
 | **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | No | Yes | NVFP4 | NVFP4 + LoRA |
 | **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | No | Yes | NVFP4 | NVFP4 + LoRA + AQN |
-| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | No | Yes | MXFP4 | MXFP4 + LoRA |
-| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | No | Yes | MXFP4 | MXFP4 + LoRA + AQN |
-| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN-high_72.48` | **72.48%** | 1 | Yes | variable | Yes | MXFP4 | **BEST LoRA** - High σ + SRDD |
+| **E6a** | LoRA | `LoRA_MXFP4_DAPO_2ep_72.93` | **72.93%** | 2 | No | No | Yes | MXFP4 | MXFP4 + LoRA |
+| **E6b** | LoRA | `LoRA_MXFP4_DAPO_2ep_AQN_73.24` | **73.24%** | 2 | Yes | No | Yes | MXFP4 | MXFP4 + LoRA + AQN |
+| **E12** | LoRA | `LoRA_MXFP4_DAPO_2ep_AQN-high_72.93` | **72.93%** | 2 | Yes | variable | Yes | MXFP4 | **BEST LoRA** - High σ + SRDD (peak@step30) |
 
 ---
 
@@ -116,18 +116,18 @@ All E5/E9 experiments use **identical HW noise setup** for fair comparison:
 All Quant experiments use **weight injection** setup:
 - **Noise Type**: Weight-level fake quantization (via `hw_error_injection`)
 - **Target**: All linear layers (excluding lm_head, embed_tokens)
-- **Algorithm**: DAPO, 1 epoch
+- **Algorithm**: DAPO
 - **Model**: Qwen2.5-1.5B-Instruct
 
-| Exp ID | dtype | Quant Error | AQN σ | Score | AQN Benefit | Notes |
-|--------|-------|-------------|-------|-------|-------------|-------|
-| E8a | BF16 | None | - | 74.75% | - | DAPO baseline |
-| E3a | MXFP4 | ~21% rel | None | 73.77% | - | -0.98% from BF16 |
-| E3b | MXFP4 | ~21% rel | 0.01→0.0001 | 74.37% | +0.60% | AQN helps |
-| E4a | NVFP4 | ~15% rel | None | 72.10% | - | -2.65% from BF16 |
-| E4b | NVFP4 | ~15% rel | 0.01→0.0001 | 73.24% | +1.14% | AQN helps more |
+| Exp ID | dtype | Quant Error | AQN σ | Score | Epochs | AQN Benefit | Notes |
+|--------|-------|-------------|-------|-------|--------|-------------|-------|
+| E8a | BF16 | None | - | **75.97%** | 2 | - | DAPO baseline |
+| E3a | MXFP4 | ~21% rel | None | 73.77% | 1 | - | ⚠️ STE bug - needs rerun |
+| E3b | MXFP4 | ~21% rel | 0.01→0.0001 | 74.37% | 1 | +0.60% | ⚠️ STE bug - needs rerun |
+| E4a | NVFP4 | ~15% rel | None | 72.10% | 1 | - | ⚠️ STE bug - needs rerun |
+| E4b | NVFP4 | ~15% rel | 0.01→0.0001 | 73.24% | 1 | +1.14% | ⚠️ STE bug - needs rerun |
 
-**Key Finding**: AQN provides +0.60% for MXFP4, +1.14% for NVFP4. BF16 baseline (74.75%) > MXFP4+AQN (74.37%).
+**Key Finding**: BF16 2ep baseline achieves 75.97%. MXFP4/NVFP4 results need rerun after STE fix.
 
 ### LoRA Experiments (Quantized Base + 16-bit LoRA)
 
@@ -135,30 +135,31 @@ All LoRA experiments use **weight injection + LoRA** setup:
 - **Noise Type**: Weight-level fake quantization (via `hw_error_injection`)
 - **Target**: Linear layers (excluding lm_head, embed_tokens, lora_A, lora_B)
 - **LoRA**: rank=32, alpha=16 (trained in BF16)
-- **Algorithm**: DAPO, 1 epoch
+- **Algorithm**: DAPO
 - **Model**: Qwen2.5-1.5B-Instruct
 
-| Exp ID | dtype | Quant Error | AQN σ | AQN Type | Score | AQN Benefit | Notes |
-|--------|-------|-------------|-------|----------|-------|-------------|-------|
-| E7a | BF16 | None | - | - | 71.27% | - | LoRA baseline |
-| E5a-LoRA | NVFP4 | ~15% rel | None | - | 68.23% | - | -3.04% from BF16 |
-| E5b-LoRA | NVFP4 | ~15% rel | 0.01→0.0001 | Standard | 70.58% | +2.35% | AQN recovers most |
-| E6a | MXFP4 | ~21% rel | None | - | 65.88% | - | -5.39% from BF16 |
-| E6b | MXFP4 | ~21% rel | 0.01→0.0001 | Standard | 67.48% | +1.60% | AQN helps |
-| **E12** | MXFP4 | ~21% rel | 0.05→0.0005 | High + SRDD | **72.48%** | **+6.60%** | **BEST: exceeds BF16!** |
+| Exp ID | dtype | Quant Error | AQN σ | AQN Type | Score | Epochs | AQN Benefit | Notes |
+|--------|-------|-------------|-------|----------|-------|--------|-------------|-------|
+| E7a | BF16 | None | - | - | **73.84%** | 2 | - | LoRA baseline |
+| E5a-LoRA | NVFP4 | ~15% rel | None | - | 68.23% | 1 | - | -5.61% from BF16 |
+| E5b-LoRA | NVFP4 | ~15% rel | 0.01→0.0001 | Standard | 70.58% | 1 | +2.35% | AQN recovers some |
+| E6a | MXFP4 | ~21% rel | None | - | **72.93%** | 2 | - | -0.91% from BF16 |
+| E6b | MXFP4 | ~21% rel | 0.01→0.0001 | Standard | **73.24%** | 2 | +0.31% | AQN helps |
+| E12 | MXFP4 | ~21% rel | 0.05→0.0005 | High + SRDD | **72.93%** | 2 | +0.00% | High σ peaked early |
 
-**Key Finding**: E12 (MXFP4+LoRA+AQN-high) exceeds BF16 baseline (72.48% > 71.27%)!
+**Key Finding**: With 2 epochs, MXFP4+LoRA (E6a: 72.93%, E6b: 73.24%) nearly matches BF16 baseline (E7a: 73.84%). AQN provides marginal benefit (+0.31%) at 2 epochs.
 
 ---
 
 ## Best Results per Category
 
-| Category | Best Experiment | Score | Key Config |
-|----------|----------------|-------|------------|
-| **HW Inject** | E9b | 71.19% | SRDD variable multipliers, σ=0.01 |
-| **Full FT** | E8a (BF16) | 74.75% | Pure BF16 DAPO baseline |
-| **Full FT + Quant** | E3b (MXFP4+AQN) | 74.37% | MXFP4 + AQN, σ=0.01 |
-| **LoRA** | E12 | 72.48% | MXFP4 + LoRA + AQN-high (σ=0.05) |
+| Category | Best Experiment | Score | Epochs | Key Config |
+|----------|----------------|-------|--------|------------|
+| **HW Inject** | E9b | 71.19% | 2 | SRDD variable multipliers, σ=0.01 |
+| **Full FT** | E8a (BF16) | 75.97% | 2 | Pure BF16 DAPO |
+| **Full FT + Quant** | E3b (MXFP4+AQN) | 74.37% | 1 | MXFP4 + AQN, σ=0.01 (needs STE fix rerun) |
+| **LoRA** | E7a (BF16) | 73.84% | 2 | BF16 LoRA baseline |
+| **LoRA + Quant** | E6b (MXFP4+AQN) | 73.24% | 2 | MXFP4 + LoRA + AQN |
 
 ---
 
