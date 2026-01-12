@@ -35,10 +35,10 @@
 | **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | targeted | No | BF16 | High σ=0.05 start |
 | **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | variable | No | BF16 | **BEST HW** - per-layer multipliers |
 | **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75_BASELINE` | **74.75%** | 1 | No | No | No | BF16 | DAPO Full FT baseline |
-| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_73.77` | 73.77% | 1 | No | No | No | MXFP4 | DAPO + MXFP4 |
-| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_74.37` | 74.37% | 1 | Yes | No | No | MXFP4 | DAPO + MXFP4 + AQN |
-| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | No | No | NVFP4 | DAPO + NVFP4 |
-| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | No | No | NVFP4 | DAPO + NVFP4 + AQN |
+| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_73.77` | 73.77% | 1 | No | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
+| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_74.37` | 74.37% | 1 | Yes | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
+| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
+| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
 | **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | No | Yes | BF16 | BF16 LoRA baseline |
 | **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | No | Yes | NVFP4 | NVFP4 + LoRA |
 | **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | No | Yes | NVFP4 | NVFP4 + LoRA + AQN |
@@ -57,8 +57,8 @@ These experiments extend 1-epoch runs to 2 epochs to study longer training effec
 | **E6b-2ep** | LoRA | 67.48% | **73.24%** | ✅ Complete | MXFP4 + LoRA + AQN (+5.76%) |
 | **E6a-2ep** | LoRA | 65.88% | **72.93%** | ✅ Complete | MXFP4 + LoRA (+7.05%) |
 | **E7a-2ep** | LoRA | 71.27% | **73.84%** @step40 | ⚠️ Needs Rerun | BF16 + LoRA (ended early at 69%) |
-| **E3a-2ep** | Quant | 73.77% | **72.78%** | ✅ Complete | MXFP4 + Full FT (-0.99%) |
-| **E3b-2ep** | Quant | 74.37% | **70.05%** | ✅ Complete | MXFP4 + Full FT + AQN (-4.32%, dropped late) |
+| **E3a-2ep** | Quant | 73.77% | **72.78%** | ⚠️ Needs Rerun | MXFP4 + Full FT (STE bug) |
+| **E3b-2ep** | Quant | 74.37% | **70.05%** | ⚠️ Needs Rerun | MXFP4 + Full FT + AQN (STE bug, see below) |
 | **E8a-2ep** | Quant | 74.75% | **75.97%** @step40 | ⚠️ Needs Rerun | BF16 + Full FT (+1.22%, ended early) |
 | **E12-2ep** | LoRA | 72.48% | - | ⏳ Pending | MXFP4 + LoRA + AQN-high (run in v3 batch) |
 
@@ -166,3 +166,78 @@ tensorboard --logdir /tmp/tb_logs --bind_all
 # Wandb project
 # https://wandb.ai/vaai/aqn_refine
 ```
+
+---
+
+## Known Issues
+
+### QAT/STE Implementation Bug (Affects FullFT Experiments)
+
+**Date Identified**: 2026-01-12
+
+**Affected Experiments**: ALL FullFT + Weight Quantization experiments:
+- E3a (1ep, 2ep) - MXFP4 + FullFT
+- E3b (1ep, 2ep) - MXFP4 + FullFT + AQN
+- E4a (1ep) - NVFP4 + FullFT
+- E4b (1ep) - NVFP4 + FullFT + AQN
+
+**Issue**: The `hw_error_injection.py` weight quantization implementation does NOT correctly implement Straight-Through Estimator (STE) for gradient flow.
+
+**Technical Details**:
+
+The current implementation in `verl/utils/hw_error_injection.py` (lines 714-790):
+
+```python
+# Pre-hook (before forward):
+module._original_weight = weight.clone()
+module.weight.data = quantized_weight  # Use quantized for forward
+
+# Post-hook (after forward, BEFORE backward):
+module.weight.data = module._original_weight  # Restore original
+```
+
+**Problem**: In PyTorch's backward pass for `nn.Linear`:
+- `grad_W = grad_output.T @ x` - Uses saved `x` from forward (OK)
+- `grad_x = grad_output @ W` - Uses **current** `W` value (WRONG!)
+
+Since we restore `W_orig` after forward but before backward, the gradient `grad_x` is computed with `W_orig` instead of `W_quant`. This corrupts gradient flow to earlier layers.
+
+**Impact by Experiment Type**:
+
+| Type | Base Weights | Impact |
+|------|-------------|--------|
+| **LoRA** | Frozen (`requires_grad=False`) | ✅ No impact - `grad_x` not used for frozen weights |
+| **FullFT** | Trainable (`requires_grad=True`) | ❌ Corrupted gradients - affects ALL earlier layers |
+
+**Why E3b Results May Be Invalid**:
+- E3b uses FullFT with trainable base weights
+- The corrupted `grad_x` propagates backward through all layers
+- Combined with AQN noise, this may have caused suboptimal training
+- E3b-2ep dropped from 73.24% (step50) to 70.05% (step58) - possibly due to this bug
+
+**True STE Implementation** (required fix):
+
+```python
+class STEQuantize(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, weight, quantize_fn):
+        ctx.save_for_backward(weight)
+        return quantize_fn(weight)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None  # Pass gradient through unchanged (STE)
+```
+
+**Status**:
+- LoRA experiments (E6a, E6b, E12, etc.) are **NOT affected** - results are valid
+- FullFT experiments (E3b, E4b) **NEED RERUN** after fix is implemented
+
+**Action Items**:
+1. ✅ Document this issue
+2. ⏳ Implement proper STE in `hw_error_injection.py`
+3. ⏳ Rerun ALL affected FullFT experiments:
+   - E3a (1ep, 2ep) - MXFP4 + FullFT
+   - E3b (1ep, 2ep) - MXFP4 + FullFT + AQN
+   - E4a (1ep) - NVFP4 + FullFT
+   - E4b (1ep) - NVFP4 + FullFT + AQN
