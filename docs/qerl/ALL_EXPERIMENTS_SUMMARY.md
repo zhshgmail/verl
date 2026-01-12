@@ -54,13 +54,13 @@ These experiments extend 1-epoch runs to 2 epochs to study longer training effec
 
 | Exp ID | Type | Original 1ep | 2ep Score | Status | Notes |
 |--------|------|--------------|-----------|--------|-------|
-| **E6b-2ep** | LoRA | 67.48% | **73.24%** | ✅ Complete | MXFP4 + LoRA + AQN |
-| **E6a-2ep** | LoRA | 65.88% | **72.93%** | ✅ Complete | MXFP4 + LoRA |
-| **E7a-2ep** | LoRA | 71.27% | **73.84%** @step40 | ⚠️ Needs Rerun | BF16 + LoRA (ended early, investigate) |
-| **E12-2ep** | LoRA | 72.48% | - | ⏳ Queued | MXFP4 + LoRA + AQN-high (BEST 1ep) |
-| **E3a-2ep** | Quant | 73.77% | **73.92%** @step40 | 🔄 Running | MXFP4 + Full FT (step 49/58) |
-| **E3b-2ep** | Quant | 74.37% | - | ⏳ Queued | MXFP4 + Full FT + AQN |
+| **E6b-2ep** | LoRA | 67.48% | **73.24%** | ✅ Complete | MXFP4 + LoRA + AQN (+5.76%) |
+| **E6a-2ep** | LoRA | 65.88% | **72.93%** | ✅ Complete | MXFP4 + LoRA (+7.05%) |
+| **E7a-2ep** | LoRA | 71.27% | **73.84%** @step40 | ⚠️ Needs Rerun | BF16 + LoRA (ended early at 69%) |
+| **E3a-2ep** | Quant | 73.77% | **72.78%** | ✅ Complete | MXFP4 + Full FT (-0.99%) |
+| **E3b-2ep** | Quant | 74.37% | **73.31%** @step30 | 🔄 Running | MXFP4 + Full FT + AQN (52%) |
 | **E8a-2ep** | Quant | 74.75% | - | ⏳ Queued | BF16 + Full FT |
+| **E12-2ep** | LoRA | 72.48% | - | ⏳ Not in batch | MXFP4 + LoRA + AQN-high (run next) |
 
 **Key Finding**: 2-epoch training significantly improves LoRA results (+5-7% accuracy).
 
