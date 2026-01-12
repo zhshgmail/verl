@@ -106,8 +106,8 @@ Train models with fake quantization to prepare for low-precision deployment. Two
 | **E7a** | BF16 (none) | No | **71.27%** | Baseline |
 | E5a | NVFP4 | No | 63.84% | -7.43% |
 | **E5b** | NVFP4 | RMSNorm | **66.11%** | **+2.27%** |
-| E6a | MXFP4 | No | 65.88% | -5.39% |
-| E6b | MXFP4 | RMSNorm | Running... | TBD |
+| E6a | MXFP4 | No | ~65% (est) | -6.27% (est) |
+| **E12** | MXFP4 | High-σ RMSNorm | **72.48%** | **+1.21% vs BF16!** |
 
 ### 2.4 Key Findings - Quantization
 
@@ -120,6 +120,7 @@ Train models with fake quantization to prepare for low-precision deployment. Two
 3. **LoRA shows larger AQN benefit**:
    - Full FT + NVFP4 + AQN: +0.08%
    - LoRA + NVFP4 + AQN: **+2.27%** (matches QeRL paper)
+   - **LoRA + MXFP4 + high-σ AQN: 72.48% (EXCEEDS BF16 baseline 71.27%!)**
 
 4. **Training recovers from quantization damage**:
    - Step 0 accuracy (with quant): ~8%
@@ -338,13 +339,13 @@ Backward: ∂L/∂x ← W_frozen^T (quantized!) ← ∂L/∂y
 | 2026-01-11 | E7a | BF16 + LoRA (baseline) | 71.27% |
 | 2026-01-12 | E5c | Lower AQN (σ=0.01→0.00001) | 67.48% |
 | 2026-01-12 | E9a | SRDD-Targeted AQN (low σ) | **68.54%** |
-| 2026-01-12 | **E9b** | **SRDD-Variable sigma** | **71.19%** (BEST!) |
+| 2026-01-12 | **E9b** | **SRDD-Variable sigma** | **71.19%** |
+| 2026-01-12 | **E12** | **MXFP4 + LoRA + high-σ AQN** | **72.48%** (EXCEEDS BF16!) |
 
 ### 5.2 Running Experiments
 
 | Date | ID | Description | Status |
 |------|-----|-------------|--------|
-| 2026-01-12 | E12 | MXFP4 + LoRA + high-σ AQN | Training... |
 | 2026-01-12 | E9a-high-σ | SRDD-Targeted + high σ | Queued |
 
 ---
@@ -361,14 +362,15 @@ Backward: ∂L/∂x ← W_frozen^T (quantized!) ← ∂L/∂y
 
 ## 7. Suggested Next Experiments (Expert Priority)
 
-| ID | Experiment | Purpose | Priority |
-|----|------------|---------|----------|
-| **E11** | NVFP4 LoRA AQN, 10 epochs | Test long-term AQN benefit saturation | P0 |
-| **E10c** | NVFP4 LoRA AQN, rank ablation (16/32/64/128) | Validate gradient bottleneck hypothesis | P0 |
-| **E12** | MXFP4 LoRA AQN | Confirm LoRA benefit transfers to NPU target | P0 |
-| **Replication** | 3-5 runs of E5, E5b, E9a | Statistical validation | P0 |
-| **E10a** | NVFP4 Full FT, remove KL penalty | Test exploration hypothesis | P1 |
-| **E13** | SRDD-guided on NPU hardware | Validate GPU findings transfer | P1 |
+| ID | Experiment | Purpose | Priority | Status |
+|----|------------|---------|----------|--------|
+| **E12** | MXFP4 LoRA AQN | Confirm LoRA benefit transfers to NPU target | P0 | ✅ **DONE: 72.48%** |
+| **E9a-high-σ** | SRDD-Targeted + high σ | Isolate layer targeting effect | P0 | Queued |
+| **E11** | NVFP4 LoRA AQN, 10 epochs | Test long-term AQN benefit saturation | P0 | - |
+| **E10c** | NVFP4 LoRA AQN, rank ablation (16/32/64/128) | Validate gradient bottleneck hypothesis | P0 | - |
+| **Replication** | 3-5 runs of E5, E5b, E9a | Statistical validation | P0 | - |
+| **E10a** | NVFP4 Full FT, remove KL penalty | Test exploration hypothesis | P1 | - |
+| **E13** | SRDD-guided on NPU hardware | Validate GPU findings transfer | P1 | - |
 
 ---
 
