@@ -16,8 +16,10 @@
 | **SRDD-targeted** | AQN applied only to layers identified by SRDD as high-error (binary: on/off) |
 | **SRDD-variable** | AQN with layer-specific noise multipliers based on SRDD error scores (continuous scaling) |
 | **σ (sigma)** | Noise magnitude. Typically decays from σ_start (0.01) to σ_end (0.0001) over training |
-| **HW inject** | Hardware error simulation - injects errors to simulate MXFP4 quantization effects |
-| **Quant** | Actual quantization experiments using MXFP4/NVFP4/BF16 |
+| **HW inject** | Hardware error simulation via `VERL_NOISY_OPS` - injects relative Gaussian noise into matmul operations |
+| **Quant** | Actual fake quantization experiments using MXFP4/NVFP4/BF16 via `hw_error_injection` |
+| **Matmul-only** | Noise injected only into matmul operations (simulates compute quantization) |
+| **Weight inject** | Noise injected into model weights (simulates weight quantization via `hw_error_injection`) |
 
 ---
 
@@ -67,38 +69,60 @@ These experiments extend 1-epoch runs to 2 epochs to study longer training effec
 ## Summary by Category
 
 ### HW Error Injection Experiments (Simulated Hardware Noise)
-| Exp ID | Score | AQN Benefit | Notes |
-|--------|-------|-------------|-------|
-| Baseline | 76.88% | - | Clean BF16, GRPO 2ep |
-| E5 | 68.92% | - | 5% noise only (-7.96%) |
-| E5b | 70.58% | +1.66% | AQN recovers some loss |
-| E5c | 70.27% | +1.35% | Lower σ slightly worse |
-| E9a | 70.58% | +1.66% | SRDD targeting = same |
-| E9a-high | 70.81% | +1.89% | High σ helps slightly |
-| **E9b** | **71.19%** | **+2.27%** | **SRDD variable = BEST** |
 
-**Key Finding**: SRDD-guided variable layer multipliers (E9b) achieves best HW noise recovery.
+All E5/E9 experiments use **identical HW noise setup** for fair comparison:
+- **Noise Type**: Matmul-only (via `VERL_NOISY_OPS`)
+- **Noise Level**: 5% relative Gaussian (`VERL_NOISY_OPS_SCALE=5e-2`)
+- **Algorithm**: GRPO, 2 epochs
+- **Model**: Qwen2.5-1.5B-Instruct
+
+| Exp ID | Score | HW Noise | AQN σ | AQN Layers | AQN Benefit | Notes |
+|--------|-------|----------|-------|------------|-------------|-------|
+| Baseline | 76.88% | None | - | - | - | Clean BF16 reference |
+| E5 | 68.92% | 5% matmul | None | - | - | Noise only (-7.96%) |
+| E5b | 70.58% | 5% matmul | 0.05→0.0005 | All RMSNorm | +1.66% | Epoch-aware AQN |
+| E5c | 70.27% | 5% matmul | 0.01→0.00001 | All RMSNorm | +1.35% | Lower σ slightly worse |
+| E9a | 70.58% | 5% matmul | 0.01→0.0001 | Layers 14-17 | +1.66% | SRDD targeted (high-error only) |
+| E9a-high-σ | 70.81% | 5% matmul | 0.05→0.0005 | Layers 14-17 | +1.89% | High σ + targeted |
+| **E9b** | **71.19%** | 5% matmul | 0.01→0.0001 | All (variable) | **+2.27%** | **BEST: per-layer multipliers** |
+
+**Key Finding**: SRDD-guided variable layer multipliers (E9b) achieves best HW noise recovery. E5 and E9 are directly comparable (same noise setup).
 
 ### Quantization Experiments (MXFP4/NVFP4 Full Fine-Tuning)
-| Exp ID | dtype | Score | AQN Benefit | Notes |
-|--------|-------|-------|-------------|-------|
-| E8a | BF16 | 74.75% | - | DAPO baseline |
-| E3a | MXFP4 | 73.77% | - | -0.98% from BF16 |
-| E3b | MXFP4 | 74.37% | +0.60% | AQN helps |
-| E4a | NVFP4 | 72.10% | - | -2.65% from BF16 |
-| E4b | NVFP4 | 73.24% | +1.14% | AQN helps more |
+
+All Quant experiments use **weight injection** setup:
+- **Noise Type**: Weight-level fake quantization (via `hw_error_injection`)
+- **Target**: All linear layers (excluding lm_head, embed_tokens)
+- **Algorithm**: DAPO, 1 epoch
+- **Model**: Qwen2.5-1.5B-Instruct
+
+| Exp ID | dtype | Quant Error | AQN σ | Score | AQN Benefit | Notes |
+|--------|-------|-------------|-------|-------|-------------|-------|
+| E8a | BF16 | None | - | 74.75% | - | DAPO baseline |
+| E3a | MXFP4 | ~21% rel | None | 73.77% | - | -0.98% from BF16 |
+| E3b | MXFP4 | ~21% rel | 0.01→0.0001 | 74.37% | +0.60% | AQN helps |
+| E4a | NVFP4 | ~15% rel | None | 72.10% | - | -2.65% from BF16 |
+| E4b | NVFP4 | ~15% rel | 0.01→0.0001 | 73.24% | +1.14% | AQN helps more |
 
 **Key Finding**: AQN provides +0.60% for MXFP4, +1.14% for NVFP4. BF16 baseline (74.75%) > MXFP4+AQN (74.37%).
 
 ### LoRA Experiments (Quantized Base + 16-bit LoRA)
-| Exp ID | dtype | Score | AQN Benefit | Notes |
-|--------|-------|-------|-------------|-------|
-| E7a | BF16 | 71.27% | - | LoRA baseline |
-| E5a | NVFP4 | 68.23% | - | -3.04% from BF16 |
-| E5b-LoRA | NVFP4 | 70.58% | +2.35% | AQN recovers most |
-| E6a | MXFP4 | 65.88% | - | -5.39% from BF16 |
-| E6b | MXFP4 | 67.48% | +1.60% | AQN helps |
-| **E12** | MXFP4 | **72.48%** | **+6.60%** | **High σ + SRDD = BEST** |
+
+All LoRA experiments use **weight injection + LoRA** setup:
+- **Noise Type**: Weight-level fake quantization (via `hw_error_injection`)
+- **Target**: Linear layers (excluding lm_head, embed_tokens, lora_A, lora_B)
+- **LoRA**: rank=32, alpha=16 (trained in BF16)
+- **Algorithm**: DAPO, 1 epoch
+- **Model**: Qwen2.5-1.5B-Instruct
+
+| Exp ID | dtype | Quant Error | AQN σ | AQN Type | Score | AQN Benefit | Notes |
+|--------|-------|-------------|-------|----------|-------|-------------|-------|
+| E7a | BF16 | None | - | - | 71.27% | - | LoRA baseline |
+| E5a-LoRA | NVFP4 | ~15% rel | None | - | 68.23% | - | -3.04% from BF16 |
+| E5b-LoRA | NVFP4 | ~15% rel | 0.01→0.0001 | Standard | 70.58% | +2.35% | AQN recovers most |
+| E6a | MXFP4 | ~21% rel | None | - | 65.88% | - | -5.39% from BF16 |
+| E6b | MXFP4 | ~21% rel | 0.01→0.0001 | Standard | 67.48% | +1.60% | AQN helps |
+| **E12** | MXFP4 | ~21% rel | 0.05→0.0005 | High + SRDD | **72.48%** | **+6.60%** | **BEST: exceeds BF16!** |
 
 **Key Finding**: E12 (MXFP4+LoRA+AQN-high) exceeds BF16 baseline (72.48% > 71.27%)!
 
