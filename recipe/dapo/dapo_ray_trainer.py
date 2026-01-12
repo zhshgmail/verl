@@ -344,6 +344,13 @@ class RayDAPOTrainer(RayPPOTrainer):
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
 
+                        # Update noise injection step in rollout workers (for next weight sync)
+                        if self.noise_injection_enabled:
+                            ray.get(self.actor_rollout_wg.execute_all_async(
+                                'update_noise_injection_step',
+                                current_step=self.global_steps
+                            ))
+
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
