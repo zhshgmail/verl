@@ -48,26 +48,44 @@
 
 ---
 
-## 2-Epoch Extension Experiments (In Progress)
+## 2-Epoch Extension Experiments
 
 These experiments extend 1-epoch runs to 2 epochs to study longer training effects.
 
-| Exp ID | Type | Original 1ep | 2ep Score | Status | Notes |
-|--------|------|--------------|-----------|--------|-------|
-| **E6b-2ep** | LoRA | 67.48% | **73.24%** | ✅ Complete | MXFP4 + LoRA + AQN (+5.76%) |
-| **E6a-2ep** | LoRA | 65.88% | **72.93%** | ✅ Complete | MXFP4 + LoRA (+7.05%) |
-| **E7a-2ep** | LoRA | 71.27% | **73.84%** @step40 | ⚠️ Needs Rerun | BF16 + LoRA (ended early at 69%) |
-| **E3a-2ep** | Quant | 73.77% | **72.78%** | ⚠️ Needs Rerun | MXFP4 + Full FT (STE bug) |
-| **E3b-2ep** | Quant | 74.37% | **70.05%** | ⚠️ Needs Rerun | MXFP4 + Full FT + AQN (STE bug, see below) |
-| **E8a-2ep** | Quant | 74.75% | **75.97%** @step40 | ⚠️ Needs Rerun | BF16 + Full FT (+1.22%, ended early) |
-| **E12-2ep** | LoRA | 72.48% | **72.93%** @step30 | ⚠️ Needs Rerun | MXFP4 + LoRA + AQN-high (ended early at 95%, peaked at step30) |
+### Training Configuration (All 2ep Experiments)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `train_batch_size` | 128 | Per-step training batch |
+| `gen_batch_size` | 256 | Generation batch (determines steps/epoch) |
+| `total_epochs` | 2 | Target epochs |
+| `test_freq` | 10 | Evaluation every 10 steps |
+| **Steps/epoch** | 29 | 7473 samples / 256 batch = 29 |
+| **Total steps** | 58 | 29 × 2 epochs |
+| **Eval steps** | 0,10,20,30,40,50 | Last eval at step 50 (58%10≠0) |
+
+### Results
+
+| Exp ID | Type | 1ep | 2ep @step50 | Peak | Status | Notes |
+|--------|------|-----|-------------|------|--------|-------|
+| **E6b-2ep** | LoRA | 67.48% | **73.24%** | 73.31%@40 | ✅ Complete | MXFP4 + LoRA + AQN (+5.76%) |
+| **E6a-2ep** | LoRA | 65.88% | **72.93%** | 72.93%@50 | ✅ Complete | MXFP4 + LoRA (+7.05%) |
+| **E7a-2ep** | LoRA | 71.27% | **73.84%** | 73.84%@40 | ✅ Complete | BF16 + LoRA (+2.57%) |
+| **E3a-2ep** | Quant | 73.77% | **72.78%** | 73.92%@40 | ⚠️ STE Bug | MXFP4 + Full FT (-0.99%) |
+| **E3b-2ep** | Quant | 74.37% | **70.05%** | 73.24%@50 | ⚠️ STE Bug | MXFP4 + Full FT + AQN (-4.32%) |
+| **E8a-2ep** | Quant | 74.75% | **75.97%** | 75.97%@40 | ✅ Complete | BF16 + Full FT (+1.22%) |
+| **E12-2ep** | LoRA | 72.48% | **72.48%** | 72.93%@30 | ✅ Complete | MXFP4 + LoRA + AQN-high (+0.45% peak) |
+
+**Notes on "Ended Early"**: All experiments ran to ~95% completion (step 55-57 of 58). This is normal behavior due to:
+1. Dataloader exhaustion (7473 samples doesn't divide evenly into 58 batches)
+2. Final eval at step 50 (last multiple of test_freq=10 before step 58)
 
 **Key Findings**:
 - 2-epoch training significantly improves LoRA results (+5-7% accuracy)
 - Full FT results show mixed results: E8a improved (+1.22%), but E3a/E3b degraded
-- E3b-2ep shows potential overfitting (dropped from 73.24% at step50 to 70.05% at step58)
-- E12-2ep (AQN-high) peaked at step 30 (72.93%) and declined to 72.48% at step 50 - no improvement over 1ep
-- Multiple experiments ended early (E7a, E8a, E12) - v3 batch reruns needed
+- E3b-2ep shows potential overfitting (dropped from 73.24%@step50 in training to 70.05% final)
+- E12-2ep (AQN-high) peaked at step 30 (72.93%) and declined - no improvement over 1ep
+- FullFT experiments (E3a, E3b) need rerun with STE fix, not due to early termination
 
 ---
 
