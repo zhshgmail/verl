@@ -870,6 +870,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     exclude_modules=list(hw_error_config.get('exclude_modules') or []) or None,
                     apply_during='training',
                     deadzone_threshold=hw_error_config.get('deadzone_threshold', 0.01),
+                    # STE mode for proper QAT gradient flow (default True for safety)
+                    use_ste=hw_error_config.get('use_ste', True),
                 )
                 self._training_hw_error_injector = HWErrorInjector(config)
                 self._training_hw_error_injector.set_phase('training')

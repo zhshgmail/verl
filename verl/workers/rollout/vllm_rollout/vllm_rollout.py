@@ -421,6 +421,8 @@ class vLLMAsyncRollout(BaseRollout):
                     target_layers=target_layers,  # e.g., [15] for SRDD-guided injection
                     apply_during=hw_config_dict.get('apply_during', 'rollout'),
                     deadzone_threshold=hw_config_dict.get('deadzone_threshold', 0.01),
+                    # STE mode: doesn't matter for inference (no backward pass), but keep for consistency
+                    use_ste=hw_config_dict.get('use_ste', True),
                 )
                 self.hw_error_injector = HWErrorInjector(hw_config)
                 self.hw_error_injector.set_phase('rollout')

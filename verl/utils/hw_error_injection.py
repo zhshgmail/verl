@@ -36,6 +36,83 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# STE (Straight-Through Estimator) Implementation for Proper QAT
+# =============================================================================
+
+class STEQuantizeWeight(torch.autograd.Function):
+    """
+    Straight-Through Estimator for weight quantization.
+
+    Forward: Returns quantized weight
+    Backward: Passes gradient through unchanged (as if no quantization)
+
+    This is the standard QAT approach used in PyTorch's quantization-aware training.
+    The key insight is that during backward:
+    - grad_W is computed correctly (uses x from forward with quantized weights)
+    - grad_x = grad_output @ W_quant (NOT W_orig!)
+
+    Usage:
+        quantized_weight = STEQuantizeWeight.apply(weight, quantize_fn)
+    """
+
+    @staticmethod
+    def forward(ctx, weight: torch.Tensor, quantize_fn: Callable) -> torch.Tensor:
+        """
+        Forward pass: apply quantization.
+
+        Args:
+            weight: Original weight tensor
+            quantize_fn: Function that takes weight and returns quantized weight
+
+        Returns:
+            Quantized weight tensor
+        """
+        # Apply quantization
+        quantized = quantize_fn(weight)
+        # Save quantized weight for backward (used in grad_x computation)
+        ctx.save_for_backward(quantized)
+        return quantized
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None]:
+        """
+        Backward pass: straight-through estimator.
+
+        The gradient passes through unchanged, as if quantization was identity.
+        This is the standard STE approach for QAT.
+
+        Args:
+            grad_output: Gradient from downstream
+
+        Returns:
+            Tuple of (gradient for weight, None for quantize_fn)
+        """
+        # STE: pass gradient through unchanged
+        return grad_output, None
+
+
+class STEQuantizeActivation(torch.autograd.Function):
+    """
+    Straight-Through Estimator for activation quantization.
+
+    Forward: Returns quantized activation
+    Backward: Passes gradient through unchanged
+
+    Used for W16A4 (weight FP16, activation FP4) scenarios.
+    """
+
+    @staticmethod
+    def forward(ctx, activation: torch.Tensor, quantize_fn: Callable) -> torch.Tensor:
+        """Apply quantization to activation."""
+        return quantize_fn(activation)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None]:
+        """STE: pass gradient through unchanged."""
+        return grad_output, None
+
+
 class HWErrorConfig:
     """Configuration for HW error injection."""
 
@@ -58,6 +135,9 @@ class HWErrorConfig:
         nvfp4_stochastic_rounding: bool = False,
         # Module exclusion list (for production PTQ recipes)
         exclude_modules: Optional[List[str]] = None,
+        # STE (Straight-Through Estimator) mode for proper QAT gradient flow
+        # IMPORTANT: Must be True for FullFT training with weight quantization!
+        use_ste: bool = True,
     ):
         """
         Args:
@@ -106,6 +186,11 @@ class HWErrorConfig:
                 - These layers are excluded because quantizing them is destructive:
                   - lm_head: Output logits require high precision for token prediction
                   - embed_tokens: Input embeddings need high precision for semantic encoding
+            use_ste: Use Straight-Through Estimator for proper QAT gradient flow
+                - True (default): Proper STE - backward uses quantized weights for grad_x
+                - False: Legacy mode - backward uses original weights (BROKEN for FullFT!)
+                - IMPORTANT: Must be True for FullFT training with trainable base weights
+                - For LoRA (frozen base), either mode works but STE is safer
         """
         self.enabled = enabled
         self.error_scale = error_scale
@@ -125,6 +210,8 @@ class HWErrorConfig:
             self.exclude_modules = ['lm_head', 'embed_tokens']
         else:
             self.exclude_modules = exclude_modules or []
+        # STE mode for proper QAT gradient flow
+        self.use_ste = use_ste
 
     def __repr__(self):
         if self.error_type == 'deadzone':
@@ -780,9 +867,34 @@ class HWErrorInjector:
         """
         Create forward hook to restore original weight after forward pass.
 
-        This ensures gradients are computed on original (non-quantized) weights.
+        WARNING: This is the LEGACY (broken) implementation!
+        Restoring weights after forward but before backward means grad_x uses W_orig
+        instead of W_quant, which corrupts gradient flow for FullFT training.
+
+        Only used when use_ste=False (not recommended for FullFT).
         """
         def hook(module: nn.Module, input: Tuple, output) -> None:
+            if hasattr(module, '_original_weight'):
+                module.weight.data = module._original_weight
+                del module._original_weight
+
+        return hook
+
+    def _create_weight_restore_backward_hook(self, name: str) -> Callable:
+        """
+        Create BACKWARD hook to restore original weight AFTER backward pass.
+
+        This is the CORRECT STE implementation for FullFT training:
+        1. Pre-hook: W_orig -> W_quant (before forward)
+        2. Forward: y = Linear(x, W_quant)
+        3. Backward: grad_x = grad_output @ W_quant (CORRECT!)
+        4. This hook: W_quant -> W_orig (after backward, for next iteration)
+
+        The key difference from legacy mode:
+        - Legacy: restore in forward_hook (before backward) -> grad_x uses W_orig (WRONG)
+        - STE: restore in backward_hook (after backward) -> grad_x uses W_quant (CORRECT)
+        """
+        def hook(module: nn.Module, grad_input: Tuple, grad_output: Tuple) -> None:
             if hasattr(module, '_original_weight'):
                 module.weight.data = module._original_weight
                 del module._original_weight
@@ -809,11 +921,26 @@ class HWErrorInjector:
                 # Choose hook type based on injection point
                 if self.config.injection_point == 'weight':
                     # W4A16 mode: quantize weights, keep activations FP16 (QeRL style)
-                    # Pre-hook quantizes weight, post-hook restores it
+                    # Pre-hook quantizes weight before forward
                     pre_hook = module.register_forward_pre_hook(self._create_weight_quant_pre_hook(name))
-                    post_hook = module.register_forward_hook(self._create_weight_restore_hook(name))
                     self.hooks.append(pre_hook)
-                    self.hooks.append(post_hook)
+
+                    if self.config.use_ste:
+                        # STE mode (default): Restore weight AFTER backward
+                        # This ensures grad_x = grad_output @ W_quant (correct!)
+                        backward_hook = module.register_full_backward_hook(
+                            self._create_weight_restore_backward_hook(name)
+                        )
+                        self.hooks.append(backward_hook)
+                        if verbose and count == 0:
+                            logger.info("[STE] Using backward hook for proper QAT gradient flow")
+                    else:
+                        # Legacy mode (broken for FullFT): Restore weight after forward
+                        # WARNING: grad_x = grad_output @ W_orig (wrong!)
+                        post_hook = module.register_forward_hook(self._create_weight_restore_hook(name))
+                        self.hooks.append(post_hook)
+                        if verbose and count == 0:
+                            logger.warning("[LEGACY] Using forward hook - NOT recommended for FullFT!")
                 elif self.config.injection_point == 'input':
                     # W16A4 mode: quantize input activations (our previous approach)
                     # Pre-hook: inject error to input BEFORE operator processes it
@@ -836,9 +963,10 @@ class HWErrorInjector:
             if torch.distributed.is_initialized():
                 rank = torch.distributed.get_rank()
             if rank == 0:
+                ste_info = f", use_ste={self.config.use_ste}" if self.config.injection_point == 'weight' else ""
                 print(f"[HW Error] Registered {count} {self.config.injection_point} hooks "
                       f"(scale={self.config.error_scale}, type={self.config.error_type}, "
-                      f"targets={self.config.target_modules})")
+                      f"targets={self.config.target_modules}{ste_info})")
 
         return count
 
@@ -972,6 +1100,8 @@ def inject_hw_error_once(
 __all__ = [
     'HWErrorConfig',
     'HWErrorInjector',
+    'STEQuantizeWeight',
+    'STEQuantizeActivation',
     'create_hw_error_injector',
     'inject_hw_error_once',
 ]
