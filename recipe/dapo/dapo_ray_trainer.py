@@ -23,6 +23,7 @@ from copy import deepcopy
 from pprint import pprint
 
 import numpy as np
+import ray
 import torch
 from tqdm import tqdm
 
