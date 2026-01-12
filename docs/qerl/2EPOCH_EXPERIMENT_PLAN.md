@@ -100,8 +100,8 @@ bash scripts/test_bf16_v8.0_dapo_fullft_2ep.sh 8      # E8a-2ep
 | E6a-2ep | `test_mxfp4_v6.0_dapo_lora_2ep.sh` | ✅ Complete | Jan 11 14:01 | Jan 11 16:30 | **72.93%** (+7.05%) |
 | E7a-2ep | `test_bf16_v7.0_dapo_lora_2ep.sh` | ⚠️ Ended Early | Jan 11 16:30 | Jan 11 18:01 | 73.84% @step40 (69%) |
 | E3a-2ep | `test_mxfp4_v3.0_dapo_2ep.sh` | ✅ Complete | Jan 11 18:01 | Jan 11 19:09 | **72.78%** (-0.99%) |
-| E3b-2ep | `test_mxfp4_v3.1_dapo_aqn_2ep.sh` | 🔄 Running | Jan 11 19:09 | - | 73.31% @step30 |
-| E8a-2ep | `test_bf16_v8.0_dapo_fullft_2ep.sh` | ⏳ Queued | - | - | - |
+| E3b-2ep | `test_mxfp4_v3.1_dapo_aqn_2ep.sh` | ✅ Complete | Jan 11 19:09 | Jan 11 20:15 | **70.05%** (-4.32%, dropped) |
+| E8a-2ep | `test_bf16_v8.0_dapo_fullft_2ep.sh` | 🔄 Running | Jan 11 20:15 | - | 7.66% @step0 |
 | E12-2ep | `test_mxfp4_v6.2_dapo_lora_aqn_high_sigma_2ep.sh` | ⏳ Not in batch | - | - | Run after v2 batch |
 
 **Auto-runner**: `run_all_2ep_experiments_v2.sh` running on A100
