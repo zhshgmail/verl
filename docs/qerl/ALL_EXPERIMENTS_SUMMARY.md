@@ -265,3 +265,122 @@ class STEQuantize(torch.autograd.Function):
    - E3b (1ep, 2ep) - MXFP4 + FullFT + AQN
    - E4a (1ep) - NVFP4 + FullFT
    - E4b (1ep) - NVFP4 + FullFT + AQN
+
+---
+
+## QeRL Paper Comparison
+
+### Why Our AQN Results Differ from QeRL Paper
+
+**Reference**: QeRL paper (arXiv:2510.11696) reports significant improvements with AQN on quantized models. Our experiments show marginal improvement. This section analyzes the key differences.
+
+### Configuration Comparison
+
+| Parameter | QeRL GSM8K Config | Our Experiments | Impact |
+|-----------|-------------------|-----------------|--------|
+| **Dataset** | GSM8K train (~7,473) | DAPO Math (7,473) | Same size |
+| **Batch Size** | 2 | 128-256 | 64-128x smaller in QeRL |
+| **Steps/Epoch** | ~3,700 | ~29-58 | **60-130x more steps in QeRL** |
+| **Epochs** | 1 | 2 | QeRL uses 1 epoch |
+| **Total Steps** | ~3,700 | ~58 | **60x difference** |
+| **Quantization** | NVFP4 | MXFP4 | Different error profile |
+| **Quant Error** | ~15% rel | ~21% rel | Higher error in MXFP4 |
+| **Learning Rate** | 1e-5 | 1e-5 | Same |
+| **Epoch-Aware** | ❌ No (step-based) | Mixed | Different schedule |
+| **σ Range** | 1e-2 → 1e-4 | Various | Similar |
+
+**Critical Finding**: QeRL's small batch size (2) results in ~3,700 steps per epoch on GSM8K, while our large batch size (256) gives only ~29 steps per epoch. This 60x difference in training steps is likely the primary reason our AQN results differ from QeRL's.
+
+### QeRL's AQN Implementation Details
+
+From analyzing QeRL source code (`../QeRL`):
+
+**Noise Schedule** (K-stage exponential decay):
+```python
+# File: trl_trainer/noise_scheduler.py
+sigma_trend = sigma_start * (sigma_end / sigma_start) ** (i / (num_stages - 2))
+# Default: sigma_start=1e-2, sigma_end=1e-4, num_stages=10
+```
+
+**Noise Application**:
+```python
+# File: trl_trainer/grpo_trainer.py (line 1364-1369)
+# Applied to vLLM inference model (rollout phase), NOT training model
+if self.noise_scheduler:
+    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+    generate_gaussian_noise(llm_model, self.update_step, self.total_steps, sigma_trend)
+```
+
+**Key Design Choices**:
+1. **First interval warmup**: σ=0 for first 1/(K+1) of training
+2. **Step-based, NOT epoch-aware**: Schedule divides total_steps into K+1 intervals
+3. **Targets RMSNorm only**: Same as our implementation
+4. **Applied to inference model**: Affects rollout/generation, not training pass
+
+### Why QeRL Reports Bigger Improvements
+
+1. **Training Duration**: QeRL trains 10-20x longer (500-1000 steps vs our 58 steps)
+   - More steps = more opportunities for exploration benefits to compound
+   - AQN's "enhanced exploration" effect needs sufficient training to realize gains
+
+2. **Quantization Format**:
+   - **NVFP4**: E4M3 scaling, block_size=16, ~15% relative error
+   - **MXFP4**: E8M0 scaling, block_size=32, ~21% relative error
+   - Higher MXFP4 error may be too aggressive for AQN to compensate
+
+3. **Dataset Size**:
+   - QeRL uses full DAPO Math dataset (50K+ samples)
+   - Our experiments use 7473 samples (subset)
+   - Larger dataset = more diverse exploration opportunities
+
+4. **QeRL's Main Benefit Source**:
+   - Paper shows quantization noise ITSELF enhances exploration (higher entropy)
+   - AQN provides only **marginal additional benefit** (+0.4% for 3B in Table 6)
+   - Main speedup comes from NVFP4 fast inference, not AQN
+
+### QeRL Paper Table 6 (3B Model Results)
+
+| Method | GSM8K | MATH 500 | Notes |
+|--------|-------|----------|-------|
+| BF16 LoRA | 89.31% | 59.8% | 16-bit baseline |
+| QLoRA | 84.84% | 53.4% | 8-bit |
+| **NVFP4 LoRA** | **89.84%** | 72.4% | Quant noise helps |
+| NVFP4 LoRA + AQN | 90.07% | 72.8% | **+0.23%** from AQN |
+
+**Key Insight**: QeRL's main improvement comes from quantization noise itself, not AQN. AQN provides diminishing returns on top of quantization noise.
+
+### Recommendations for Future Experiments
+
+To match QeRL's results:
+
+1. **Reduce Batch Size to Increase Training Steps** (Most Important):
+   - QeRL uses batch_size=2, resulting in ~3,700 steps/epoch
+   - Our batch_size=256 gives only ~29 steps/epoch
+   - Consider reducing to batch_size=16-32 for 200-450 steps/epoch
+   - AQN's exploration benefit needs many steps to accumulate
+
+2. **Try NVFP4 Instead of MXFP4**:
+   - Lower error profile (~15% vs ~21%)
+   - May be more compatible with AQN
+
+3. **Try Higher Learning Rate for Quantized Models**:
+   - QeRL README recommends 10x higher LR for quantized models
+   - Try 1e-4 or 3e-5 instead of 1e-5
+
+4. **Consider Linear Layer Noise**:
+   - Our implementation supports `layer_types=['linear']`
+   - Aligns noise injection with where quantization error actually occurs
+
+5. **Remove Epoch-Aware**:
+   - QeRL uses pure step-based schedule
+   - Epoch-aware may fragment the decay curve unnecessarily
+
+### Example: Matching QeRL Configuration
+
+To run a comparable experiment:
+```bash
+# QeRL-like config for verl
+# gen_batch_size=32 (instead of 256)
+# -> 7473 / 32 = 233 steps/epoch
+# -> 2 epochs = 466 steps total (closer to QeRL's ~3700)
+```
