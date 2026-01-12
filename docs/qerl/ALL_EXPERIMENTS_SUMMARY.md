@@ -90,6 +90,36 @@ These experiments extend 1-epoch runs to 2 epochs to study longer training effec
 
 ---
 
+## QeRL-Style Experiments (Balanced Batch Size)
+
+These experiments use a smaller batch size (32 instead of 256) to increase training steps per epoch, more closely matching QeRL's configuration. This tests whether more training steps improve AQN effectiveness.
+
+### Training Configuration (QeRL-Style)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `train_batch_size` | 32 | Smaller batch for more steps |
+| `gen_batch_size` | 32 | Matches train batch |
+| `total_epochs` | 1 | Single epoch |
+| `test_freq` | 20 | Evaluation every 20 steps |
+| **Steps/epoch** | 234 | 7473 samples / 32 batch = 234 |
+| **vs Original** | 4x | 234 steps vs 58 steps (2ep) |
+
+### Results
+
+| Exp ID | Type | Sigma | Score | Steps | Status | Notes |
+|--------|------|-------|-------|-------|--------|-------|
+| **E6b-qerl** | LoRA | 0.01→0.0001 | **66.72%** | 117 | ✅ Complete | Standard σ, balanced BS |
+| **E12-qerl** | LoRA | 0.05→0.0005 | TBD | TBD | 🔄 Running | High σ, balanced BS |
+
+**Key Findings**:
+- E6b-qerl (66.72%) is very close to original E6b 1-epoch baseline (67.48%)
+- Dataloader exhausted at step 117 (~half of expected 234 steps)
+- More training steps with balanced batch size does not significantly improve results
+- E12-qerl (high sigma) result pending
+
+---
+
 ## Summary by Category
 
 ### HW Error Injection Experiments (Simulated Hardware Noise)
