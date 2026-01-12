@@ -35,10 +35,10 @@
 | **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | targeted | No | BF16 | High σ=0.05 start |
 | **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | variable | No | BF16 | **BEST HW** - per-layer multipliers |
 | **E8a** | Quant | `Q_BF16_DAPO_fullFT_2ep_75.97` | **75.97%** | 2 | No | No | No | BF16 | DAPO Full FT baseline |
-| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_73.77` | 73.77% | 1 | No | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
-| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_74.37` | 74.37% | 1 | Yes | No | No | MXFP4 | ⚠️ NEEDS RERUN (STE bug) |
-| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
-| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | No | No | NVFP4 | ⚠️ NEEDS RERUN (STE bug) |
+| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_2ep_72.78` | 72.78% | 2 | No | No | No | MXFP4 | ⚠️ STE bug - needs rerun |
+| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_2ep_70.05` | 70.05% | 2 | Yes | No | No | MXFP4 | ⚠️ STE bug - needs rerun |
+| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | No | No | NVFP4 | ⚠️ STE bug - needs rerun (no 2ep) |
+| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | No | No | NVFP4 | ⚠️ STE bug - needs rerun (no 2ep) |
 | **E7a** | LoRA | `LoRA_BF16_DAPO_2ep_73.84` | **73.84%** | 2 | No | No | Yes | BF16 | BF16 LoRA baseline |
 | **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | No | Yes | NVFP4 | NVFP4 + LoRA |
 | **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | No | Yes | NVFP4 | NVFP4 + LoRA + AQN |
