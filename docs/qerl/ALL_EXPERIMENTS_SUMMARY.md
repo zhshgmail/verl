@@ -1,6 +1,6 @@
 # All AQN Experiments Summary
 
-**Generated**: 2026-01-12
+**Generated**: 2026-01-13
 **Branch**: `feature/npu-aqn-test`
 **TensorBoard**: `/tmp/tb_logs/`
 **Wandb Project**: `aqn_refine`
@@ -110,13 +110,14 @@ These experiments use a smaller batch size (32 instead of 256) to increase train
 | Exp ID | Type | Sigma | Score | Steps | Status | Notes |
 |--------|------|-------|-------|-------|--------|-------|
 | **E6b-qerl** | LoRA | 0.01→0.0001 | **66.72%** | 117 | ✅ Complete | Standard σ, balanced BS |
-| **E12-qerl** | LoRA | 0.05→0.0005 | TBD | TBD | 🔄 Running | High σ, balanced BS |
+| **E12-qerl** | LoRA | 0.05→0.0005 | **67.93%** | 116 | ✅ Complete | High σ, balanced BS |
 
 **Key Findings**:
 - E6b-qerl (66.72%) is very close to original E6b 1-epoch baseline (67.48%)
-- Dataloader exhausted at step 117 (~half of expected 234 steps)
-- More training steps with balanced batch size does not significantly improve results
-- E12-qerl (high sigma) result pending
+- **E12-qerl (67.93%) with high σ outperforms E6b-qerl (+1.21%)** - high sigma helps
+- Both experiments exhausted dataloader at step ~116-117 (~half of expected 234 steps)
+- Balanced batch size (32) does not improve results over large batch (256) runs
+- Conclusion: More steps don't help; the ~1% gain from high σ is consistent with other experiments
 
 ---
 
