@@ -1040,14 +1040,18 @@ class HWErrorInjector:
                         if verbose and count == 0:
                             logger.warning("[W4A4-LEGACY] Using forward hook - NOT recommended for FullFT!")
 
-                    # 3. Activation quantization POST-hook (applied to LINEAR OUTPUT, not input!)
-                    #    This uses _create_forward_hook which quantizes the output after computation
-                    #    Key: This avoids quantizing RMSNorm outputs which are extremely sensitive
-                    act_hook = module.register_forward_hook(self._create_forward_hook(name))
+                    # 3. Activation quantization PRE-hook (quantize INPUT activations)
+                    #    This is TRUE W4A4: y = W_quant @ x_quant
+                    #    QeRL uses this approach and achieves ~60% accuracy on GSM8K
+                    #
+                    #    Previous POST-hook approach was WRONG:
+                    #    - POST-hook quantizes OUTPUT: y_quant = quant(W_quant @ x_fp16)
+                    #    - This means input x remains FP16, not true W4A4!
+                    act_hook = module.register_forward_pre_hook(self._create_activation_quant_pre_hook(name))
                     self.hooks.append(act_hook)
 
                     if verbose and count == 0:
-                        logger.info("[W4A4] Quantizing weights (pre-hook) and activations (post-hook)")
+                        logger.info("[W4A4] Quantizing weights (pre-hook) and INPUT activations (pre-hook) - TRUE W4A4")
                 else:
                     # Output mode: inject error to output AFTER operator processes it
                     # Post-hook: Like: y = operator(x) + error
