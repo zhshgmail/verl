@@ -1012,6 +1012,15 @@ class HWErrorInjector:
                 elif self.config.injection_point == 'both':
                     # W4A4 mode: quantize BOTH weights AND activations
                     # This combines weight quantization (W4A16) + activation quantization
+                    #
+                    # IMPORTANT: Activation quantization uses POST-hook (output quantization)
+                    # to avoid quantizing sensitive inputs like RMSNorm outputs!
+                    #
+                    # Correct W4A4 flow:
+                    #   RMSNorm output (FP16) -> Linear with W4 weights -> Output (FP16) -> Quantize to A4
+                    #
+                    # Wrong approach (breaks model):
+                    #   RMSNorm output (FP16) -> Quantize to A4 -> Linear with W4 weights (destroys normalization!)
 
                     # 1. Weight quantization pre-hook
                     pre_hook = module.register_forward_pre_hook(self._create_weight_quant_pre_hook(name))
@@ -1031,12 +1040,14 @@ class HWErrorInjector:
                         if verbose and count == 0:
                             logger.warning("[W4A4-LEGACY] Using forward hook - NOT recommended for FullFT!")
 
-                    # 3. Activation quantization pre-hook (applied before weight-quantized forward)
-                    act_hook = module.register_forward_pre_hook(self._create_activation_quant_pre_hook(name))
+                    # 3. Activation quantization POST-hook (applied to LINEAR OUTPUT, not input!)
+                    #    This uses _create_forward_hook which quantizes the output after computation
+                    #    Key: This avoids quantizing RMSNorm outputs which are extremely sensitive
+                    act_hook = module.register_forward_hook(self._create_forward_hook(name))
                     self.hooks.append(act_hook)
 
                     if verbose and count == 0:
-                        logger.info("[W4A4] Quantizing both weights and activations")
+                        logger.info("[W4A4] Quantizing weights (pre-hook) and activations (post-hook)")
                 else:
                     # Output mode: inject error to output AFTER operator processes it
                     # Post-hook: Like: y = operator(x) + error
