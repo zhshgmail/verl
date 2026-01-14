@@ -298,7 +298,11 @@ Test result: Column-wise diff from reference = 0.005 (16x better than row-wise 0
 
 **Hypothesis**: The blocking direction mismatch was causing incorrect quantization patterns.
 
-**Results**: TBD (running)
+**Results**:
+- Step 0: val-core/openai/gsm8k/acc/mean@1 = **7.51%**
+- Status: **FAILED**
+
+**Conclusion**: Column-wise blocking did NOT fix the issue. Both row-wise and column-wise give ~7-8% accuracy.
 
 ---
 
@@ -312,7 +316,7 @@ Test result: Column-wise diff from reference = 0.005 (16x better than row-wise 0
 | E13c-nvfp4 | NVFP4 POST-hook training-only | POST | row-wise | 7.58% | FAILED |
 | E13d-nvfp4 | NVFP4 PRE-hook | PRE | row-wise | 8.49% | FAILED |
 | E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | PRE | row-wise | 7.66% | FAILED |
-| E13f-nvfp4 | NVFP4 PRE-hook + column-wise blocking | PRE | **column-wise** | TBD | RUNNING |
+| E13f-nvfp4 | NVFP4 PRE-hook + column-wise blocking | PRE | **column-wise** | 7.51% | FAILED |
 
 ---
 
@@ -329,7 +333,35 @@ Test result: Column-wise diff from reference = 0.005 (16x better than row-wise 0
 
 ---
 
+## Ruled Out Causes
+
+After 7 experiments (E13a-E13f), the following have been ruled out as root cause:
+
+| Hypothesis | Tested | Result |
+|------------|--------|--------|
+| MXFP4 vs NVFP4 format | E13a-mxfp4 vs E13a-nvfp4 | Both fail ~7-8% |
+| Batch size (128 vs 16) | E13a vs E13b | Both fail ~7-8% |
+| apply_during (both vs training) | E13a vs E13c | Both fail ~7-8% |
+| Hook type (POST vs PRE) | E13c vs E13d | Both fail ~7-8% |
+| Duplicate hooks on base_layer | E13d vs E13e | Both fail ~7-8% |
+| Blocking direction (row vs column) | E13e vs E13f | Both fail ~7-8% |
+
+**All experiments give ~7.5-8.5% accuracy, far below expected 60%.**
+
+---
+
+## Remaining Investigation Directions
+
+1. **Scale computation**: Compare our E4M3 scale computation with quant_compute reference
+2. **FP4 value mapping**: Verify our FP4 LUT matches the reference exactly
+3. **Inference vs Training mismatch**: Our rollout uses vLLM (no quant hooks), but training uses FSDP with hooks
+4. **Get more details from colleague**: What exact configuration did they use to reproduce 60%?
+5. **Try completely disabling activation quant**: Test W4A16 only to isolate weight vs activation issue
+
+---
+
 ## Git Commits
 
 - `df828442` - "fix: W4A4 activation quantization should use POST-hook, not PRE-hook" (THE BUG!)
 - `b087831e` - "fix: W4A4 must use PRE-hook for INPUT activation quantization (QeRL-style)" (REVERT)
+- `edbf21e6` - "feat: add column-wise NVFP4 blocking to match quant_compute reference"
