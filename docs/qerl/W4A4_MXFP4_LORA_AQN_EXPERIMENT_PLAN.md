@@ -1,8 +1,9 @@
 # W4A4 MXFP4 + LoRA + AQN Experiment Plan
 
 **Date**: 2026-01-14
-**Status**: Planned
+**Status**: In Progress (E13a running with fixed implementation)
 **Branch**: `feature/npu-aqn-test`
+**Critical Fix**: Commit `df828442` - W4A4 activation quantization must use POST-hook
 
 ---
 
@@ -187,19 +188,106 @@ elif self.config.injection_point == 'both':
     )
     self.hooks.append(backward_hook)
 
-    # Activation quantization (additional pre-hook for input)
-    input_hook = module.register_forward_pre_hook(self._create_activation_quant_hook(name))
-    self.hooks.append(input_hook)
+    # Activation quantization (POST-hook for output - see Section 4.2 for why!)
+    act_hook = module.register_forward_hook(self._create_forward_hook(name))
+    self.hooks.append(act_hook)
 ```
 
-### 4.2 Scripts to Create
+---
+
+## 4.2 Critical Bug Discovery and Fix (2026-01-14)
+
+### The Bug: Pre-hook Activation Quantization Destroys Model
+
+**Symptom**: E13a validation accuracy was only **10.61%** at step 20, far below expected 60-62%.
+
+**Root Cause**: The initial W4A4 implementation used **pre-hook** for activation quantization, which quantizes the **INPUT** to linear layers. In transformer architecture, this means quantizing **RMSNorm outputs**:
+
+```
+Transformer Data Flow:
+┌─────────────────────────────────────────────────────────────────┐
+│ hidden_states                                                    │
+│     ↓                                                            │
+│ input_layernorm (RMSNorm) → normalized output (carefully scaled) │
+│     ↓                                                            │
+│ q_proj, k_proj, v_proj (Linear)  ← INPUT IS RMSNORM OUTPUT!     │
+│     ↓                                                            │
+│ attention computation                                            │
+│     ↓                                                            │
+│ o_proj (Linear)                                                  │
+│     ↓                                                            │
+│ residual + output                                                │
+│     ↓                                                            │
+│ post_attention_layernorm (RMSNorm)                               │
+│     ↓                                                            │
+│ gate_proj, up_proj (Linear)  ← INPUT IS RMSNORM OUTPUT!         │
+│     ↓                                                            │
+│ SiLU activation + down_proj                                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why This Breaks the Model**:
+1. RMSNorm carefully normalizes activations to specific statistical distribution
+2. 4-bit quantization (only 16 discrete values!) severely distorts this distribution
+3. The normalized values are critical for attention softmax and gradient flow
+4. Quantizing norm outputs effectively destroys the normalization benefit
+
+### The Fix: Use POST-hook for Activation Quantization
+
+**Correct W4A4 Flow**:
+```
+RMSNorm output (FP16) → Linear with W4 weights → Output (FP16) → Quantize to A4
+```
+
+**Wrong (Broken) Flow**:
+```
+RMSNorm output (FP16) → Quantize to A4 ❌ → Linear with W4 weights
+```
+
+**Code Change** (commit `df828442`):
+```python
+# BEFORE (broken):
+# 3. Activation quantization pre-hook (applied before weight-quantized forward)
+act_hook = module.register_forward_pre_hook(self._create_activation_quant_pre_hook(name))
+
+# AFTER (fixed):
+# 3. Activation quantization POST-hook (applied to LINEAR OUTPUT, not input!)
+#    This uses _create_forward_hook which quantizes the output after computation
+#    Key: This avoids quantizing RMSNorm outputs which are extremely sensitive
+act_hook = module.register_forward_hook(self._create_forward_hook(name))
+```
+
+### Why W4A16 Is Not Affected
+
+W4A16 uses `injection_point='weight'`, which:
+- Only quantizes **weights** (not activations)
+- Uses pre-hook correctly (weight quantization before forward)
+- Does NOT touch RMSNorm outputs at all
+
+The bug only affects `injection_point='both'` (W4A4 mode).
+
+### Verification
+
+| Implementation | Step 20 Val Accuracy | Status |
+|----------------|---------------------|--------|
+| Pre-hook (broken) | 10.61% | ❌ Model destroyed |
+| Post-hook (fixed) | TBD (running) | Expected 60-62% |
+
+### Key Learnings
+
+1. **Never quantize normalization layer outputs to low precision** - they carry critical statistical information
+2. **W4A4 "activation quantization" should target Linear OUTPUT**, not input
+3. **Pre-hook vs Post-hook matters** - the hook placement determines what gets quantized
+4. **QeRL uses `output_activations`** for this reason (see `compressed-tensors_replacement/forward.py`)
+
+### 4.3 Scripts to Create
 
 1. **`scripts/test_mxfp4_w4a4_lora_baseline.sh`** - E13a (no AQN)
 2. **`scripts/test_mxfp4_w4a4_lora_global_aqn.sh`** - E13b (global AQN)
 3. **`scripts/test_mxfp4_w4a4_lora_srdd_targeted.sh`** - E13c (targeted)
 4. **`scripts/test_mxfp4_w4a4_lora_srdd_variable.sh`** - E13d (variable)
 
-### 4.3 SRDD Scan (Optional Pre-step)
+### 4.4 SRDD Scan (Optional Pre-step)
 
 ```bash
 # Run SRDD scan on W4A4 to identify error-dense layers
