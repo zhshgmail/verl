@@ -19,7 +19,7 @@ mkdir -p "${OUTPUT_DIR}"
 echo "E13a-nvfp4 started in $(hostname) (PID: $$)" > /tmp/nvfp4_w4a4_e13a_nvfp4_status.txt
 
 # Run training with NVFP4 W4A4 + LoRA + proper exclusions
-nohup python3 -m recipe.dapo.main_dapo \
+nohup env WANDB_MODE=disabled python3 -m recipe.dapo.main_dapo \
     data.train_files=/data/z00637938/gsm8k/train.parquet \
     data.val_files=/data/z00637938/gsm8k/test.parquet \
     data.train_batch_size=128 \
