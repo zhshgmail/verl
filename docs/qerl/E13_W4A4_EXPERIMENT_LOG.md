@@ -247,11 +247,47 @@ This is NOT traditional QAT (fake quantization). It's:
 
 ---
 
+### E13e-nvfp4: Exclude base_layer from quantization
+
+**Bug found**: We were quantizing both LoRA wrapper (q_proj) and underlying base_layer (q_proj.base_layer), causing duplicate hooks.
+
+**Fix**: Added 'base_layer' to exclusion list. Hook count reduced from 364 to 182.
+
+**Results**:
+- Step 0: val-core/openai/gsm8k/acc/mean@1 = **7.66%**
+- Status: FAILED (actually worse than E13d!)
+
+---
+
+## Summary of All E13 Experiments
+
+| ID | Description | Hook Count | Step 0 Acc | Status |
+|----|-------------|------------|------------|--------|
+| E13a-mxfp4 | MXFP4 POST-hook | ~364 | 8.11% | FAILED |
+| E13a-nvfp4 | NVFP4 POST-hook large batch | ~364 | 7.58% | FAILED |
+| E13b-nvfp4 | NVFP4 POST-hook small batch | ~364 | 7.81% | FAILED |
+| E13c-nvfp4 | NVFP4 POST-hook training-only | ~364 | 7.58% | FAILED |
+| E13d-nvfp4 | NVFP4 PRE-hook | ~364 | 8.49% | FAILED |
+| E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | 182 | 7.66% | FAILED |
+
+All experiments give ~7-8.5% accuracy, far below expected 60%.
+
+---
+
+## Remaining Investigation
+
+**Key difference found**: Our NVFP4 uses **row-wise** blocking (flatten then reshape to 16-element blocks), while the reference quant_compute uses **column-wise** blocking (G rows per column).
+
+Next step: Test with column-wise blocking to match reference implementation.
+
+---
+
 ## Next Steps
 
-1. **Option A**: Pre-quantize model using llm-compressor, then train with AQN
-2. **Option B**: Modify our fake quantization to be more like QeRL's approach
-3. **Option C**: Abandon W4A4 and focus on W4A16 (proven to work)
+1. **Option A**: Fix blocking direction to match quant_compute reference
+2. **Option B**: Pre-quantize model using llm-compressor, then train with AQN
+3. **Option C**: Modify our fake quantization to match quant_compute exactly
+4. **Option D**: Abandon W4A4 and focus on W4A16 (proven to work)
 
 ---
 
