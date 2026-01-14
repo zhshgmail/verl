@@ -275,6 +275,89 @@ def nvfp4_quantize(
     return out.to(original_dtype)
 
 
+@torch.no_grad()
+def nvfp4_quantize_columnwise(
+    x: Tensor,
+    config: Optional[NVFP4Config] = None,
+    stochastic_rounding: bool = False,
+) -> Tensor:
+    """
+    Apply NVFP4 fake quantization with COLUMN-WISE blocking.
+
+    This matches the quant_compute reference implementation (To_NVF4) which
+    processes 2D tensors column by column:
+    - For each column j
+    - Take G (16) rows at a time
+    - Compute scale per block (column slice)
+
+    This is different from the default nvfp4_quantize which uses row-major
+    blocking (flatten then reshape).
+
+    Args:
+        x: Input tensor (must be 2D for column-wise blocking)
+        config: NVFP4Config object
+        stochastic_rounding: Use stochastic rounding
+
+    Returns:
+        Quantized-dequantized tensor (same shape and dtype as input)
+    """
+    if config is None:
+        config = NVFP4Config(stochastic_rounding=stochastic_rounding)
+
+    original_dtype = x.dtype
+    x = x.float()
+
+    # For non-2D tensors, fall back to standard blocking
+    if x.dim() != 2:
+        return nvfp4_quantize(x, config, stochastic_rounding).to(original_dtype)
+
+    rows, cols = x.shape
+    G = config.block_size  # 16
+
+    # Pad rows to be divisible by G
+    pad_rows = (G - rows % G) % G
+    if pad_rows > 0:
+        x = torch.cat([x, torch.zeros(pad_rows, cols, device=x.device, dtype=x.dtype)], dim=0)
+
+    num_row_blocks = x.shape[0] // G
+    result = torch.zeros_like(x)
+
+    fp4_lut = FP4_VALUES.to(x.device)
+
+    # Process column by column, G rows at a time (matching quant_compute)
+    for j in range(cols):
+        for i in range(num_row_blocks):
+            # Extract block: G rows from column j
+            block = x[i*G:(i+1)*G, j]  # Shape: (G,)
+
+            # Sign and magnitude
+            sign = torch.sign(block)
+            block_abs = torch.abs(block)
+
+            # Compute E4M3 scale (max over block / 6)
+            max_abs = block_abs.max()
+            scale = _compute_e4m3_scale(max_abs.unsqueeze(0)).squeeze()
+
+            # Scale to FP4 range [0, 6]
+            scaled = block_abs / (scale + 1e-10)
+            scaled = torch.clamp(scaled, 0, 6.0)
+
+            # Quantize to FP4
+            if config.stochastic_rounding:
+                quantized = _quantize_to_fp4_stochastic(scaled, fp4_lut)
+            else:
+                quantized = _quantize_to_fp4(scaled, fp4_lut)
+
+            # Dequantize
+            result[i*G:(i+1)*G, j] = sign * quantized * scale
+
+    # Remove padding
+    if pad_rows > 0:
+        result = result[:-pad_rows, :]
+
+    return result.to(original_dtype)
+
+
 class NVFP4QuantHook:
     """
     PyTorch forward hook for applying NVFP4 fake quantization to layer outputs.

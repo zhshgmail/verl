@@ -274,20 +274,45 @@ All experiments give ~7-8.5% accuracy, far below expected 60%.
 
 ---
 
-## Remaining Investigation
+### E13f-nvfp4: Column-wise blocking (matching quant_compute)
 
-**Key difference found**: Our NVFP4 uses **row-wise** blocking (flatten then reshape to 16-element blocks), while the reference quant_compute uses **column-wise** blocking (G rows per column).
+**Script**: `scripts/test_nvfp4_w4a4_columnwise_e13f.sh`
+**Key Config**:
+- error_type: nvfp4
+- injection_point: both
+- apply_during: both
+- train_batch_size: 128
+- **Blocking direction: COLUMN-WISE** (matching quant_compute reference)
 
-Next step: Test with column-wise blocking to match reference implementation.
+**Code Changes**:
+1. Added `nvfp4_quantize_columnwise()` function to `verl/utils/nvfp4_quant.py`
+2. Modified `_apply_nvfp4()` in `hw_error_injection.py` to use column-wise for 2D weight tensors
+
+**Blocking Direction Comparison**:
+```
+Our row-wise:    Flatten tensor → reshape to (N, 16) → quantize rows
+Reference:       For each column → take 16 rows → quantize column slice
+
+Test result: Column-wise diff from reference = 0.005 (16x better than row-wise 0.085)
+```
+
+**Hypothesis**: The blocking direction mismatch was causing incorrect quantization patterns.
+
+**Results**: TBD (running)
 
 ---
 
-## Next Steps
+## Summary of All E13 Experiments (Updated)
 
-1. **Option A**: Fix blocking direction to match quant_compute reference
-2. **Option B**: Pre-quantize model using llm-compressor, then train with AQN
-3. **Option C**: Modify our fake quantization to match quant_compute exactly
-4. **Option D**: Abandon W4A4 and focus on W4A16 (proven to work)
+| ID | Description | Hook Type | Blocking | Step 0 Acc | Status |
+|----|-------------|-----------|----------|------------|--------|
+| E13a-mxfp4 | MXFP4 POST-hook | POST | row-wise | 8.11% | FAILED |
+| E13a-nvfp4 | NVFP4 POST-hook large batch | POST | row-wise | 7.58% | FAILED |
+| E13b-nvfp4 | NVFP4 POST-hook small batch | POST | row-wise | 7.81% | FAILED |
+| E13c-nvfp4 | NVFP4 POST-hook training-only | POST | row-wise | 7.58% | FAILED |
+| E13d-nvfp4 | NVFP4 PRE-hook | PRE | row-wise | 8.49% | FAILED |
+| E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | PRE | row-wise | 7.66% | FAILED |
+| E13f-nvfp4 | NVFP4 PRE-hook + column-wise blocking | PRE | **column-wise** | TBD | RUNNING |
 
 ---
 
@@ -296,8 +321,11 @@ Next step: Test with column-wise blocking to match reference implementation.
 | File | Description |
 |------|-------------|
 | `verl/utils/hw_error_injection.py` | Changed W4A4 activation quantization to PRE-hook |
+| `verl/utils/nvfp4_quant.py` | Added `nvfp4_quantize_columnwise()` function |
 | `scripts/test_nvfp4_w4a4_training_only.sh` | E13c test script |
 | `scripts/test_nvfp4_w4a4_true_prehook.sh` | E13d test script |
+| `scripts/test_nvfp4_w4a4_exclude_baselayer.sh` | E13e test script |
+| `scripts/test_nvfp4_w4a4_columnwise_e13f.sh` | E13f test script |
 
 ---
 

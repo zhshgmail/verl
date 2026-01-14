@@ -283,16 +283,18 @@ class HWErrorInjector:
 
         # Initialize NVFP4 quantizer if needed
         self._nvfp4_quantize = None
+        self._nvfp4_quantize_columnwise = None
         if config.error_type == 'nvfp4':
             try:
-                from verl.utils.nvfp4_quant import nvfp4_quantize, NVFP4Config
+                from verl.utils.nvfp4_quant import nvfp4_quantize, nvfp4_quantize_columnwise, NVFP4Config
                 self._nvfp4_config = NVFP4Config(
                     stochastic_rounding=config.nvfp4_stochastic_rounding,
                 )
                 self._nvfp4_quantize = nvfp4_quantize
+                self._nvfp4_quantize_columnwise = nvfp4_quantize_columnwise
                 if config.injection_point == 'output':
                     logger.warning("[NVFP4] injection_point='output' will apply quant AFTER computation")
-                logger.info(f"[NVFP4] Initialized NVFP4 quantizer: sr={config.nvfp4_stochastic_rounding}, injection={config.injection_point}")
+                logger.info(f"[NVFP4] Initialized NVFP4 quantizer (columnwise): sr={config.nvfp4_stochastic_rounding}, injection={config.injection_point}")
             except ImportError as e:
                 raise ImportError(f"NVFP4 error type requires verl.utils.nvfp4_quant: {e}")
 
@@ -441,7 +443,7 @@ class HWErrorInjector:
 
         return quantized, stats
 
-    def _apply_nvfp4(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+    def _apply_nvfp4(self, tensor: torch.Tensor, is_weight: bool = False) -> Tuple[torch.Tensor, Dict]:
         """
         Apply NVFP4 fake quantization to tensor.
 
@@ -453,8 +455,13 @@ class HWErrorInjector:
         This is the format used by QeRL and is more suitable for
         quantization-aware training.
 
+        IMPORTANT: For 2D weight tensors, uses COLUMN-WISE blocking to match
+        the quant_compute reference implementation (To_NVF4). This processes
+        G=16 rows at a time per column, matching how the reference works.
+
         Args:
             tensor: Input tensor
+            is_weight: If True, use column-wise blocking for 2D tensors
 
         Returns:
             Tuple of (quantized tensor, stats dict)
@@ -462,8 +469,12 @@ class HWErrorInjector:
         if self._nvfp4_quantize is None:
             raise RuntimeError("NVFP4 quantizer not initialized")
 
-        # Apply NVFP4 quantization
-        quantized = self._nvfp4_quantize(tensor, config=self._nvfp4_config)
+        # For 2D weight tensors, use column-wise blocking to match quant_compute reference
+        if is_weight and tensor.dim() == 2 and self._nvfp4_quantize_columnwise is not None:
+            quantized = self._nvfp4_quantize_columnwise(tensor, config=self._nvfp4_config)
+        else:
+            # For activations (3D) or non-weight tensors, use standard row-wise blocking
+            quantized = self._nvfp4_quantize(tensor, config=self._nvfp4_config)
 
         # Compute error statistics
         error = (quantized - tensor).abs()
@@ -827,11 +838,11 @@ class HWErrorInjector:
                 # Save original weight for restoration
                 module._original_weight = weight.clone()
 
-                # Quantize weight
+                # Quantize weight (use column-wise blocking for NVFP4 to match quant_compute reference)
                 if self.config.error_type == 'mxfp4':
                     quantized_weight, quant_stats = self._apply_mxfp4(weight)
                 else:
-                    quantized_weight, quant_stats = self._apply_nvfp4(weight)
+                    quantized_weight, quant_stats = self._apply_nvfp4(weight, is_weight=True)
                 module.weight.data = quantized_weight
 
                 # Track statistics
