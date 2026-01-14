@@ -901,6 +901,68 @@ class HWErrorInjector:
 
         return hook
 
+    def _create_activation_quant_pre_hook(self, name: str) -> Callable:
+        """
+        Create forward pre-hook for ACTIVATION quantization (for W4A4 mode).
+
+        This applies MXFP4 quantization to input activations:
+        - Original: y = linear(x, W_quant)
+        - W4A4: y = linear(quant_dequant(x), W_quant)
+
+        Used in conjunction with weight quantization hook for full W4A4.
+        """
+        def hook(module: nn.Module, input: Tuple) -> Tuple:
+            if not self._should_inject():
+                return input
+
+            if len(input) == 0:
+                return input
+
+            first_input = input[0]
+            if not isinstance(first_input, torch.Tensor):
+                return input
+
+            # Apply MXFP4/NVFP4 quantization to activation
+            if self.config.error_type in ('mxfp4', 'nvfp4'):
+                if self.config.error_type == 'mxfp4':
+                    modified_input, quant_stats = self._apply_mxfp4(first_input)
+                else:
+                    modified_input, quant_stats = self._apply_nvfp4(first_input)
+
+                # Track statistics (separate key for activation)
+                act_name = f"{name}_activation"
+                if act_name not in self.stats:
+                    self.stats[act_name] = {
+                        'count': 0, 'mean_error': 0.0, 'max_error': 0.0,
+                        'relative_error': 0.0, 'point': 'activation', 'type': self.config.error_type
+                    }
+                self.stats[act_name]['count'] += 1
+                alpha = 0.1
+                self.stats[act_name]['mean_error'] = (
+                    alpha * quant_stats['mean_error'] +
+                    (1 - alpha) * self.stats[act_name]['mean_error']
+                )
+                self.stats[act_name]['max_error'] = max(
+                    self.stats[act_name]['max_error'], quant_stats['max_error']
+                )
+                self.stats[act_name]['relative_error'] = (
+                    alpha * quant_stats['relative_error'] +
+                    (1 - alpha) * self.stats[act_name]['relative_error']
+                )
+
+                # Log first injection
+                if self.stats[act_name]['count'] == 1:
+                    print(f"[W4A4] First ACTIVATION quant on {name}: "
+                          f"shape={tuple(first_input.shape)}, "
+                          f"mean_error={quant_stats['mean_error']:.2e}, "
+                          f"rel_error={quant_stats['relative_error']*100:.1f}%")
+
+                return (modified_input,) + input[1:]
+
+            return input
+
+        return hook
+
     def register_hooks(self, model: nn.Module, verbose: bool = True) -> int:
         """
         Register forward hooks on target modules.
@@ -947,6 +1009,34 @@ class HWErrorInjector:
                     # Like quant_compute's fake quantization: y = operator(fake_quant(x))
                     hook = module.register_forward_pre_hook(self._create_forward_pre_hook(name))
                     self.hooks.append(hook)
+                elif self.config.injection_point == 'both':
+                    # W4A4 mode: quantize BOTH weights AND activations
+                    # This combines weight quantization (W4A16) + activation quantization
+
+                    # 1. Weight quantization pre-hook
+                    pre_hook = module.register_forward_pre_hook(self._create_weight_quant_pre_hook(name))
+                    self.hooks.append(pre_hook)
+
+                    # 2. Weight restoration (STE mode)
+                    if self.config.use_ste:
+                        backward_hook = module.register_full_backward_hook(
+                            self._create_weight_restore_backward_hook(name)
+                        )
+                        self.hooks.append(backward_hook)
+                        if verbose and count == 0:
+                            logger.info("[W4A4-STE] Using backward hook for proper QAT gradient flow")
+                    else:
+                        post_hook = module.register_forward_hook(self._create_weight_restore_hook(name))
+                        self.hooks.append(post_hook)
+                        if verbose and count == 0:
+                            logger.warning("[W4A4-LEGACY] Using forward hook - NOT recommended for FullFT!")
+
+                    # 3. Activation quantization pre-hook (applied before weight-quantized forward)
+                    act_hook = module.register_forward_pre_hook(self._create_activation_quant_pre_hook(name))
+                    self.hooks.append(act_hook)
+
+                    if verbose and count == 0:
+                        logger.info("[W4A4] Quantizing both weights and activations")
                 else:
                     # Output mode: inject error to output AFTER operator processes it
                     # Post-hook: Like: y = operator(x) + error
