@@ -1694,11 +1694,45 @@ class RayPPOTrainer:
                     and self.config.trainer.test_freq > 0
                     and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0)
                 ):
-                    with marked_timer("testing", timing_raw, color="green"):
-                        val_metrics: dict = self._validate()
-                        if is_last_step:
-                            last_val_metrics = val_metrics
-                    metrics.update(val_metrics)
+                    # HOTFIX: Add timeout+retry for validation to avoid hang
+                    val_timeout = 300  # 5 minutes timeout
+                    max_retries = 3
+                    val_metrics = None
+
+                    for retry in range(max_retries):
+                        try:
+                            import signal
+
+                            def timeout_handler(signum, frame):
+                                raise TimeoutError(f"Validation timed out after {val_timeout}s")
+
+                            signal.signal(signal.SIGALRM, timeout_handler)
+                            signal.alarm(val_timeout)
+
+                            try:
+                                with marked_timer("testing", timing_raw, color="green"):
+                                    val_metrics = self._validate()
+                                    if is_last_step:
+                                        last_val_metrics = val_metrics
+                                signal.alarm(0)  # Cancel alarm
+                                break  # Success, exit retry loop
+                            except TimeoutError as e:
+                                signal.alarm(0)  # Cancel alarm
+                                print(f"[WARN] Validation timeout on attempt {retry + 1}/{max_retries}: {e}")
+                                if retry < max_retries - 1:
+                                    print(f"[INFO] Retrying validation...")
+                                    continue
+                                else:
+                                    print(f"[ERROR] Validation failed after {max_retries} attempts, skipping")
+                                    val_metrics = {}
+                                    break
+                        except Exception as e:
+                            print(f"[ERROR] Validation failed with exception: {e}")
+                            val_metrics = {}
+                            break
+
+                    if val_metrics:
+                        metrics.update(val_metrics)
 
                 # Check if the ESI (Elastic Server Instance)/training plan is close to expiration.
                 esi_close_to_expiration = should_save_ckpt_esi(
