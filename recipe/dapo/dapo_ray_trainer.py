@@ -23,6 +23,7 @@ from copy import deepcopy
 from pprint import pprint
 
 import numpy as np
+import ray
 import torch
 from tqdm import tqdm
 
@@ -344,6 +345,13 @@ class RayDAPOTrainer(RayPPOTrainer):
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
 
+                        # Update noise injection step in rollout workers (for next weight sync)
+                        if self.noise_injection_enabled:
+                            ray.get(self.actor_rollout_wg.execute_all_async(
+                                'update_noise_injection_step',
+                                current_step=self.global_steps
+                            ))
+
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
@@ -407,7 +415,18 @@ class RayDAPOTrainer(RayPPOTrainer):
                 progress_bar.update(1)
                 self.global_steps += 1
                 self.gen_steps += 1
-        # check if last step checkpint exists
+        # Dataloader exhausted before total_training_steps reached
+        # Run final validation if not already done at a test_freq step
+        if (
+            self.val_reward_fn is not None
+            and self.config.trainer.test_freq > 0
+            and self.global_steps % self.config.trainer.test_freq != 0
+        ):
+            print(f"Running final validation at step {self.global_steps} (dataloader exhausted)")
+            val_metrics: dict = self._validate()
+            logger.log(data=val_metrics, step=self.global_steps)
+
+        # check if last step checkpoint exists
         checkpoint_dir = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")
         if not os.path.exists(checkpoint_dir):
             # save last step checkpoint

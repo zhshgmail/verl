@@ -1,0 +1,41 @@
+{
+    "_description": "SRDD-guided layer-specific sigma multipliers for Qwen2.5-1.5B-Instruct",
+    "_source": "SRDD scan results from previous experiments",
+    "_notes": [
+        "High error layers (14-17): 40.8-42.7% relative error -> 1.5x sigma",
+        "Medium error layers (10-13, 18-21): 37-40% relative error -> 1.2x sigma",
+        "Low error layers (0-9, 22-27): 28-37% relative error -> 1.0x sigma (baseline)"
+    ],
+    "enabled": true,
+    "default_multiplier": 1.0,
+    "layer_multipliers": {
+        "0": 1.0,
+        "1": 1.0,
+        "2": 1.0,
+        "3": 1.0,
+        "4": 1.0,
+        "5": 1.0,
+        "6": 1.0,
+        "7": 1.0,
+        "8": 1.0,
+        "9": 1.0,
+        "10": 1.2,
+        "11": 1.2,
+        "12": 1.2,
+        "13": 1.2,
+        "14": 1.5,
+        "15": 1.5,
+        "16": 1.5,
+        "17": 1.5,
+        "18": 1.2,
+        "19": 1.2,
+        "20": 1.2,
+        "21": 1.2,
+        "22": 1.0,
+        "23": 1.0,
+        "24": 1.0,
+        "25": 1.0,
+        "26": 1.0,
+        "27": 1.0
+    }
+}

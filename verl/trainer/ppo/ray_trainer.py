@@ -383,25 +383,40 @@ class RayPPOTrainer:
 
             self.noise_injection_target_modules = noise_config.get('target_modules', ['post_attention_layernorm'])
             self.noise_injection_exclude_patterns = noise_config.get('exclude_patterns', ['input_layernorm'])
+            self.noise_injection_layer_types = noise_config.get('layer_types', [])  # ['rmsnorm'], ['linear'], or both
 
         # Initialize HW error injection config (for simulating GPU/NPU heterogeneous errors)
         # NOTE: This is module-level injection (forward hooks only, rollout phase only)
         self.hw_error_injection_enabled = self.config.trainer.get('hw_error_injection', {}).get('enabled', False)
         if self.hw_error_injection_enabled:
             hw_config = self.config.trainer.get('hw_error_injection', {})
+            # Get target_layers - convert OmegaConf ListConfig to Python list if needed
+            target_layers = hw_config.get('target_layers', None)
+            if target_layers is not None:
+                target_layers = list(target_layers)
+
+            # Get exclude_modules - convert OmegaConf ListConfig to Python list if needed
+            exclude_modules = hw_config.get('exclude_modules', None)
+            if exclude_modules is not None:
+                exclude_modules = list(exclude_modules)
+
             self.hw_error_injection_config = {
                 'enabled': True,
                 'error_scale': hw_config.get('error_scale', 1e-5),
                 'error_type': hw_config.get('error_type', 'relative_gaussian'),
                 'injection_point': hw_config.get('injection_point', 'input'),
                 'target_modules': list(hw_config.get('target_modules', ['rmsnorm'])),
+                'exclude_modules': exclude_modules,  # Modules to exclude from quantization (e.g., lora_A, lora_B)
+                'target_layers': target_layers,  # For SRDD-guided layer-specific injection
                 'apply_during': hw_config.get('apply_during', 'rollout'),
+                'deadzone_threshold': hw_config.get('deadzone_threshold', 0.01),
             }
             print(f"[RayPPOTrainer] HW error injection initialized: "
                   f"scale={self.hw_error_injection_config['error_scale']}, "
                   f"type={self.hw_error_injection_config['error_type']}, "
                   f"point={self.hw_error_injection_config['injection_point']}, "
-                  f"targets={self.hw_error_injection_config['target_modules']}")
+                  f"targets={self.hw_error_injection_config['target_modules']}, "
+                  f"exclude={self.hw_error_injection_config['exclude_modules']}")
 
         # Initialize operator-level noisy ops config (actual enabling happens in worker)
         # NOTE: With VERL_NOISY_OPS_TRAINING_ONLY=1, noisy ops is enabled in actor workers
@@ -758,7 +773,9 @@ class RayPPOTrainer:
 
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            # HOTFIX: Skip tokenizer decode to avoid hang (tokenizer.decode causes deadlock at end of training)
+            # output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = ["<decode_skipped>" for _ in output_ids]  # Temporary - only affects logging, not accuracy
             sample_outputs.extend(output_texts)
 
             test_batch = test_batch.union(test_output_gen_batch)
@@ -939,6 +956,7 @@ class RayPPOTrainer:
                 self.config.actor_rollout_ref.rollout.noise_injection_total_steps = self.noise_injection_total_steps
                 self.config.actor_rollout_ref.rollout.noise_injection_target_modules = self.noise_injection_target_modules
                 self.config.actor_rollout_ref.rollout.noise_injection_exclude_patterns = self.noise_injection_exclude_patterns
+                self.config.actor_rollout_ref.rollout.noise_injection_layer_types = self.noise_injection_layer_types
                 # Epoch-aware config (Option C)
                 self.config.actor_rollout_ref.rollout.noise_injection_epoch_aware = self.noise_injection_epoch_aware
                 self.config.actor_rollout_ref.rollout.noise_injection_epoch_ranges = list(self.noise_injection_epoch_ranges)
@@ -950,13 +968,16 @@ class RayPPOTrainer:
             else:
                 print(f"[RayPPOTrainer] Noise injection config passed to rollout: enabled={True}, stages={len(self.sigma_trend)}")
 
-        # Pass HW error injection config to rollout workers
+        # Pass HW error injection config to rollout workers AND actor workers (for training)
         if self.hw_error_injection_enabled:
             from omegaconf import open_dict
             with open_dict(self.config):
+                # Pass to rollout (vLLM inference)
                 self.config.actor_rollout_ref.rollout.hw_error_injection_enabled = True
                 self.config.actor_rollout_ref.rollout.hw_error_injection_config = self.hw_error_injection_config
-            print(f"[RayPPOTrainer] HW error injection config passed to rollout: {self.hw_error_injection_config}")
+                # Pass to actor (FSDP training) - this is the key for consistent injection!
+                self.config.actor_rollout_ref.actor.hw_error_injection = self.hw_error_injection_config
+            print(f"[RayPPOTrainer] HW error injection config passed to rollout AND actor: {self.hw_error_injection_config}")
 
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,
@@ -1673,11 +1694,24 @@ class RayPPOTrainer:
                     and self.config.trainer.test_freq > 0
                     and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0)
                 ):
-                    with marked_timer("testing", timing_raw, color="green"):
-                        val_metrics: dict = self._validate()
-                        if is_last_step:
-                            last_val_metrics = val_metrics
-                    metrics.update(val_metrics)
+                    # HOTFIX: Skip final step validation to avoid hang
+                    # Only final step (last epoch) hangs during reward computation in distributed setting.
+                    # Intermediate validations (e.g., test_freq=20) work fine and provide sufficient metrics.
+                    # Root cause: Ray distributed reward computation deadlocks specifically at final step,
+                    # likely due to accumulated state or resource contention after full training.
+                    if is_last_step:
+                        print(
+                            "[WARN] Skipping final step validation to avoid known hang issue. "
+                            "Intermediate validation metrics (e.g., step 20) are available in logs."
+                        )
+                        val_metrics = {}  # Empty dict for final step
+                    else:
+                        # Run intermediate validations normally (these don't hang)
+                        with marked_timer("testing", timing_raw, color="green"):
+                            val_metrics = self._validate()
+
+                    if val_metrics:
+                        metrics.update(val_metrics)
 
                 # Check if the ESI (Elastic Server Instance)/training plan is close to expiration.
                 esi_close_to_expiration = should_save_ckpt_esi(

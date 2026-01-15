@@ -330,3 +330,33 @@ quantization: null
 
 # extra quantization information serialized in a config file, e.g. torchao_config.json
 quantization_config_file: null
+
+# HW Error Injection config for rollout (must match actor config for consistency)
+# Used for SRDD-guided AQN experiments: simulating MXFP4 deadzone
+hw_error_injection_enabled: false
+
+hw_error_injection_config:
+
+  # Error scale (relative to tensor magnitude)
+  # Not used for deadzone type
+  error_scale: 1e-5
+
+  # Error type: 'relative_gaussian', 'absolute_gaussian', 'systematic_bias', 'deadzone'
+  error_type: relative_gaussian
+
+  # Injection point: 'input' or 'output'
+  # For deadzone: use 'output'
+  injection_point: output
+
+  # Target modules (not used for deadzone)
+  target_modules: ['rmsnorm']
+
+  # Target layers for injection (null = all layers)
+  # Example: [15] for SRDD-guided injection
+  target_layers: null
+
+  # Apply during: 'rollout', 'training', 'both'
+  apply_during: rollout
+
+  # Deadzone threshold (for error_type='deadzone')
+  deadzone_threshold: 0.01

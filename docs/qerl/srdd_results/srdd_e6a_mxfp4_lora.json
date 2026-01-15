@@ -1,0 +1,566 @@
+{
+  "config": {
+    "model_path": "/tmp/merged_e6a_mxfp4_lora",
+    "quant_type": "mxfp4",
+    "num_layers": 28,
+    "thresholds": {
+      "sqnr_db": 20.0,
+      "deadzone": 0.05,
+      "saturation": 0.01,
+      "relative_error": 0.1
+    }
+  },
+  "report": {
+    "summary": {
+      "total_layers": 28,
+      "problematic_layers": 28,
+      "healthy_layers": 0,
+      "problematic_layer_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    "statistics": {
+      "sqnr_db": {
+        "min": 15.730193099538933,
+        "max": 18.146030613985957,
+        "mean": 16.911612902932262,
+        "std": 0.3528318105793664
+      },
+      "deadzone_ratio": {
+        "min": 0.15569842420518398,
+        "max": 0.28729474917054176,
+        "mean": 0.22875063167884946,
+        "std": 0.03460827253108038
+      },
+      "saturation_ratio": {
+        "min": 0.0001501012757216813,
+        "max": 0.0010633680731189088,
+        "mean": 0.00026073961001722116,
+        "std": 0.00015773678568660305
+      },
+      "relative_error": {
+        "min": 0.28515625,
+        "max": 0.426513671875,
+        "mean": 0.36409214564732145,
+        "std": 0.036813636179558996
+      }
+    },
+    "per_layer": [
+      {
+        "layer_id": 0,
+        "sqnr_db": 16.923941061452314,
+        "deadzone_ratio": 0.1602900754660368,
+        "saturation_ratio": 0.00036801939677388873,
+        "relative_error": 0.30078125,
+        "mean_abs_error": 0.051055908203125,
+        "max_abs_error": 1.78125,
+        "output_norm": 53.84375,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=16.0%",
+          "high_rel_error=30.1%"
+        ]
+      },
+      {
+        "layer_id": 1,
+        "sqnr_db": 18.146030613985957,
+        "deadzone_ratio": 0.18814290687441826,
+        "saturation_ratio": 0.0001501012757216813,
+        "relative_error": 0.322509765625,
+        "mean_abs_error": 0.98779296875,
+        "max_abs_error": 406.0,
+        "output_norm": 5180.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=18.1dB",
+          "high_deadzone=18.8%",
+          "high_rel_error=32.3%"
+        ]
+      },
+      {
+        "layer_id": 2,
+        "sqnr_db": 16.85783480894704,
+        "deadzone_ratio": 0.20291160978376865,
+        "saturation_ratio": 0.00017722801203490235,
+        "relative_error": 0.33740234375,
+        "mean_abs_error": 1.5859375,
+        "max_abs_error": 932.0,
+        "output_norm": 10896.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=20.3%",
+          "high_rel_error=33.7%"
+        ]
+      },
+      {
+        "layer_id": 3,
+        "sqnr_db": 16.764599928285044,
+        "deadzone_ratio": 0.2027117758989334,
+        "saturation_ratio": 0.00021882234250369947,
+        "relative_error": 0.336669921875,
+        "mean_abs_error": 1.5986328125,
+        "max_abs_error": 946.0,
+        "output_norm": 11104.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.8dB",
+          "high_deadzone=20.3%",
+          "high_rel_error=33.7%"
+        ]
+      },
+      {
+        "layer_id": 4,
+        "sqnr_db": 16.88762170786189,
+        "deadzone_ratio": 0.20523998513817787,
+        "saturation_ratio": 0.00021882234250369947,
+        "relative_error": 0.338134765625,
+        "mean_abs_error": 1.607421875,
+        "max_abs_error": 932.0,
+        "output_norm": 11232.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=20.5%",
+          "high_rel_error=33.8%"
+        ]
+      },
+      {
+        "layer_id": 5,
+        "sqnr_db": 16.903679893762153,
+        "deadzone_ratio": 0.22264811396598816,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.358154296875,
+        "mean_abs_error": 1.6005859375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=22.3%",
+          "high_rel_error=35.8%"
+        ]
+      },
+      {
+        "layer_id": 6,
+        "sqnr_db": 16.90637403379482,
+        "deadzone_ratio": 0.22480559535324574,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.35986328125,
+        "mean_abs_error": 1.6025390625,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=22.5%",
+          "high_rel_error=36.0%"
+        ]
+      },
+      {
+        "layer_id": 7,
+        "sqnr_db": 16.912242935305294,
+        "deadzone_ratio": 0.22949400171637535,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.3662109375,
+        "mean_abs_error": 1.609375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=22.9%",
+          "high_rel_error=36.6%"
+        ]
+      },
+      {
+        "layer_id": 8,
+        "sqnr_db": 16.915503414189708,
+        "deadzone_ratio": 0.227279556915164,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.36376953125,
+        "mean_abs_error": 1.615234375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=22.7%",
+          "high_rel_error=36.4%"
+        ]
+      },
+      {
+        "layer_id": 9,
+        "sqnr_db": 16.919480487672445,
+        "deadzone_ratio": 0.23426740244030952,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.370849609375,
+        "mean_abs_error": 1.6162109375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=23.4%",
+          "high_rel_error=37.1%"
+        ]
+      },
+      {
+        "layer_id": 10,
+        "sqnr_db": 16.919480487672445,
+        "deadzone_ratio": 0.24771141447126865,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.385498046875,
+        "mean_abs_error": 1.6171875,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=24.8%",
+          "high_rel_error=38.5%"
+        ]
+      },
+      {
+        "layer_id": 11,
+        "sqnr_db": 16.929753820616465,
+        "deadzone_ratio": 0.2608714923262596,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.399658203125,
+        "mean_abs_error": 1.615234375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=26.1%",
+          "high_rel_error=40.0%"
+        ]
+      },
+      {
+        "layer_id": 12,
+        "sqnr_db": 16.933290433140044,
+        "deadzone_ratio": 0.2652343884110451,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.405517578125,
+        "mean_abs_error": 1.6123046875,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=26.5%",
+          "high_rel_error=40.6%"
+        ]
+      },
+      {
+        "layer_id": 13,
+        "sqnr_db": 16.936570612922733,
+        "deadzone_ratio": 0.2647578567266464,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.40380859375,
+        "mean_abs_error": 1.61328125,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=26.5%",
+          "high_rel_error=40.4%"
+        ]
+      },
+      {
+        "layer_id": 14,
+        "sqnr_db": 16.93919199321403,
+        "deadzone_ratio": 0.2802770622074604,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.419921875,
+        "mean_abs_error": 1.615234375,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=28.0%",
+          "high_rel_error=42.0%"
+        ]
+      },
+      {
+        "layer_id": 15,
+        "sqnr_db": 16.943198418058042,
+        "deadzone_ratio": 0.28729474917054176,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.426513671875,
+        "mean_abs_error": 1.611328125,
+        "max_abs_error": 936.0,
+        "output_norm": 11384.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=28.7%",
+          "high_rel_error=42.7%"
+        ]
+      },
+      {
+        "layer_id": 16,
+        "sqnr_db": 16.945584655317205,
+        "deadzone_ratio": 0.2803222816437483,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.4189453125,
+        "mean_abs_error": 1.611328125,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=28.0%",
+          "high_rel_error=41.9%"
+        ]
+      },
+      {
+        "layer_id": 17,
+        "sqnr_db": 16.95327275334585,
+        "deadzone_ratio": 0.27005751617252827,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.40771484375,
+        "mean_abs_error": 1.615234375,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=27.0%",
+          "high_rel_error=40.8%"
+        ]
+      },
+      {
+        "layer_id": 18,
+        "sqnr_db": 16.95327275334585,
+        "deadzone_ratio": 0.25784867256879807,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.394775390625,
+        "mean_abs_error": 1.623046875,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=25.8%",
+          "high_rel_error=39.5%"
+        ]
+      },
+      {
+        "layer_id": 19,
+        "sqnr_db": 16.95410698789557,
+        "deadzone_ratio": 0.2535807341337204,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.390380859375,
+        "mean_abs_error": 1.638671875,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=25.4%",
+          "high_rel_error=39.0%"
+        ]
+      },
+      {
+        "layer_id": 20,
+        "sqnr_db": 16.95410698789557,
+        "deadzone_ratio": 0.2372178826481104,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.37158203125,
+        "mean_abs_error": 1.65234375,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=23.7%",
+          "high_rel_error=37.2%"
+        ]
+      },
+      {
+        "layer_id": 21,
+        "sqnr_db": 16.962736390199858,
+        "deadzone_ratio": 0.22832935862243176,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.361572265625,
+        "mean_abs_error": 1.6767578125,
+        "max_abs_error": 936.0,
+        "output_norm": 11368.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=22.8%",
+          "high_rel_error=36.2%"
+        ]
+      },
+      {
+        "layer_id": 22,
+        "sqnr_db": 16.983056488741816,
+        "deadzone_ratio": 0.21883952245116234,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.349853515625,
+        "mean_abs_error": 1.7060546875,
+        "max_abs_error": 928.0,
+        "output_norm": 11360.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=21.9%",
+          "high_rel_error=35.0%"
+        ]
+      },
+      {
+        "layer_id": 23,
+        "sqnr_db": 17.00458241222074,
+        "deadzone_ratio": 0.21303439885377884,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.340576171875,
+        "mean_abs_error": 1.75,
+        "max_abs_error": 920.0,
+        "output_norm": 11360.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.0dB",
+          "high_deadzone=21.3%",
+          "high_rel_error=34.1%"
+        ]
+      },
+      {
+        "layer_id": 24,
+        "sqnr_db": 17.156970433497076,
+        "deadzone_ratio": 0.20116374269127846,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.32958984375,
+        "mean_abs_error": 1.8173828125,
+        "max_abs_error": 896.0,
+        "output_norm": 11320.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=17.2dB",
+          "high_deadzone=20.1%",
+          "high_rel_error=33.0%"
+        ]
+      },
+      {
+        "layer_id": 25,
+        "sqnr_db": 16.94871255028651,
+        "deadzone_ratio": 0.20092050358653069,
+        "saturation_ratio": 0.0002323857115698047,
+        "relative_error": 0.32861328125,
+        "mean_abs_error": 1.87890625,
+        "max_abs_error": 918.0,
+        "output_norm": 11304.0,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.9dB",
+          "high_deadzone=20.1%",
+          "high_rel_error=32.9%"
+        ]
+      },
+      {
+        "layer_id": 26,
+        "sqnr_db": 16.23977111893794,
+        "deadzone_ratio": 0.15569842420518398,
+        "saturation_ratio": 0.0010633680731189088,
+        "relative_error": 0.28515625,
+        "mean_abs_error": 0.58544921875,
+        "max_abs_error": 32.0,
+        "output_norm": 813.5,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=16.2dB",
+          "high_deadzone=15.6%",
+          "high_rel_error=28.5%"
+        ]
+      },
+      {
+        "layer_id": 27,
+        "sqnr_db": 15.730193099538933,
+        "deadzone_ratio": 0.1840666625648737,
+        "saturation_ratio": 0.000224247694859514,
+        "relative_error": 0.320556640625,
+        "mean_abs_error": 0.7900390625,
+        "max_abs_error": 51.9375,
+        "output_norm": 980.5,
+        "is_problematic": true,
+        "issues": [
+          "low_sqnr=15.7dB",
+          "high_deadzone=18.4%",
+          "high_rel_error=32.1%"
+        ]
+      }
+    ]
+  },
+  "recommendations": {
+    "strategy": "reconsider_quantization",
+    "details": [
+      "28 layers (100.0%) are problematic.",
+      "Warning: MXFP4 may not be suitable for this model.",
+      "Recommend: Consider MXFP8 or higher precision format."
+    ],
+    "aqn_layers": [],
+    "mixed_precision_layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ]
+  },
+  "timestamp": "2026-01-10T21:01:43.381315"
+}

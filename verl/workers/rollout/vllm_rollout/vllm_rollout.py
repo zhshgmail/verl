@@ -149,11 +149,15 @@ class vLLMAsyncRollout(BaseRollout):
             # (Dense models: ALL RMSNorm, MoE models: post_attention_layernorm only)
             'target_modules': list(getattr(config, 'noise_injection_target_modules', [])) or None,
             'exclude_patterns': list(getattr(config, 'noise_injection_exclude_patterns', [])) or None,
+            # Layer types to target: ['rmsnorm'], ['linear'], or ['rmsnorm', 'linear']
+            'layer_types': list(getattr(config, 'noise_injection_layer_types', [])) or None,
             # Epoch-aware config (Option C)
             'epoch_aware': getattr(config, 'noise_injection_epoch_aware', False),
             'epoch_ranges': epoch_ranges,
             'stages_per_epoch': getattr(config, 'noise_injection_stages_per_epoch', 5),
             'steps_per_epoch': getattr(config, 'noise_injection_steps_per_epoch', 0),
+            # SRDD-guided layer-specific sigma config (optional)
+            'layer_sigma_config': self._parse_layer_sigma_config(getattr(config, 'noise_injection_layer_sigma_config', None)),
         }
         if self.noise_injection_config['enabled']:
             # Use print() to ensure visibility regardless of logging level
@@ -177,6 +181,24 @@ class vLLMAsyncRollout(BaseRollout):
             if hasattr(hw_config, 'items'):
                 hw_config = dict(hw_config)
             print(f"[HW Error] HW error injection enabled: {hw_config}")
+
+    def _parse_layer_sigma_config(self, config):
+        """Parse layer_sigma_config from OmegaConf or dict format."""
+        if config is None:
+            return None
+
+        # Convert OmegaConf to dict if needed
+        if hasattr(config, 'items'):
+            config = dict(config)
+
+        if not isinstance(config, dict):
+            return None
+
+        # Ensure layer_multipliers is a regular dict with string keys
+        if 'layer_multipliers' in config and hasattr(config['layer_multipliers'], 'items'):
+            config['layer_multipliers'] = {str(k): v for k, v in dict(config['layer_multipliers']).items()}
+
+        return config
 
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
@@ -345,6 +367,8 @@ class vLLMAsyncRollout(BaseRollout):
                                 sigma_trend=[sigma],  # Single value = use this sigma directly
                                 target_modules=self.noise_injection_config.get('target_modules'),
                                 exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                                layer_types=self.noise_injection_config.get('layer_types'),
+                                layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
                                 verbose=True
                             )
                 else:
@@ -362,10 +386,13 @@ class vLLMAsyncRollout(BaseRollout):
                             sigma_trend=sigma_trend,
                             target_modules=self.noise_injection_config.get('target_modules'),
                             exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                            layer_types=self.noise_injection_config.get('layer_types'),
+                            layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
                             verbose=True
                         )
 
             # HW ERROR INJECTION: Register hooks on model for simulating GPU/NPU errors
+            # Supports deadzone injection for MXFP4 simulation (SRDD-guided AQN)
             if hasattr(self, 'hw_error_injection_enabled') and self.hw_error_injection_enabled:
                 from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
@@ -379,18 +406,28 @@ class vLLMAsyncRollout(BaseRollout):
                     hw_config_dict = dict(hw_config_dict)
 
                 # Create injector and register hooks
+                # v2.0: Support target_layers and deadzone_threshold for SRDD-guided AQN
+                target_layers = hw_config_dict.get('target_layers', None)
+                if target_layers is not None:
+                    target_layers = list(target_layers)
+
                 hw_config = HWErrorConfig(
                     enabled=True,
                     error_scale=hw_config_dict.get('error_scale', 1e-5),
                     error_type=hw_config_dict.get('error_type', 'relative_gaussian'),
-                    injection_point=hw_config_dict.get('injection_point', 'input'),
+                    injection_point=hw_config_dict.get('injection_point', 'output'),  # output for deadzone
                     target_modules=list(hw_config_dict.get('target_modules', ['rmsnorm'])),
+                    exclude_modules=list(hw_config_dict.get('exclude_modules') or []) or None,
+                    target_layers=target_layers,  # e.g., [15] for SRDD-guided injection
                     apply_during=hw_config_dict.get('apply_during', 'rollout'),
+                    deadzone_threshold=hw_config_dict.get('deadzone_threshold', 0.01),
+                    # STE mode: doesn't matter for inference (no backward pass), but keep for consistency
+                    use_ste=hw_config_dict.get('use_ste', True),
                 )
                 self.hw_error_injector = HWErrorInjector(hw_config)
                 self.hw_error_injector.set_phase('rollout')
                 num_hooks = self.hw_error_injector.register_hooks(model, verbose=True)
-                print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync")
+                print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync: {hw_config}")
 
     async def update_noise_injection_step(self, current_step: int):
         """Update current training step for noise injection schedule."""

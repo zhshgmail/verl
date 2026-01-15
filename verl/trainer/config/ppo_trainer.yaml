@@ -235,6 +235,7 @@ trainer:
     exclude_patterns: []
 
   # HW Error Injection config (simulate GPU/NPU heterogeneous errors)
+  # v2.0: Added deadzone support for MXFP4 quantization simulation
   hw_error_injection:
 
     # Whether to enable HW error injection
@@ -244,20 +245,38 @@ trainer:
     # 1e-6: ~BF16 precision level
     # 1e-5: Moderate (recommended starting point)
     # 1e-4: Aggressive
+    # Not used for deadzone type
     error_scale: 1e-5
 
-    # Error type: 'relative_gaussian', 'absolute_gaussian', 'systematic_bias'
+    # Error type: 'relative_gaussian', 'absolute_gaussian', 'systematic_bias', 'deadzone'
+    # 'deadzone': MXFP4 quantization simulation - values < threshold*max are zeroed
     error_type: relative_gaussian
 
     # Injection point: 'input' (like fake quant) or 'output'
+    # For deadzone: use 'output' to inject at layer output
     injection_point: input
 
     # Target modules for error injection
     # Options: 'rmsnorm', 'down_proj', 'o_proj', 'linear', etc.
+    # For deadzone: leave empty (targets decoder layers directly)
     target_modules: ['rmsnorm']
+
+    # Modules to exclude from error injection
+    # Default excludes lm_head and embed_tokens (production PTQ best practice)
+    # For LoRA: add 'lora_A', 'lora_B' to keep adapters in FP16
+    exclude_modules: ['lm_head', 'embed_tokens']
+
+    # Target layers for injection (null = all layers)
+    # Example: [15] for SRDD-guided injection on layer 15
+    target_layers: null
 
     # Apply during: 'rollout', 'training', 'both'
     apply_during: rollout
+
+    # Deadzone threshold (for error_type='deadzone')
+    # Values with |x| < threshold * max(|x|) are set to zero
+    # Simulates MXFP4 quantization deadzone
+    deadzone_threshold: 0.01
 
 # profiler configs
 global_profiler:
