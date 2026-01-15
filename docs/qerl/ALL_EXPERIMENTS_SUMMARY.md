@@ -11,11 +11,12 @@
 
 | Term | Description |
 |------|-------------|
-| **AQN** | Adaptive Quantization Noise - inject Gaussian noise into RMSNorm layers during training |
-| **Epoch-Aware** | AQN scheduling mode where each epoch has its own sigma range with exponential decay, vs linear decay across all steps |
+| **AQN** | Adaptive Quantization Noise - static noise injection into RMSNorm layers (no SRDD guidance) |
+| **RIN** | Resilient-Improving Noise - SRDD-guided noise injection for robustness training |
+| **RIN-targeted** | RIN applied only to layers identified by SRDD as high-error (binary: on/off) |
+| **RIN-variable** | RIN with layer-specific noise multipliers based on SRDD error scores (continuous scaling) |
+| **Epoch-Aware** | Scheduling mode where each epoch has its own sigma range with exponential decay, vs linear decay across all steps |
 | **SRDD** | Static Relative Deadzone Detection - identifies layers with high quantization error |
-| **SRDD-targeted** | AQN applied only to layers identified by SRDD as high-error (binary: on/off) |
-| **SRDD-variable** | AQN with layer-specific noise multipliers based on SRDD error scores (continuous scaling) |
 | **σ (sigma)** | Noise magnitude. Typically decays from σ_start (0.01) to σ_end (0.0001) over training |
 | **HW inject** | Hardware error simulation via `VERL_NOISY_OPS` - injects relative Gaussian noise into matmul operations |
 | **Quant** | Actual fake quantization experiments using MXFP4/NVFP4/BF16 via `hw_error_injection` |
@@ -26,15 +27,15 @@
 
 ## Complete Experiment Table
 
-| Exp ID | Type | TensorBoard Name | Score | Epochs | AQN | Epoch-Aware | SRDD | LoRA | dtype | Quant Mode | Notes |
-|--------|------|------------------|-------|--------|-----|-------------|------|------|-------|-----------|-------|
+| Exp ID | Type | TensorBoard Name | Score | Epochs | AQN/RIN | Epoch-Aware | RIN Mode | LoRA | dtype | Quant Mode | Notes |
+|--------|------|------------------|-------|--------|---------|-------------|----------|------|-------|-----------|-------|
 | **Baseline** | HW | `HW_BF16_GRPO_2ep_76.88_BASELINE` | **76.88%** | 2 | No | - | No | No | BF16 | - | GRPO, 2 epochs |
 | **E5** | HW | `HW_5pct_noise_only_68.92` | 68.92% | 2 | No | - | No | No | BF16 | - | 5% noise, no AQN |
 | **E5b** | HW | `HW_5pct_AQN_epoch-aware_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Epoch-aware AQN, σ=0.05→0.0005 |
 | **E5c** | HW | `HW_5pct_AQN_lower_sigma0.005_70.27` | 70.27% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Lower sigma, σ=0.01→0.00001 |
-| **E9a** | HW | `HW_5pct_AQN_SRDD-targeted_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | targeted | No | BF16 | - | AQN on specific layers only |
-| **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | ✅ Yes | targeted | No | BF16 | - | High σ=0.05 start |
-| **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
+| **E9a** | HW | `HW_5pct_RIN-targeted_sigma0.01_70.58` | 70.58% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | RIN on specific layers only |
+| **E9a-high-σ** | HW | `HW_5pct_RIN-targeted_high-sigma0.05_70.81` | 70.81% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | High σ=0.05 start |
+| **E9b** | HW | `HW_5pct_RIN-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | RIN | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
 | **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | **74.75%** | 1 | No | - | No | No | BF16 | - | DAPO Full FT baseline |
 | **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | 73.77% | 1 | No | - | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
 | **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
@@ -45,7 +46,7 @@
 | **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | NVFP4 + LoRA + AQN |
 | **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA |
 | **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
-| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN-high_72.48` | 72.48% | 1 | Yes | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + SRDD |
+| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + RIN |
 | **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_60.88` | **60.88%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
 
 ---
@@ -138,11 +139,11 @@ All E5/E9 experiments use **identical HW noise setup** for fair comparison:
 | E5 | 68.92% | 5% matmul | None | - | - | - | Noise only (-7.96%) |
 | E5b | 70.58% | 5% matmul | 0.05→0.0005 | ✅ Yes | All RMSNorm | +1.66% | Epoch-aware AQN |
 | E5c | 70.27% | 5% matmul | 0.01→0.00001 | ✅ Yes | All RMSNorm | +1.35% | Lower σ slightly worse |
-| E9a | 70.58% | 5% matmul | 0.01→0.0001 | ✅ Yes | Layers 14-17 | +1.66% | SRDD targeted |
+| E9a | 70.58% | 5% matmul | 0.01→0.0001 | ✅ Yes | Layers 14-17 | +1.66% | RIN-targeted |
 | E9a-high-σ | 70.81% | 5% matmul | 0.05→0.0005 | ✅ Yes | Layers 14-17 | +1.89% | High σ + targeted |
 | **E9b** | **71.19%** | 5% matmul | 0.01→0.0001 | ✅ Yes | All (variable) | **+2.27%** | **BEST: per-layer multipliers** |
 
-**Key Finding**: SRDD-guided variable layer multipliers (E9b) achieves best HW noise recovery. E5 and E9 are directly comparable (same noise setup).
+**Key Finding**: RIN-variable (SRDD-guided variable layer multipliers) in E9b achieves best HW noise recovery. E5 and E9 are directly comparable (same noise setup).
 
 ### Quantization Experiments (MXFP4/NVFP4 Full Fine-Tuning)
 
@@ -178,9 +179,9 @@ All LoRA experiments use **weight injection + LoRA** setup:
 | E5b-LoRA | NVFP4 | ~15% rel | 0.01→0.0001 | ❌ No | 70.58% | 1 | +2.35% | AQN recovers some |
 | E6a | MXFP4 | ~21% rel | None | - | 65.88% | 1 | - | -5.39% from BF16 |
 | E6b | MXFP4 | ~21% rel | 0.01→0.0001 | ❌ No | 67.48% | 1 | +1.60% | AQN helps |
-| E12 | MXFP4 | ~21% rel | 0.05→0.0005 | ✅ Yes | 72.48% | 1 | +6.60% | High σ + SRDD |
+| E12 | MXFP4 | ~21% rel | 0.05→0.0005 | ✅ Yes | 72.48% | 1 | +6.60% | High σ + RIN |
 
-**Key Finding**: E12 with high sigma AQN + SRDD achieved the best LoRA+Quant result (72.48%), outperforming standard AQN (E6b: 67.48%) by +4.99%. AQN provides +1.60% benefit for E6b over E6a baseline.
+**Key Finding**: E12 with high sigma RIN (SRDD-guided) achieved the best LoRA+Quant result (72.48%), outperforming standard AQN (E6b: 67.48%) by +4.99%. AQN provides +1.60% benefit for E6b over E6a baseline.
 
 ---
 
@@ -188,11 +189,11 @@ All LoRA experiments use **weight injection + LoRA** setup:
 
 | Category | Best Experiment | Score | Epochs | Key Config |
 |----------|----------------|-------|--------|------------|
-| **HW Inject** | E9b | 71.19% | 2 | SRDD variable multipliers, σ=0.01 |
+| **HW Inject** | E9b | 71.19% | 2 | RIN-variable, σ=0.01 |
 | **Full FT** | E8a (BF16) | 74.75% | 1 | Pure BF16 DAPO |
 | **Full FT + Quant** | E3b (MXFP4+AQN) | 74.37% | 1 | MXFP4 + AQN, σ=0.01 (needs STE fix rerun) |
 | **LoRA** | E7a (BF16) | 71.27% | 1 | BF16 LoRA baseline |
-| **LoRA + Quant** | E12 (MXFP4+AQN-high) | 72.48% | 1 | MXFP4 + LoRA + AQN high σ + SRDD |
+| **LoRA + Quant** | E12 (MXFP4+RIN-high) | 72.48% | 1 | MXFP4 + LoRA + RIN high σ |
 
 ---
 
@@ -204,7 +205,7 @@ All LoRA experiments use **weight injection + LoRA** setup:
 | `sigma_end` | 0.0001 | 0.0005 | 0.0005 | Final noise magnitude |
 | `epoch_aware` | ❌ No | ✅ Yes | ✅ Yes | Per-epoch sigma scheduling |
 | `layer_types` | rmsnorm | rmsnorm | rmsnorm | Target RMSNorm layers |
-| SRDD guided | No | Yes | Optional | Layer-specific multipliers |
+| RIN (SRDD-guided) | No | Yes | Optional | Layer-specific multipliers |
 
 **Note on epoch_aware**: When `epoch_aware=False`, sigma decays linearly across all steps. When `epoch_aware=True`, each epoch has its own sigma range with exponential decay within the epoch, ensuring meaningful noise throughout training.
 
