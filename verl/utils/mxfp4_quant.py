@@ -82,7 +82,6 @@ MXFP4_TF_CONFIG = MXFP4Config(truncation_free=True)
 MXFP4_2D_CONFIG = MXFP4Config(block_h=32, block_w=32)
 
 
-@torch.no_grad()
 def mxfp4_quantize(
     x: Tensor,
     config: Optional[MXFP4Config] = None,
@@ -91,7 +90,10 @@ def mxfp4_quantize(
     block_2d: bool = False,
 ) -> Tensor:
     """
-    Apply MXFP4 fake quantization to a tensor.
+    Apply MXFP4 fake quantization to a tensor with gradient support.
+
+    Note: @torch.no_grad() decorator removed to allow gradient flow through
+    quantization for proper QAT/W4A4 training.
 
     This performs quant -> dequant in one step, simulating the
     quantization error without actually storing in 4-bit format.

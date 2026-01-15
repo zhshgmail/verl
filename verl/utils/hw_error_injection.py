@@ -933,12 +933,18 @@ class HWErrorInjector:
             if not isinstance(first_input, torch.Tensor):
                 return input
 
-            # Apply MXFP4/NVFP4 quantization to activation
+            # Apply MXFP4/NVFP4 quantization to activation with STE for gradient flow
             if self.config.error_type in ('mxfp4', 'nvfp4'):
+                # First compute quantization for statistics
                 if self.config.error_type == 'mxfp4':
-                    modified_input, quant_stats = self._apply_mxfp4(first_input)
+                    _, quant_stats = self._apply_mxfp4(first_input)
+                    quantize_fn = lambda x: self._apply_mxfp4(x)[0]
                 else:
-                    modified_input, quant_stats = self._apply_nvfp4(first_input)
+                    _, quant_stats = self._apply_nvfp4(first_input)
+                    quantize_fn = lambda x: self._apply_nvfp4(x)[0]
+
+                # Apply quantization with STE to allow gradient flow
+                modified_input = STEQuantizeActivation.apply(first_input, quantize_fn)
 
                 # Track statistics (separate key for activation)
                 act_name = f"{name}_activation"

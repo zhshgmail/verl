@@ -200,14 +200,16 @@ def _quantize_to_fp4_stochastic(x: Tensor, fp4_values: Tensor) -> Tensor:
     return quantized
 
 
-@torch.no_grad()
 def nvfp4_quantize(
     x: Tensor,
     config: Optional[NVFP4Config] = None,
     stochastic_rounding: bool = False,
 ) -> Tensor:
     """
-    Apply NVFP4 fake quantization to a tensor.
+    Apply NVFP4 fake quantization to a tensor with gradient support.
+
+    Note: @torch.no_grad() decorator removed to allow gradient flow through
+    quantization for proper QAT/W4A4 training.
 
     This performs quant -> dequant in one step, simulating the
     quantization error without actually storing in 4-bit format.
@@ -275,7 +277,6 @@ def nvfp4_quantize(
     return out.to(original_dtype)
 
 
-@torch.no_grad()
 def nvfp4_quantize_columnwise(
     x: Tensor,
     config: Optional[NVFP4Config] = None,
@@ -283,6 +284,9 @@ def nvfp4_quantize_columnwise(
 ) -> Tensor:
     """
     Apply NVFP4 fake quantization with COLUMN-WISE blocking (VECTORIZED).
+
+    Note: @torch.no_grad() decorator removed to allow gradient flow through
+    quantization for proper QAT/W4A4 training.
 
     This matches the quant_compute reference implementation (To_NVF4) which
     processes 2D tensors column by column:
