@@ -1,8 +1,10 @@
-# A100 Quick Reference for Agents
+# A100 Container and Development Workflow
 
-**Purpose**: Quick reference for accessing A100 GPU environment for testing.
+**Purpose**: Complete reference for A100 GPU environment, container access, and development workflow including git operations.
 
-## Connection
+---
+
+## 1. Connection
 
 ```bash
 # SSH to A100 server
@@ -15,7 +17,88 @@ docker exec -it verl-r3-test bash
 cd /home/z00637938/workspace/verl
 ```
 
-## Model Paths
+---
+
+## 2. Git Workflow
+
+### 2.1 Remote Repositories
+
+```bash
+# Check configured remotes
+git remote -v
+
+# Expected output:
+# origin   https://github.com/volcengine/verl.git (upstream - read-only)
+# personal https://github.com/zhshgmail/verl.git (personal fork)
+# team     https://github.com/EdisonAILab/verl.git (team fork)
+```
+
+### 2.2 Push Workflow
+
+**IMPORTANT**: Always push to `personal` and `team` remotes, NOT `origin` (upstream is read-only).
+
+```bash
+# Push to both personal and team remotes
+git push personal <branch-name>
+git push team <branch-name>
+
+# Example: Push feature branch
+git push personal feature/npu-aqn-test
+git push team feature/npu-aqn-test
+
+# Push multiple remotes at once
+git push personal <branch> && git push team <branch>
+```
+
+### 2.3 Common Git Operations
+
+```bash
+# Create and switch to new branch
+git checkout -b feature/new-experiment
+
+# Check status
+git status
+
+# Stage changes
+git add <files>
+
+# Commit with detailed message
+git commit -m "feat: add new experiment
+
+Detailed description here.
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
+
+# Push to both remotes
+git push personal feature/new-experiment
+git push team feature/new-experiment
+
+# Pull latest changes from upstream
+git fetch origin
+git merge origin/main
+
+# View recent commits
+git log --oneline -10
+```
+
+### 2.4 Branch Naming Convention
+
+```
+feature/<experiment-id>-<description>
+fix/<issue-description>
+docs/<update-description>
+refactor/<component-name>
+
+Examples:
+- feature/npu-aqn-test
+- feature/e13-w4a4-ste-fix
+- docs/update-rin-terminology
+- fix/gradient-flow-issue
+```
+
+---
+
+## 3. Model Paths
 
 ```bash
 # E8c checkpoint (Qwen2.5-1.5B-Instruct fine-tuned)
@@ -28,7 +111,9 @@ TOKENIZER_PATH="/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshot
 TEST_DATA_PATH="/data/z00637938/gsm8k/test.parquet"
 ```
 
-## Common Commands
+---
+
+## 4. Common Commands
 
 ```bash
 # Run SRDD diagnostic (validation mode with simulated fault)
@@ -49,7 +134,9 @@ python scripts/layer_sensitivity_diagnosis.py \
     --test-data $TEST_DATA_PATH
 ```
 
-## Network Proxy (REQUIRED for internet access)
+---
+
+## 5. Network Proxy (REQUIRED for internet access)
 
 ```bash
 # Source proxy settings BEFORE any network operations
@@ -70,7 +157,9 @@ source /home/z00637938/setup_proxy.sh
 pip install llmcompressor
 ```
 
-## llm-compressor (Quantization Library)
+---
+
+## 6. llm-compressor (Quantization Library)
 
 ```bash
 # Location
@@ -92,7 +181,9 @@ recipe = QuantizationModifier(targets="Linear", scheme="MXFP4", ignore=["lm_head
 oneshot(model=model, recipe=recipe)
 ```
 
-## Environment
+---
+
+## 7. Environment
 
 - GPU: A100-SXM4-80GB (8x)
 - Container: verl-r3-test
