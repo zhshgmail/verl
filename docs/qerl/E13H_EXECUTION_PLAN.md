@@ -260,54 +260,73 @@ Expected improvements:
 
 ### 8.1 Execution Timestamp
 
-**Started**: 2026-01-15 02:20:38 UTC (PID: 36247)
-**Completed**: [BLOCKED - Configuration Error]
-**Duration**: [N/A]
+**Started**: 2026-01-15 03:30:15 UTC (PID: 27860)
+**Completed**: 2026-01-15 04:32:34 UTC
+**Duration**: ~62 minutes (step 0-20)
 
 ### 8.2 Key Events
 
-- [x] E13h script execution attempted
+- [x] E13h script execution attempted (multiple tries)
 - [x] Ray cluster started (8 GPUs)
 - [x] Training initialization started
-- [❌] **BLOCKED**: PyTorch distributed initialization error
+- [x] **Logger configuration issue resolved** (changed `trainer.logger=null` to `trainer.logger='["console"]'`)
+- [x] vLLM initialized with LoRA support
+- [x] 182 HW error hooks registered for MXFP4 W4A4
+- [x] Step 0 validation completed: **7.66% accuracy**
+- [x] Step 20 validation completed: **56.41% accuracy** ✅
 
-### 8.3 Blocking Issue
+### 8.3 Configuration Issues Encountered and Resolved
 
-**Error**:
-```
-ValueError: Duplicate device type cpu in backend string: nccl.
-The custom backend string argument is invalid: cpu:gloo,cpu:nccl.
-Custom backend string must be in format:
-"<device_type1>:<backend1>,<device_type2>:<backend2>..."
-e.g. 'cpu:gloo,cuda:nccl'
-```
+**Issue 1: PyTorch Distributed Backend Error** (First attempt)
+- **Error**: `ValueError: Duplicate device type cpu in backend string`
+- **Resolution**: Container restart to kill zombie processes
 
-**Location**: `verl/workers/fsdp_workers.py:156` in `__init__`
-```python
-torch.distributed.init_process_group(...)
-```
+**Issue 2: WandB API Key Error** (Second attempt)
+- **Error**: `wandb.errors.errors.UsageError: api_key not configured`
+- **Resolution**: Changed `trainer.logger=null` to `trainer.logger='["console"]'`
 
-**Analysis**:
-- PyTorch distributed backend string contains duplicate "cpu" device type
-- Expected format: `cpu:gloo,cuda:nccl`
-- Actual format appears to be: `cpu:gloo,cpu:nccl` (invalid)
-- This error did NOT occur in E13g, suggesting environment or code change
-
-**Possible Causes**:
-1. Environment variable change (TORCH_DISTRIBUTED_BACKEND)
-2. Code change in distributed initialization logic
-3. PyTorch version difference
-4. Ray configuration difference
+**Issue 3: TypeError with logger=null** (Third attempt)
+- **Error**: `TypeError: 'NoneType' object is not iterable` at `verl/utils/tracking.py:53`
+- **Root Cause**: `trainer.logger=null` creates NoneType, but tracking.py expects string or list
+- **Resolution**: Updated script to use `trainer.logger='["console"]'` (console-only logging)
 
 ### 8.4 Results Summary
 
-**Status**: **BLOCKED** - Cannot proceed until PyTorch distributed configuration is fixed
+**Status**: **COMPLETED SUCCESSFULLY** ✅
 
-**Next Steps**:
-1. Check if E13g can still run (verify environment is same)
-2. Check `verl/workers/fsdp_workers.py` for backend string configuration
-3. Check environment variables related to PyTorch distributed
-4. Consider using E13g (NVFP4) configuration as reference
+**Step 0 Validation Results** (Baseline with MXFP4 W4A4):
+- **Accuracy**: 7.66% (`val-core/openai/gsm8k/acc/mean@1`)
+- **Reward**: 7.66% (`val-aux/openai/gsm8k/reward/mean@1`)
+- This confirms MXFP4 W4A4 quantization is active and working
+
+**Step 20 Validation Results** (After Training):
+- **Accuracy**: **56.41%** (`val-core/openai/gsm8k/acc/mean@1`) ✅
+- **Reward**: 56.41% (`val-aux/openai/gsm8k/reward/mean@1`)
+- **Training score**: 41.89% (critic/score/mean)
+- **Improvement**: 7.66% → 56.41% = **+48.75 percentage points**
+
+**Comparison with E13g (NVFP4 W4A4)**:
+| Metric | E13g (NVFP4) | E13h (MXFP4) | Difference |
+|--------|--------------|--------------|------------|
+| Step 20 accuracy | 60.88% | 56.41% | -4.47% |
+| Quantization error | ~15% rel | ~21% rel | +6% |
+| STE enabled | ✅ Yes | ✅ Yes | Same |
+| Result | PASS | PASS | Both succeed |
+
+**Configuration Confirmed**:
+- Error type: MXFP4
+- Injection point: both (W4A4 mode - quantize weights AND activations)
+- Apply during: both (rollout and training)
+- STE enabled: True ✅
+- Target modules: ['linear']
+- Exclude modules: ['lm_head', 'embed_tokens', 'lora_A', 'lora_B', 'layers.0', 'layers.27', 'base_layer']
+- 182 quantization hooks registered
+
+**Final Verdict**: ✅ **PASS**
+- Step 20 accuracy 56.41% exceeds 50% threshold
+- STE fix **works for MXFP4 W4A4**
+- Performance gap vs NVFP4 (-4.47%) is acceptable given higher MXFP4 quantization error
+- Ready to proceed with RIN experiments (E13i/j/k)
 
 ---
 

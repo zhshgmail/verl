@@ -2,13 +2,15 @@
 
 **Date**: 2026-01-14 ~ 2026-01-15
 **Goal**: Achieve ~60% accuracy on GSM8K with W4A4 (4-bit weights + 4-bit activations)
-**Status**: ALL EXPERIMENTS FAILED (~7-10% accuracy vs expected 60%)
+**Status**: ✅ **RESOLVED** - STE fix enables W4A4 training for both NVFP4 and MXFP4
 
 ## Executive Summary
 
-After 7 experiments (E13a-E13f), we have systematically ruled out multiple hypotheses but still cannot achieve the expected 60% accuracy. All experiments show ~7-10% accuracy at step 20, indicating the model is not learning effectively under W4A4 quantization.
+After 7 failed experiments (E13a-E13f, all ~7-10% accuracy), we discovered that **activation quantization requires STE (Straight-Through Estimator)** for gradient flow. With STE enabled:
+- **E13g (NVFP4 W4A4)**: 60.88% accuracy at step 20 ✅
+- **E13h (MXFP4 W4A4)**: 56.41% accuracy at step 20 ✅
 
-**Key insight from colleague**: They successfully reproduced W4A4 results using `../quant_compute` directly, suggesting our NVFP4 implementation may still have subtle differences from the reference.
+**Root cause**: Without STE, gradients cannot flow through quantized activations, preventing learning. Weight-only quantization doesn't have this issue because weights are dequantized before computing gradients.
 
 ---
 
@@ -23,10 +25,12 @@ After 7 experiments (E13a-E13f), we have systematically ruled out multiple hypot
 | E13d-nvfp4 | NVFP4 PRE-hook | PRE | row-wise | 8.49% | N/A | FAILED |
 | E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | PRE | row-wise | 7.66% | N/A | FAILED |
 | E13f-nvfp4 | NVFP4 PRE-hook + column-wise | PRE | column-wise | 8.19% | 10.39% | FAILED |
-| **E13g-nvfp4** | **NVFP4 PRE-hook + STE FIX** | PRE | column-wise | 8.11% | **60.88%** | **SUCCESS** |
+| **E13g-nvfp4** | **NVFP4 W4A4 + STE FIX** | PRE | column-wise | 8.11% | **60.88%** | **SUCCESS** ✅ |
+| **E13h-mxfp4** | **MXFP4 W4A4 + STE FIX** | PRE | column-wise | 7.66% | **56.41%** | **SUCCESS** ✅ |
 
 **Expected accuracy**: ~60% (based on QeRL colleague's reproduction)
-**E13g achieved 60.88%** - STE fix successfully resolved the W4A4 training failure! 🎉
+- **E13g (NVFP4)**: 60.88% - STE fix successfully resolved W4A4 training! 🎉
+- **E13h (MXFP4)**: 56.41% - STE fix works for MXFP4 too! Ready for RIN experiments.
 
 ---
 
@@ -237,6 +241,54 @@ After deep analysis, discovered that `STEQuantizeActivation` class was DEFINED b
 **Log Files**:
 - Original path: `/tmp/nvfp4_w4a4_ste_fix_e13g/training.log` (deleted due to /tmp cleanup)
 - Recovered to: `/home/z00637938/workspace/verl/logs/e13g_training_20260115_171158.log`
+
+---
+
+### E13h-mxfp4: MXFP4 W4A4 with STE Fix
+
+**Script**: `scripts/test_mxfp4_w4a4_ste_fix_e13h.sh`
+**Date**: 2026-01-15
+**Key Config**:
+- error_type: mxfp4
+- injection_point: both (W4A4 mode)
+- apply_during: both
+- train_batch_size: 128
+- Hook type: PRE-hook
+- **STE enabled**: use_ste=True
+- Blocking: column-wise (32-group size for MXFP4)
+
+**Purpose**: Validate that the STE fix (E13g) also works for MXFP4 quantization format. MXFP4 is the target format for Ascend NPU deployment, with higher quantization error (~21% rel) compared to NVFP4 (~15% rel).
+
+**Results**:
+- Step 0: val-core/openai/gsm8k/acc/mean@1 = **7.66%** (baseline with MXFP4 W4A4)
+- Step 20: val-core/openai/gsm8k/acc/mean@1 = **56.41%** ✓
+- Training scores progression:
+  - Step 1: 19.92% (critic/score/mean)
+  - Step 20: 41.89% (critic/score/mean)
+- **Status**: **SUCCESS** - STE fix works for MXFP4!
+
+**Comparison with E13g (NVFP4)**:
+| Metric | E13g (NVFP4) | E13h (MXFP4) | Difference |
+|--------|--------------|--------------|------------|
+| Step 20 accuracy | 60.88% | 56.41% | -4.47% |
+| Quantization error | ~15% rel | ~21% rel | +6% |
+| Step 0 baseline | 8.11% | 7.66% | -0.45% |
+| Training score @step20 | 51.76% | 41.89% | -9.87% |
+
+**Analysis**:
+- MXFP4 achieves 56.41% vs NVFP4's 60.88% = **92.7% of NVFP4 accuracy**
+- The 4.47% accuracy gap is expected given MXFP4's higher quantization error
+- Both formats successfully train with STE enabled
+- Ready to proceed with RIN (Resilient-Improving Noise) experiments on MXFP4
+
+**Configuration Issues Resolved**:
+1. **Logger configuration**: Changed `trainer.logger=null` to `trainer.logger='["console"]'` to avoid TypeError
+2. **PyTorch distributed**: Container restart resolved duplicate backend string error
+
+**Log Files**:
+- Permanent path: `/home/z00637938/workspace/verl/logs/w4a4_experiments/e13h_mxfp4_w4a4_ste_fix_56.41.log`
+
+**Next Steps**: E13i/j/k will add RIN (SRDD-guided noise injection) to MXFP4 W4A4 to further improve accuracy.
 
 ---
 

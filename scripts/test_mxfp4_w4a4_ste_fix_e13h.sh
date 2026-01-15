@@ -88,7 +88,7 @@ nohup python3 -m recipe.dapo.main_dapo \
     trainer.default_local_dir="${OUTPUT_DIR}/checkpoints" \
     trainer.project_name=w4a4_e13h_mxfp4 \
     trainer.experiment_name=mxfp4_w4a4_ste_fix_1ep \
-    trainer.logger=null \
+    trainer.logger='["console"]' \
     > "${LOG_FILE}" 2>&1 &
 
 echo "MXFP4 W4A4 with STE FIX started (PID: $!)"

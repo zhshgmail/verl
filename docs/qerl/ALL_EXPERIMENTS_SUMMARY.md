@@ -48,6 +48,7 @@
 | **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
 | **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + RIN |
 | **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_60.88` | **60.88%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
+| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_56.41` | **56.41%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
 
 ---
 
