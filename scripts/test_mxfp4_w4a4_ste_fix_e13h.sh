@@ -22,7 +22,9 @@ mkdir -p "${OUTPUT_DIR}"
 echo "E13h-mxfp4-w4a4 started in $(hostname) (PID: $$)" > /tmp/mxfp4_w4a4_e13h_status.txt
 
 # Run training with STE fix for activation quantization
-nohup env WANDB_MODE=disabled python3 -m recipe.dapo.main_dapo \
+# Set WANDB_MODE=disabled to skip WandB logging
+export WANDB_MODE=disabled
+nohup python3 -m recipe.dapo.main_dapo \
     data.train_files=/data/z00637938/gsm8k/train.parquet \
     data.val_files=/data/z00637938/gsm8k/test.parquet \
     data.train_batch_size=128 \
@@ -86,6 +88,7 @@ nohup env WANDB_MODE=disabled python3 -m recipe.dapo.main_dapo \
     trainer.default_local_dir="${OUTPUT_DIR}/checkpoints" \
     trainer.project_name=w4a4_e13h_mxfp4 \
     trainer.experiment_name=mxfp4_w4a4_ste_fix_1ep \
+    trainer.logger=null \
     > "${LOG_FILE}" 2>&1 &
 
 echo "MXFP4 W4A4 with STE FIX started (PID: $!)"
