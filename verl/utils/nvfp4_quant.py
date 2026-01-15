@@ -282,7 +282,7 @@ def nvfp4_quantize_columnwise(
     stochastic_rounding: bool = False,
 ) -> Tensor:
     """
-    Apply NVFP4 fake quantization with COLUMN-WISE blocking.
+    Apply NVFP4 fake quantization with COLUMN-WISE blocking (VECTORIZED).
 
     This matches the quant_compute reference implementation (To_NVF4) which
     processes 2D tensors column by column:
@@ -290,8 +290,7 @@ def nvfp4_quantize_columnwise(
     - Take G (16) rows at a time
     - Compute scale per block (column slice)
 
-    This is different from the default nvfp4_quantize which uses row-major
-    blocking (flatten then reshape).
+    Implementation is fully vectorized for performance.
 
     Args:
         x: Input tensor (must be 2D for column-wise blocking)
@@ -319,37 +318,44 @@ def nvfp4_quantize_columnwise(
     if pad_rows > 0:
         x = torch.cat([x, torch.zeros(pad_rows, cols, device=x.device, dtype=x.dtype)], dim=0)
 
-    num_row_blocks = x.shape[0] // G
-    result = torch.zeros_like(x)
+    padded_rows = x.shape[0]
+    num_row_blocks = padded_rows // G
 
+    # Reshape to (num_row_blocks, G, cols) then transpose to (num_row_blocks, cols, G)
+    # Each G-element block is now in the last dimension
+    x_blocked = x.view(num_row_blocks, G, cols).permute(0, 2, 1).contiguous()
+    # Shape: (num_row_blocks, cols, G)
+
+    # Flatten to (num_blocks, G) for vectorized processing
+    num_blocks = num_row_blocks * cols
+    blocks = x_blocked.view(num_blocks, G)
+
+    # Sign and magnitude
+    sign = torch.sign(blocks)
+    blocks_abs = torch.abs(blocks)
+
+    # Compute E4M3 scale per block (max over G dimension)
+    max_abs = blocks_abs.max(dim=1, keepdim=True)[0]  # (num_blocks, 1)
+    scale = _compute_e4m3_scale(max_abs)  # (num_blocks, 1)
+
+    # Scale values to [0, 6] range
+    scaled = blocks_abs / (scale + 1e-10)
+    scaled = torch.clamp(scaled, 0, 6.0)
+
+    # Quantize to nearest FP4 value
     fp4_lut = FP4_VALUES.to(x.device)
+    if config.stochastic_rounding:
+        quantized = _quantize_to_fp4_stochastic(scaled, fp4_lut)
+    else:
+        quantized = _quantize_to_fp4(scaled, fp4_lut)
 
-    # Process column by column, G rows at a time (matching quant_compute)
-    for j in range(cols):
-        for i in range(num_row_blocks):
-            # Extract block: G rows from column j
-            block = x[i*G:(i+1)*G, j]  # Shape: (G,)
+    # Dequantize
+    result_blocks = sign * quantized * scale  # (num_blocks, G)
 
-            # Sign and magnitude
-            sign = torch.sign(block)
-            block_abs = torch.abs(block)
-
-            # Compute E4M3 scale (max over block / 6)
-            max_abs = block_abs.max()
-            scale = _compute_e4m3_scale(max_abs.unsqueeze(0)).squeeze()
-
-            # Scale to FP4 range [0, 6]
-            scaled = block_abs / (scale + 1e-10)
-            scaled = torch.clamp(scaled, 0, 6.0)
-
-            # Quantize to FP4
-            if config.stochastic_rounding:
-                quantized = _quantize_to_fp4_stochastic(scaled, fp4_lut)
-            else:
-                quantized = _quantize_to_fp4(scaled, fp4_lut)
-
-            # Dequantize
-            result[i*G:(i+1)*G, j] = sign * quantized * scale
+    # Reshape back: (num_blocks, G) -> (num_row_blocks, cols, G) -> (num_row_blocks, G, cols)
+    result = result_blocks.view(num_row_blocks, cols, G).permute(0, 2, 1).contiguous()
+    # Shape: (num_row_blocks, G, cols) -> (padded_rows, cols)
+    result = result.view(padded_rows, cols)
 
     # Remove padding
     if pad_rows > 0:
