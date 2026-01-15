@@ -53,8 +53,8 @@ git push personal <branch> && git push team <branch>
 ### 2.3 Common Git Operations
 
 ```bash
-# Create and switch to new branch
-git checkout -b feature/new-experiment
+# Ensure you're on the feature branch
+git checkout feature/npu-aqn-test
 
 # Check status
 git status
@@ -63,17 +63,17 @@ git status
 git add <files>
 
 # Commit with detailed message
-git commit -m "feat: add new experiment
+git commit -m "feat: add E13h experiment
 
 Detailed description here.
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
 
-# Push to both remotes
-git push personal feature/new-experiment
-git push team feature/new-experiment
+# Push to both remotes (ALWAYS push to personal + team, NOT origin)
+git push personal feature/npu-aqn-test
+git push team feature/npu-aqn-test
 
-# Pull latest changes from upstream
+# Pull latest changes from upstream (if needed)
 git fetch origin
 git merge origin/main
 
@@ -81,19 +81,23 @@ git merge origin/main
 git log --oneline -10
 ```
 
-### 2.4 Branch Naming Convention
+### 2.4 Branch Strategy
 
-```
-feature/<experiment-id>-<description>
-fix/<issue-description>
-docs/<update-description>
-refactor/<component-name>
+**Current branch**: `feature/npu-aqn-test`
 
-Examples:
-- feature/npu-aqn-test
-- feature/e13-w4a4-ste-fix
-- docs/update-rin-terminology
-- fix/gradient-flow-issue
+**Note**: This project uses a **single long-lived feature branch** (`feature/npu-aqn-test`) for all NPU/AQN experiments and documentation. All commits for experiments E1-E13+ are made to this branch.
+
+```bash
+# Always work on the same branch
+git checkout feature/npu-aqn-test
+
+# Commit changes (experiments, docs, fixes all go to this branch)
+git add .
+git commit -m "feat: E13h MXFP4 W4A4 baseline experiment"
+
+# Push to both remotes
+git push personal feature/npu-aqn-test
+git push team feature/npu-aqn-test
 ```
 
 ---
