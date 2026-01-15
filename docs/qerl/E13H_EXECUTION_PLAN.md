@@ -292,7 +292,7 @@ Expected improvements:
 
 ### 8.4 Results Summary
 
-**Status**: **COMPLETED SUCCESSFULLY** ✅
+**Status**: **FAILED - HUNG AT STEP 27** ❌
 
 **Step 0 Validation Results** (Baseline with MXFP4 W4A4):
 - **Accuracy**: 7.66% (`val-core/openai/gsm8k/acc/mean@1`)
@@ -322,11 +322,31 @@ Expected improvements:
 - Exclude modules: ['lm_head', 'embed_tokens', 'lora_A', 'lora_B', 'layers.0', 'layers.27', 'base_layer']
 - 182 quantization hooks registered
 
-**Final Verdict**: ✅ **PASS**
-- Step 20 accuracy 56.41% exceeds 50% threshold
-- STE fix **works for MXFP4 W4A4**
-- Performance gap vs NVFP4 (-4.47%) is acceptable given higher MXFP4 quantization error
-- Ready to proceed with RIN experiments (E13i/j/k)
+**What We Know**:
+- Step 0: 7.66% (baseline with MXFP4 W4A4)
+- Step 20: 56.41% (validation checkpoint) - **This is what was initially reported**
+- Step 27: Training score 58.40% (last logged step)
+- Step 26: Training score 61.04% (peak observed)
+
+**What Went Wrong**:
+- Training hung/crashed between step 27 and step 28
+- Process became zombie (`<defunct>`)
+- Never reached final step (28 or 29)
+- Never ran final validation
+- **Root cause**: 2280 zombie processes accumulated in container from previous experiments
+
+**Final Verdict**: ❌ **INCOMPLETE - MUST RE-RUN**
+- Step 20 accuracy 56.41% shows STE fix likely works
+- Training scores (58-61%) suggest final validation would have been higher
+- But we cannot use this as baseline without proper completion
+- Container MUST be restarted before re-running
+- Need test_freq configuration that ensures final validation
+
+**Lessons Learned**:
+1. ALWAYS restart container before each experiment (see A100_CONTAINER_AND_DEV_WORKFLOW.md)
+2. NEVER assume experiment completed - verify final step
+3. Monitor for zombie processes
+4. Check logs during training, not just at the end
 
 ---
 

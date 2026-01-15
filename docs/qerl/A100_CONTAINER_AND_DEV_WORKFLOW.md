@@ -4,6 +4,93 @@
 
 ---
 
+## ⚠️ CRITICAL RULES - READ FIRST ⚠️
+
+### Rule 1: ALWAYS Restart Container Before Each Experiment
+
+**MANDATORY**: You MUST restart the container before running ANY experiment to avoid zombie process accumulation.
+
+**Why**: Ray/PyTorch distributed training creates many worker processes. If experiments fail or are interrupted, these become zombie processes (`<defunct>`) that accumulate and cause:
+- Memory leaks
+- Resource exhaustion
+- Training hangs/crashes
+- Unpredictable failures
+
+**Evidence**: After E13h, 2280 zombie processes accumulated, causing the experiment to hang at step 27.
+
+**Procedure**:
+```bash
+# On host (not in container)
+ssh root@90.90.102.18
+
+# Restart the container (kills all processes cleanly)
+docker restart verl-r3-test
+
+# Wait ~10 seconds for restart
+sleep 10
+
+# Re-enter container
+docker exec -it verl-r3-test bash
+
+# Verify no zombies
+ps aux | grep defunct | wc -l  # Should be 0 or very small
+
+# Navigate to workspace
+cd /home/z00637938/workspace/verl
+
+# Start Ray cluster (required after restart)
+ray start --head --port=6379 --num-gpus=8 --disable-usage-stats
+
+# Now run your experiment
+bash scripts/your_experiment.sh
+```
+
+**Checklist Before Every Experiment**:
+- [ ] Container restarted
+- [ ] No zombie processes (check with `ps aux | grep defunct`)
+- [ ] Ray cluster started
+- [ ] GPU memory clear (check with `nvidia-smi` if available)
+
+### Rule 2: Never Assume Experiment Completed Without Checking Final Step
+
+**Problem**: Experiments can hang/crash silently without completing all training steps.
+
+**What to Check**:
+```bash
+# Check if experiment completed (look for final validation or completion message)
+grep -E "(Final validation|Training.*complete|step:2[89])" /path/to/training.log
+
+# Check last logged step
+grep "step:" /path/to/training.log | tail -1
+
+# Check for zombie process of your experiment
+ps aux | grep <PID> | grep defunct
+```
+
+**E13h Example**:
+- Reported 56.41% at step 20 ✓
+- Training hung at step 27 ✗
+- Never reached step 28/29 or final validation ✗
+- Process became zombie ✗
+
+**Conclusion**: E13h did NOT complete successfully - need to re-run!
+
+### Rule 3: Check Logs During Training
+
+Don't wait until the end to check logs. Monitor periodically:
+```bash
+# Monitor live
+tail -f /tmp/your_experiment/training.log
+
+# Check progress every 10 minutes
+grep "Training Progress:" /tmp/your_experiment/training.log | tail -1
+
+# Check for errors
+grep -i "error\|exception\|failed" /tmp/your_experiment/training.log | tail -20
+```
+
+---
+
 ## 1. Connection
 
 ```bash

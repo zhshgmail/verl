@@ -26,11 +26,11 @@ After 7 failed experiments (E13a-E13f, all ~7-10% accuracy), we discovered that 
 | E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | PRE | row-wise | 7.66% | N/A | FAILED |
 | E13f-nvfp4 | NVFP4 PRE-hook + column-wise | PRE | column-wise | 8.19% | 10.39% | FAILED |
 | **E13g-nvfp4** | **NVFP4 W4A4 + STE FIX** | PRE | column-wise | 8.11% | **60.88%** | **SUCCESS** ✅ |
-| **E13h-mxfp4** | **MXFP4 W4A4 + STE FIX** | PRE | column-wise | 7.66% | **56.41%** | **SUCCESS** ✅ |
+| **E13h-mxfp4** | **MXFP4 W4A4 + STE FIX** | PRE | column-wise | 7.66% | **56.41%*** | **FAILED - HUNG** ❌ |
 
 **Expected accuracy**: ~60% (based on QeRL colleague's reproduction)
 - **E13g (NVFP4)**: 60.88% - STE fix successfully resolved W4A4 training! 🎉
-- **E13h (MXFP4)**: 56.41% - STE fix works for MXFP4 too! Ready for RIN experiments.
+- **E13h (MXFP4)**: *56.41% at step 20, but training hung at step 27. Never completed. 2280 zombie processes found. MUST RE-RUN with container restart.
 
 ---
 
@@ -261,34 +261,54 @@ After deep analysis, discovered that `STEQuantizeActivation` class was DEFINED b
 
 **Results**:
 - Step 0: val-core/openai/gsm8k/acc/mean@1 = **7.66%** (baseline with MXFP4 W4A4)
-- Step 20: val-core/openai/gsm8k/acc/mean@1 = **56.41%** ✓
+- Step 20: val-core/openai/gsm8k/acc/mean@1 = **56.41%** (validation checkpoint)
 - Training scores progression:
   - Step 1: 19.92% (critic/score/mean)
   - Step 20: 41.89% (critic/score/mean)
-- **Status**: **SUCCESS** - STE fix works for MXFP4!
+  - Step 26: 61.04% (critic/score/mean) - peak
+  - Step 27: 58.40% (critic/score/mean) - last logged step
+- **Status**: **FAILED - HUNG AT STEP 27** ❌
+  - Training never reached step 28/29
+  - No final validation
+  - Process became zombie
+  - Root cause: 2280 zombie processes from previous experiments
 
-**Comparison with E13g (NVFP4)**:
-| Metric | E13g (NVFP4) | E13h (MXFP4) | Difference |
-|--------|--------------|--------------|------------|
-| Step 20 accuracy | 60.88% | 56.41% | -4.47% |
+**Partial Comparison with E13g (NVFP4)** (Step 20 only):
+| Metric | E13g (NVFP4) | E13h (MXFP4)* | Difference |
+|--------|--------------|---------------|------------|
+| Step 20 accuracy | 60.88% | 56.41%* | -4.47% |
+| Training completed | ✅ Yes | ❌ No (hung at 27) | - |
+| Final validation | ✅ Yes | ❌ No | - |
 | Quantization error | ~15% rel | ~21% rel | +6% |
 | Step 0 baseline | 8.11% | 7.66% | -0.45% |
 | Training score @step20 | 51.76% | 41.89% | -9.87% |
+| Training score @step26-27 | - | 58-61% | - |
+
+*E13h data incomplete - training hung at step 27
 
 **Analysis**:
-- MXFP4 achieves 56.41% vs NVFP4's 60.88% = **92.7% of NVFP4 accuracy**
-- The 4.47% accuracy gap is expected given MXFP4's higher quantization error
-- Both formats successfully train with STE enabled
-- Ready to proceed with RIN (Resilient-Improving Noise) experiments on MXFP4
+- Step 20: MXFP4 achieved 56.41% vs NVFP4's 60.88% (-4.47%)
+- Training scores continued improving: 41.89% (step 20) → 61.04% (step 26)
+- Suggests final validation accuracy would have been higher than 56.41%
+- **Cannot use as baseline** - experiment did not complete properly
+- **Must re-run** with proper container restart procedure
 
-**Configuration Issues Resolved**:
-1. **Logger configuration**: Changed `trainer.logger=null` to `trainer.logger='["console"]'` to avoid TypeError
-2. **PyTorch distributed**: Container restart resolved duplicate backend string error
+**Configuration Issues Encountered**:
+1. **Logger configuration**: Changed `trainer.logger=null` to `trainer.logger='["console"]'` to avoid TypeError ✓
+2. **PyTorch distributed**: Container restart resolved duplicate backend string error ✓
+3. **Zombie processes**: 2280 zombies accumulated, causing hang at step 27 ❌
+
+**Critical Lesson Learned**:
+**ALWAYS restart container before EVERY experiment** to avoid zombie process accumulation. See `docs/qerl/A100_CONTAINER_AND_DEV_WORKFLOW.md` for procedure.
 
 **Log Files**:
-- Permanent path: `/home/z00637938/workspace/verl/logs/w4a4_experiments/e13h_mxfp4_w4a4_ste_fix_56.41.log`
+- Incomplete log: `/home/z00637938/workspace/verl/logs/w4a4_experiments/e13h_mxfp4_w4a4_ste_fix_56.41.log` (stopped at step 27)
 
-**Next Steps**: E13i/j/k will add RIN (SRDD-guided noise injection) to MXFP4 W4A4 to further improve accuracy.
+**Required Actions**:
+1. ✅ Document critical rules in A100_CONTAINER_AND_DEV_WORKFLOW.md
+2. ⏭️ **Re-run E13h** with container restart before execution
+3. ⏭️ Use corrected test_freq configuration for final validation
+4. ⏭️ After successful re-run, proceed with RIN experiments (E13i/j/k)
 
 ---
 
