@@ -26,26 +26,27 @@
 
 ## Complete Experiment Table
 
-| Exp ID | Type | TensorBoard Name | Score | Epochs | AQN | Epoch-Aware | SRDD | LoRA | dtype | Notes |
-|--------|------|------------------|-------|--------|-----|-------------|------|------|-------|-------|
-| **Baseline** | HW | `HW_BF16_GRPO_2ep_76.88_BASELINE` | **76.88%** | 2 | No | - | No | No | BF16 | GRPO, 2 epochs |
-| **E5** | HW | `HW_5pct_noise_only_68.92` | 68.92% | 2 | No | - | No | No | BF16 | 5% noise, no AQN |
-| **E5b** | HW | `HW_5pct_AQN_epoch-aware_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | No | No | BF16 | Epoch-aware AQN, σ=0.05→0.0005 |
-| **E5c** | HW | `HW_5pct_AQN_lower_sigma0.005_70.27` | 70.27% | 2 | Yes | ✅ Yes | No | No | BF16 | Lower sigma, σ=0.01→0.00001 |
-| **E9a** | HW | `HW_5pct_AQN_SRDD-targeted_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | targeted | No | BF16 | AQN on specific layers only |
-| **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | ✅ Yes | targeted | No | BF16 | High σ=0.05 start |
-| **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | ✅ Yes | variable | No | BF16 | **BEST HW** - per-layer multipliers |
-| **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | **74.75%** | 1 | No | - | No | No | BF16 | DAPO Full FT baseline |
-| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | 73.77% | 1 | No | - | No | No | MXFP4 | ⚠️ STE bug - needs rerun |
-| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | ⚠️ STE bug - needs rerun |
-| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | - | No | No | NVFP4 | ⚠️ STE bug - needs rerun (no 2ep) |
-| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | ⚠️ STE bug - needs rerun (no 2ep) |
-| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | - | No | Yes | BF16 | BF16 LoRA baseline |
-| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | - | No | Yes | NVFP4 | NVFP4 + LoRA |
-| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | NVFP4 + LoRA + AQN |
-| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | MXFP4 + LoRA |
-| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | MXFP4 + LoRA + AQN |
-| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN-high_72.48` | 72.48% | 1 | Yes | ✅ Yes | variable | Yes | MXFP4 | High σ + SRDD |
+| Exp ID | Type | TensorBoard Name | Score | Epochs | AQN | Epoch-Aware | SRDD | LoRA | dtype | Quant Mode | Notes |
+|--------|------|------------------|-------|--------|-----|-------------|------|------|-------|-----------|-------|
+| **Baseline** | HW | `HW_BF16_GRPO_2ep_76.88_BASELINE` | **76.88%** | 2 | No | - | No | No | BF16 | - | GRPO, 2 epochs |
+| **E5** | HW | `HW_5pct_noise_only_68.92` | 68.92% | 2 | No | - | No | No | BF16 | - | 5% noise, no AQN |
+| **E5b** | HW | `HW_5pct_AQN_epoch-aware_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Epoch-aware AQN, σ=0.05→0.0005 |
+| **E5c** | HW | `HW_5pct_AQN_lower_sigma0.005_70.27` | 70.27% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Lower sigma, σ=0.01→0.00001 |
+| **E9a** | HW | `HW_5pct_AQN_SRDD-targeted_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | targeted | No | BF16 | - | AQN on specific layers only |
+| **E9a-high-σ** | HW | `HW_5pct_AQN_SRDD-targeted_high-sigma0.05_70.81` | 70.81% | 2 | Yes | ✅ Yes | targeted | No | BF16 | - | High σ=0.05 start |
+| **E9b** | HW | `HW_5pct_AQN_SRDD-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | Yes | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
+| **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | **74.75%** | 1 | No | - | No | No | BF16 | - | DAPO Full FT baseline |
+| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | 73.77% | 1 | No | - | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
+| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
+| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | - | No | No | NVFP4 | W4A16 | ⚠️ STE bug - needs rerun |
+| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | W4A16 | ⚠️ STE bug - needs rerun |
+| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | - | No | Yes | BF16 | - | BF16 LoRA baseline |
+| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | - | No | Yes | NVFP4 | W4A16 | NVFP4 + LoRA |
+| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | NVFP4 + LoRA + AQN |
+| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA |
+| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
+| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN-high_72.48` | 72.48% | 1 | Yes | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + SRDD |
+| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_60.88` | **60.88%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
 
 ---
 
@@ -229,12 +230,11 @@ tensorboard --logdir /tmp/tb_logs --bind_all
 ### QAT/STE Implementation Bug (Affects FullFT Experiments)
 
 **Date Identified**: 2026-01-12
+**Date Fixed (W4A4)**: 2026-01-15 (commit a04eacda)
 
-**Affected Experiments**: ALL FullFT + Weight Quantization experiments:
-- E3a (1ep, 2ep) - MXFP4 + FullFT
-- E3b (1ep, 2ep) - MXFP4 + FullFT + AQN
-- E4a (1ep) - NVFP4 + FullFT
-- E4b (1ep) - NVFP4 + FullFT + AQN
+**Affected Experiments**:
+- ❌ FullFT + Weight Quantization (W4A16): E3a, E3b (1ep/2ep), E4a, E4b (1ep)
+- ✅ W4A4 + Activation Quantization: **FIXED** in E13g (commit a04eacda)
 
 **Issue**: The `hw_error_injection.py` weight quantization implementation does NOT correctly implement Straight-Through Estimator (STE) for gradient flow.
 
@@ -287,15 +287,60 @@ class STEQuantize(torch.autograd.Function):
 **Status**:
 - LoRA experiments (E6a, E6b, E12, etc.) are **NOT affected** - results are valid
 - FullFT experiments (E3b, E4b) **NEED RERUN** after fix is implemented
+- W4A4 experiments: **FIXED** in E13g - activation quantization now uses STE
 
 **Action Items**:
 1. ✅ Document this issue
-2. ⏳ Implement proper STE in `hw_error_injection.py`
-3. ⏳ Rerun ALL affected FullFT experiments:
+2. ✅ Implement proper STE for activation quantization (W4A4) - commit a04eacda
+3. ✅ Validate W4A4 with STE fix - E13g achieved 60.88% (SUCCESS)
+4. ⏳ Implement proper STE for weight quantization (W4A16 FullFT)
+5. ⏳ Rerun affected FullFT experiments after W4A16 STE fix:
    - E3a (1ep, 2ep) - MXFP4 + FullFT
    - E3b (1ep, 2ep) - MXFP4 + FullFT + AQN
    - E4a (1ep) - NVFP4 + FullFT
    - E4b (1ep) - NVFP4 + FullFT + AQN
+
+---
+
+## W4A4 Experiments (4-bit Weights + 4-bit Activations)
+
+**Date**: 2026-01-14 ~ 2026-01-15
+**Goal**: Achieve ~60% accuracy on GSM8K with W4A4 (4-bit weights + 4-bit activations)
+
+After 7 failed attempts (E13a-f), the root cause was identified and fixed in E13g.
+
+### Failed Experiments (E13a-f)
+
+| Exp ID | Config | Hook Type | Step 20 Acc | Status | Issue |
+|--------|--------|-----------|-------------|--------|-------|
+| E13a-mxfp4 | MXFP4 POST-hook | POST | 7.43% | FAILED | No STE |
+| E13a-nvfp4 | NVFP4 POST-hook | POST | 9.02% | FAILED | No STE |
+| E13b-nvfp4 | NVFP4 small batch | POST | 8.34% | FAILED | No STE |
+| E13c-nvfp4 | NVFP4 training-only | POST | 9.02% | FAILED | No STE |
+| E13d-nvfp4 | NVFP4 PRE-hook | PRE | 8.49% | FAILED | No STE |
+| E13e-nvfp4 | NVFP4 PRE-hook + exclude base | PRE | 7.66% | FAILED | No STE |
+| E13f-nvfp4 | NVFP4 PRE-hook + column-wise | PRE | 10.39% | FAILED | No STE |
+
+All experiments showed ~7-10% accuracy at step 20, far below expected 60%.
+
+### Successful Experiment (E13g)
+
+| Exp ID | Config | Step 0 | Step 20 | Improvement | Status |
+|--------|--------|--------|---------|-------------|--------|
+| **E13g-nvfp4** | NVFP4 + STE fix | 8.11% | **60.88%** | **6x better** | ✅ SUCCESS |
+
+**Root Cause**: `STEQuantizeActivation` class was defined but never used in activation quantization. This blocked gradient flow through quantized activations between layers.
+
+**The Fix** (commit a04eacda):
+1. Modified `_create_activation_quant_pre_hook` to use `STEQuantizeActivation.apply()`
+2. Removed `@torch.no_grad()` decorators from quantization functions
+3. Enabled gradient computation through quantization operations
+
+**Why This Matters for LoRA**: Even though LoRA parameters don't need gradients through frozen weights, they DO need gradients flowing backward from the loss. Without STE, `quant(y)` has no defined gradient → earlier layers receive zero/corrupted ∂L/∂y.
+
+**Key Insight**: E13g's 60.88% accuracy matches expected performance and proves the STE fix resolves the gradient flow issue.
+
+**Log**: `/home/z00637938/workspace/verl/logs/w4a4_experiments/e13g_nvfp4_w4a4_ste_fix_60.88.log`
 
 ---
 
