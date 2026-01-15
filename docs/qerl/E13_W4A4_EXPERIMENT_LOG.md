@@ -23,10 +23,10 @@ After 7 experiments (E13a-E13f), we have systematically ruled out multiple hypot
 | E13d-nvfp4 | NVFP4 PRE-hook | PRE | row-wise | 8.49% | N/A | FAILED |
 | E13e-nvfp4 | NVFP4 PRE-hook + exclude base_layer | PRE | row-wise | 7.66% | N/A | FAILED |
 | E13f-nvfp4 | NVFP4 PRE-hook + column-wise | PRE | column-wise | 8.19% | 10.39% | FAILED |
-| **E13g-nvfp4** | **NVFP4 PRE-hook + STE FIX** | PRE | column-wise | 8.11% | **PENDING** | **IN PROGRESS** |
+| **E13g-nvfp4** | **NVFP4 PRE-hook + STE FIX** | PRE | column-wise | 8.11% | **60.88%** | **SUCCESS** |
 
 **Expected accuracy**: ~60% (based on QeRL colleague's reproduction)
-**E13g Status**: Training in progress (step 3/29), showing **21-22% training scores** - already 2-3x higher than previous E13 final results!
+**E13g achieved 60.88%** - STE fix successfully resolved the W4A4 training failure! 🎉
 
 ---
 
@@ -216,21 +216,27 @@ After deep analysis, discovered that `STEQuantizeActivation` class was DEFINED b
 
 **Results**:
 - Step 0: val-core/openai/gsm8k/acc/mean@1 = **8.11%** (expected baseline)
-- Step 1 training: critic/score/mean = **21.68%** (2-3x higher than previous E13 final results!)
-- Step 2 training: critic/score/mean = **21.29%**
-- Step 3 training: critic/score/mean = **21.58%**
-- **Status**: TRAINING IN PROGRESS (3/29 steps, ETA to step 20: ~50 minutes)
+- Step 20: val-core/openai/gsm8k/acc/mean@1 = **60.88%** ✓
+- Training scores progression:
+  - Steps 1-3: 21-22%
+  - Steps 12-16: 26-32%
+  - Step 20: 51.76% (critic/score/mean)
+- **Status**: **SUCCESS** - Achieved expected 60% accuracy!
 
-**Early Observations**:
-The training scores at steps 1-3 (21-22%) are already **2-3x higher** than the FINAL step 20 results from all previous E13 experiments:
-- E13a-mxfp4: 7.43% at step 20
-- E13a-nvfp4: 9.02% at step 20
-- E13b-nvfp4: 8.34% at step 20
-- E13f-nvfp4: 10.39% at step 20
+**Comparison with Previous E13 Experiments**:
+| Experiment | Step 20 Accuracy | vs E13g |
+|------------|------------------|---------|
+| E13a-mxfp4 | 7.43% | **8.2x worse** |
+| E13a-nvfp4 | 9.02% | **6.7x worse** |
+| E13b-nvfp4 | 8.34% | **7.3x worse** |
+| E13f-nvfp4 | 10.39% | **5.9x worse** |
+| **E13g-nvfp4** | **60.88%** | **✓ SUCCESS** |
 
-This is a **very positive sign** that the STE fix is working - the model is actually learning under W4A4 quantization!
+**Key Insight**: The STE fix allows gradients to flow backward through quantized activations. Even in LoRA training, earlier layers need ∂L/∂y from upper layers, which was blocked without STE.
 
-**Next**: Wait for step 20 validation results to confirm success (~60% expected).
+**Log Files**:
+- Original path: `/tmp/nvfp4_w4a4_ste_fix_e13g/training.log` (deleted due to /tmp cleanup)
+- Recovered to: `/home/z00637938/workspace/verl/logs/e13g_training_20260115_171158.log`
 
 ---
 
@@ -330,21 +336,36 @@ For W4A4, they use input_activations.
 
 ## Conclusion
 
-**UPDATE 2026-01-15**: After 7 failed experiments (E13a-f), the root cause has been identified:
+**FINAL RESULT 2026-01-15**: ✅ **W4A4 PROBLEM SOLVED**
 
-**Root Cause**: `STEQuantizeActivation` class was DEFINED but NEVER USED in activation quantization code. This blocked gradient flow through quantized activations, preventing LoRA adapters from learning.
+After 7 failed experiments (E13a-f), the root cause was identified and fixed in E13g:
 
-**Why W4A16 succeeded but W4A4 failed**:
-- W4A16 (E3-E7): Only weights quantized, gradients flowed through FP16 activations → 60-74% accuracy
-- W4A4 (E13a-f): Activation quantization blocked gradients without STE → 7-10% accuracy
+### Root Cause
+`STEQuantizeActivation` class was DEFINED but NEVER USED in activation quantization code. This blocked gradient flow through quantized activations between layers.
 
-**E13g with STE fix** (IN PROGRESS):
-- Applied STE to activation quantization (commit a04eacda)
-- Early training scores: 21-22% at steps 1-3 (vs 7-10% final in previous E13)
-- This is **2-3x improvement**, suggesting STE fix is working
-- Waiting for step 20 validation to confirm ~60% accuracy
+### Why This Matters Even for LoRA
+While LoRA parameters don't need gradients through frozen weights, they DO need gradients flowing backward from the loss:
+- In multi-layer W4A4, each layer's output is quantized before feeding to the next layer
+- Without STE: quant(y) has no defined gradient → ∂L/∂y = 0 for earlier layers
+- With STE: gradients flow through → all layers receive proper ∂L/∂y from the loss
 
-**Previous investigation** (E13a-f):
-- All 7 W4A4 experiments failed with ~7-10% accuracy
-- Multiple hypotheses ruled out: batch size, hook type, blocking direction, etc.
-- Expected accuracy is ~60% (based on colleague's reproduction)
+### Results Summary
+
+**W4A16 (weight-only quantization)**:
+- E3-E7: 60-74% accuracy
+- Gradients flow through FP16 activations naturally
+
+**W4A4 without STE (E13a-f)**:
+- All failed: 7-10% accuracy
+- Activation quantization blocked gradient flow
+
+**W4A4 with STE (E13g)**:
+- **SUCCESS: 60.88% accuracy** ✓
+- Matches expected performance
+- Proves STE fix resolves the gradient flow issue
+
+### Key Commits
+- `a04eacda` - Applied STE to activation quantization
+- Fixed by using `STEQuantizeActivation.apply()` and removing `@torch.no_grad()`
+
+**Investigation complete. W4A4 + LoRA training now works correctly with NVFP4 quantization.**
