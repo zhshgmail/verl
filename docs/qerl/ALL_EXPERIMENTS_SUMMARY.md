@@ -25,6 +25,37 @@
 
 ---
 
+## Upcoming Work: Systematic RIN Study for MXFP4 W4A4
+
+**Status**: Planning complete, ready for execution
+**Goal**: Study SRDD-RIN correlation and optimize RIN configuration for MXFP4 W4A4
+**Baseline**: E13h (56.41%) vs E13g NVFP4 (60.88%) = -4.47% gap
+**Target**: Close gap to ≥60%
+
+**Documents**:
+- **Systematic Plan**: `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` - Detailed hypotheses, reasoning, confidence levels
+- **Live Tracker**: `RIN_EXPERIMENT_TRACKER.md` - Updated after each experiment
+- **SRDD Analysis**: `logs/srdd_analysis/mxfp4_activation_scan_20260115.json`
+
+**Planned Experiments** (E13i/j/k/l/m):
+1. E13i-baseline: Global RIN (all layers)
+2. E13i-targeted: Targeted RIN (layers 10-19 only)
+3. E13i-high: Higher sigma for high-error zones (escape hypothesis)
+4. E13i-low: Lower sigma for high-error zones (sufficient error hypothesis)
+5. E13j-variable: Error-proportional sigma scaling per layer
+6. E13k/l/m: Ablations (constant sigma, conservative decay, RMSNorm target)
+
+**Key Hypotheses**:
+- H1: Global vs Targeted RIN (which is better for W4A4?)
+- H2: Sigma magnitude for high deadzone layers (more noise to escape? or less because already noisy?)
+- H3: Variable vs constant sigma (proportional scaling worth complexity?)
+
+**Methodology**: Execute by confidence order → Analyze results → Reflect on hypotheses → Re-prioritize → Continue
+
+See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
+
+---
+
 ## Complete Experiment Table
 
 | Exp ID | Type | TensorBoard Name | Score | Epochs | AQN/RIN | Epoch-Aware | RIN Mode | LoRA | dtype | Quant Mode | Notes |
