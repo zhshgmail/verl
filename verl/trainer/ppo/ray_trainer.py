@@ -773,7 +773,9 @@ class RayPPOTrainer:
 
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            # HOTFIX: Skip tokenizer decode to avoid hang (tokenizer.decode causes deadlock at end of training)
+            # output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = ["<decode_skipped>" for _ in output_ids]  # Temporary - only affects logging, not accuracy
             sample_outputs.extend(output_texts)
 
             test_batch = test_batch.union(test_output_gen_batch)
