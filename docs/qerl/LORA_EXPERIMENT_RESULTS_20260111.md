@@ -381,7 +381,7 @@ docs/qerl/srdd_results/
 
 ---
 
-## 9. SRDD-Guided AQN: Proposed Experiments
+## 9. RIN (Resilient-Improving Noise): Proposed Experiments
 
 ### 9.1 SRDD Layer Analysis
 
@@ -396,9 +396,9 @@ From our scans, MXFP4 quantization error varies by layer:
 
 ### 9.2 Proposed Experiment Ideas
 
-**Idea 1: SRDD-Guided Variable AQN Sigma**
+**Idea 1: RIN-variable (Variable Sigma Based on SRDD)**
 
-Instead of uniform sigma across all layers, scale AQN noise by SRDD error:
+Instead of uniform sigma across all layers, scale RIN noise by SRDD error:
 
 ```python
 # Proposed: Layer-specific sigma based on SRDD relative error
@@ -411,9 +411,9 @@ layer_sigma = {
 }
 ```
 
-**Idea 2: Targeted AQN (High-Error Layers Only)**
+**Idea 2: RIN-targeted (High-Error Layers Only)**
 
-Only inject AQN to layers with >40% relative error:
+Only inject RIN to layers with >40% relative error:
 
 ```yaml
 noise_injection:
@@ -437,14 +437,14 @@ Current experiments use QeRL values. Compare with even lower sigma:
 | Approach | Speed | Accuracy | Rationale |
 |----------|-------|----------|-----------|
 | Global AQN (current) | 1x | Baseline | Standard approach |
-| Targeted AQN (4 layers) | ~1.7x | ≥Baseline | Focus on problematic layers |
-| Variable sigma | 1x | >Baseline | More noise where needed |
+| RIN-targeted (4 layers) | ~1.7x | ≥Baseline | Focus on problematic layers |
+| RIN-variable | 1x | >Baseline | More noise where needed |
 
 ### 9.4 Implementation Notes
 
 From `SRDD_GUIDED_AQN_EXPERIMENT_DESIGN.md` PoC results:
 - SRDD detection: 100% accurate for deadzone ≥0.3%
-- Targeted AQN (1 layer): **71% faster** than global AQN (8.9 vs 5.2 it/s)
+- RIN-targeted (1 layer): **71% faster** than global AQN (8.9 vs 5.2 it/s)
 - Training loss: Similar across all methods (needs RL eval for true comparison)
 
 ### 9.5 Critical Finding: NVFP4 vs MXFP4 Error Analysis
@@ -468,8 +468,8 @@ Direct measurement on Qwen2.5-1.5B-Instruct weights (196 layers):
 ### 9.6 Next Steps
 
 1. **E8a**: MXFP4 + LoRA + Lower AQN (σ=0.005→0.00005)
-2. **E8b**: MXFP4 + LoRA + Targeted AQN (layers 14-17 only)
-3. **E8c**: MXFP4 + LoRA + Variable sigma (SRDD-guided)
+2. **E8b**: MXFP4 + LoRA + RIN-targeted (layers 14-17 only)
+3. **E8c**: MXFP4 + LoRA + RIN-variable
 4. **Bug fix**: Review nvfp4_quant.py implementation
 
 ---

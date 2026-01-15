@@ -1,19 +1,19 @@
-# W4A4 MXFP4 + LoRA + AQN Experiment Plan
+# W4A4 MXFP4 + LoRA + AQN/RIN Experiment Plan
 
 **Date**: 2026-01-14
-**Status**: In Progress (E13a running with fixed implementation)
+**Status**: Completed - E13g/E13h test W4A4 with STE fix
 **Branch**: `feature/npu-aqn-test`
-**Critical Fix**: Commit `df828442` - W4A4 activation quantization must use POST-hook
+**Critical Fix**: Commit `a04eacda` - W4A4 activation quantization must use STE
 
 ---
 
 ## Executive Summary
 
-This experiment tests **W4A4 MXFP4 quantization** (both weights AND activations quantized to 4-bit) combined with **16-bit LoRA adapters** and **SRDD-guided AQN** for training robustness.
+This experiment tests **W4A4 MXFP4 quantization** (both weights AND activations quantized to 4-bit) combined with **16-bit LoRA adapters** and optional **AQN** (static noise) or **RIN** (SRDD-guided noise) for training robustness.
 
 ### Key Question
 
-**Will SRDD-guided AQN provide larger gains with W4A4 compared to W4A16?**
+**Will RIN (SRDD-guided noise) provide larger gains with W4A4 compared to W4A16?**
 
 ### Hypothesis
 
@@ -22,7 +22,7 @@ W4A4 creates **non-uniform error distribution** across layers because:
 2. **LoRA provides non-uniform compensation** (different ranks per layer)
 3. **Combined effect**: Middle layers (L6-L15) likely to be error-dense
 
-Expected: **SRDD-guided AQN gains 2-3%** vs global AQN.
+Expected: **RIN (SRDD-guided) gains 2-3%** vs global AQN.
 
 ---
 
@@ -35,9 +35,9 @@ Expected: **SRDD-guided AQN gains 2-3%** vs global AQN.
 | E7a | BF16 + LoRA | 71.27% | BASELINE |
 | E6a | W4A16 MXFP4 + LoRA | 65.88% | -5.39% |
 | E6b | W4A16 MXFP4 + LoRA + AQN | 67.48% | -3.79% |
-| E12 | W4A16 MXFP4 + LoRA + SRDD-AQN | 72.48% | +1.21% |
+| E12 | W4A16 MXFP4 + LoRA + RIN | 72.48% | +1.21% |
 
-**Key insight**: SRDD-guided AQN (E12) achieved **+5.00%** over uniform AQN (E6b).
+**Key insight**: RIN (SRDD-guided, E12) achieved **+5.00%** over static AQN (E6b).
 
 ### 1.2 Why W4A4?
 
@@ -54,12 +54,14 @@ Expected: **SRDD-guided AQN gains 2-3%** vs global AQN.
 
 ### 2.1 Experiment Matrix
 
-| ID | Config | AQN Strategy | Purpose |
-|----|--------|--------------|---------|
-| **E13a** | W4A4 + LoRA (no AQN) | None | Baseline degradation |
-| **E13b** | W4A4 + LoRA + Global AQN | All 28 layers, σ=0.01→0.00001 | Standard AQN |
-| **E13c** | W4A4 + LoRA + SRDD-targeted AQN | Target layers only, σ=0.01→0.00001 | Binary targeting |
-| **E13d** | W4A4 + LoRA + SRDD-variable AQN | Variable σ per layer | Best expected |
+| ID | Config | Noise Strategy | Purpose |
+|----|--------|----------------|---------|
+| **E13a** | W4A4 + LoRA (no noise) | None | Baseline degradation |
+| **E13b** | W4A4 + LoRA + Global AQN | All 28 layers, σ=0.01→0.00001 | Static AQN (no SRDD) |
+| **E13c** | W4A4 + LoRA + RIN-targeted | Target layers only, σ=0.01→0.00001 | RIN binary targeting |
+| **E13d** | W4A4 + LoRA + RIN-variable | Variable σ per layer | RIN best expected |
+| **E13g** | W4A4 NVFP4 + STE fix | None | **60.88%** ✓ SUCCESS |
+| **E13h** | W4A4 MXFP4 + STE fix | None | Baseline (running) |
 
 ### 2.2 Training Configuration
 
@@ -110,7 +112,7 @@ noise_injection:
   num_stages: 10
   layer_types: ["rmsnorm"]
 
-# E13c: SRDD-targeted AQN
+# E13c: RIN-targeted (SRDD-guided binary targeting)
 noise_injection:
   enabled: true
   sigma_start: 0.01
@@ -123,7 +125,7 @@ noise_injection:
       6: 1.0, 7: 1.0, 8: 1.0, 9: 1.0, 10: 1.0,
       11: 1.0, 12: 1.0, 13: 1.0, 14: 1.0, 15: 1.0
 
-# E13d: SRDD-variable AQN
+# E13d: RIN-variable (SRDD-guided variable multipliers)
 noise_injection:
   enabled: true
   sigma_start: 0.01
@@ -160,8 +162,8 @@ L26-L27 (output)      21%              20%              41%        MODERATE
 |------------|-----------|-----------|
 | E13a (no AQN) | 60-62% | W4A4 more severe than W4A16 (65.88% - 4%) |
 | E13b (global AQN) | 63-65% | AQN helps, similar to E6b gain (+1.6%) |
-| E13c (targeted AQN) | 64-66% | Target error-dense layers (+1-2% vs global) |
-| E13d (variable AQN) | 65-67% | Best - scale sigma by error level |
+| E13c (RIN-targeted) | 64-66% | Target error-dense layers (+1-2% vs global) |
+| E13d (RIN-variable) | 65-67% | Best - scale sigma by error level |
 
 **Target**: E13d achieves **65-67%** (within 5% of BF16 baseline 71.27%)
 
@@ -282,10 +284,12 @@ The bug only affects `injection_point='both'` (W4A4 mode).
 
 ### 4.3 Scripts to Create
 
-1. **`scripts/test_mxfp4_w4a4_lora_baseline.sh`** - E13a (no AQN)
-2. **`scripts/test_mxfp4_w4a4_lora_global_aqn.sh`** - E13b (global AQN)
-3. **`scripts/test_mxfp4_w4a4_lora_srdd_targeted.sh`** - E13c (targeted)
-4. **`scripts/test_mxfp4_w4a4_lora_srdd_variable.sh`** - E13d (variable)
+1. **`scripts/test_mxfp4_w4a4_lora_baseline.sh`** - E13a (no noise) - FAILED
+2. **`scripts/test_mxfp4_w4a4_lora_global_aqn.sh`** - E13b (static AQN)
+3. **`scripts/test_mxfp4_w4a4_lora_rin_targeted.sh`** - E13c (RIN-targeted)
+4. **`scripts/test_mxfp4_w4a4_lora_rin_variable.sh`** - E13d (RIN-variable)
+5. **`scripts/test_nvfp4_w4a4_ste_fix_e13g.sh`** - E13g (NVFP4 + STE) - **SUCCESS 60.88%**
+6. **`scripts/test_mxfp4_w4a4_ste_fix_e13h.sh`** - E13h (MXFP4 + STE) - Ready to run
 
 ### 4.4 SRDD Scan (Optional Pre-step)
 
@@ -309,12 +313,12 @@ python scripts/srdd_quant_scanner.py \
 ### Phase 2: Script Creation (10 min)
 - [ ] Create E13a baseline script
 - [ ] Create E13b global AQN script
-- [ ] Create E13c/d SRDD-guided scripts
+- [ ] Create E13c/d RIN-guided scripts
 
 ### Phase 3: Execute Experiments (2-3 hours)
 - [ ] Run E13a (no AQN) - 1 hour
 - [ ] Run E13b (global AQN) - 1 hour
-- [ ] Run E13c or E13d (SRDD-guided) - 1 hour
+- [ ] Run E13c or E13d (RIN-guided) - 1 hour
 
 ### Phase 4: Analysis (30 min)
 - [ ] Compare results
@@ -330,7 +334,7 @@ python scripts/srdd_quant_scanner.py \
 | **E13a runs successfully** | Completes without crash | Training log |
 | **W4A4 error higher than W4A16** | E13a < 65.88% (E6a) | Final accuracy |
 | **Global AQN helps** | E13b > E13a by 2-4% | Accuracy gain |
-| **SRDD-guided AQN helps** | E13d > E13b by 1-3% | Accuracy gain |
+| **RIN (SRDD-guided) helps** | E13d > E13b by 1-3% | Accuracy gain |
 | **Final gap to baseline** | E13d within 5% of 71.27% | 66-67% target |
 
 ---
@@ -366,7 +370,7 @@ After this experiment, we can answer:
 
 1. **Is W4A4 viable for training?** (E13a result)
 2. **Does AQN help with extreme quantization?** (E13b vs E13a)
-3. **Is SRDD-guided AQN worth the complexity?** (E13d vs E13b)
+3. **Is RIN (SRDD-guided) worth the complexity?** (E13d vs E13b)
 4. **What's the gap to full precision?** (E13d vs E7a 71.27%)
 
 ---
@@ -375,4 +379,4 @@ After this experiment, we can answer:
 
 - Previous W4A16 results: `docs/qerl/LORA_EXPERIMENT_RESULTS_20260111.md`
 - SRDD methodology: `docs/qerl/SRDD_TECH_REPORT_CN.md`
-- SRDD-guided AQN: `docs/qerl/SRDD_GUIDED_AQN_PROPOSAL_CN.md`
+- RIN (SRDD-guided noise): `docs/qerl/SRDD_GUIDED_AQN_PROPOSAL_CN.md`

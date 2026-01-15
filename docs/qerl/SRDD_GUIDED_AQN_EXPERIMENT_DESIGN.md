@@ -1,4 +1,4 @@
-# SRDD引导的AQN训练实验设计
+# RIN (Resilient-Improving Noise) 训练实验设计
 
 **版本**: 1.1
 **日期**: 2026-01-07
@@ -8,7 +8,7 @@
 
 ## 1. 实验目标
 
-验证 **SRDD定位 + 针对性AQN** 是否优于 **全局AQN** 在特定层存在硬件故障时的表现。
+验证 **SRDD定位 + RIN-targeted** 是否优于 **全局AQN** 在特定层存在硬件故障时的表现。
 
 ### 核心假设
 
@@ -20,9 +20,9 @@
 
 ### 实验对比
 
-| 模型 | 故障注入 | AQN策略 | 预期结果 |
+| 模型 | 故障注入 | 噪声策略 | 预期结果 |
 |-----|---------|--------|---------|
-| Model A | Layer 15 deadzone | SRDD定位 → Layer 15 AQN | 更高OOD分数 |
+| Model A | Layer 15 deadzone | SRDD定位 → Layer 15 RIN | 更高OOD分数 |
 | Model B | Layer 15 deadzone | 全局AQN (所有层) | 基线OOD分数 |
 
 ---
@@ -330,10 +330,10 @@ class DeadzoneInjector:
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│  Phase 2: Model A 训练 (SRDD引导AQN)                        │
+│  Phase 2: Model A 训练 (RIN-targeted)                       │
 ├─────────────────────────────────────────────────────────────┤
 │  1. 在 vLLM + Training 中注入 Layer 15 死区                 │
-│  2. 仅在 Layer 15 注入 AQN 噪声                              │
+│  2. 仅在 Layer 15 注入 RIN 噪声                              │
 │     - gamma = 0.05 (5% 相对噪声)                            │
 │     - schedule: epoch-aware decay                           │
 │  3. 训练 2 epochs                                           │
@@ -357,18 +357,18 @@ class DeadzoneInjector:
 │  Phase 4: 对比分析                                          │
 ├─────────────────────────────────────────────────────────────┤
 │  对比: OOD_A vs OOD_B                                       │
-│  预期: OOD_A > OOD_B (SRDD引导更有效)                        │
+│  预期: OOD_A > OOD_B (RIN更有效)                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 4.2 控制变量
 
-| 变量 | Model A (SRDD引导) | Model B (全局AQN) | 说明 |
+| 变量 | Model A (RIN) | Model B (全局AQN) | 说明 |
 |-----|-------------------|------------------|------|
 | 基础模型 | Qwen2.5-1.5B | Qwen2.5-1.5B | 相同 |
 | 死区故障 | Layer 15, θ=0.01 | Layer 15, θ=0.01 | 相同 |
-| AQN σ | 0.05 (5%) | 0.05 (5%) | 相同 |
-| AQN层 | **仅 Layer 15** | **所有28层** | **关键差异** |
+| 噪声σ | 0.05 (5%) | 0.05 (5%) | 相同 |
+| 噪声层 | **仅 Layer 15** | **所有28层** | **关键差异** |
 | 训练轮数 | 2 epochs | 2 epochs | 相同 |
 | 数据集 | GSM8K | GSM8K | 相同 |
 
@@ -486,7 +486,7 @@ class DeadzoneMatMul(torch.autograd.Function):
 目标: 运行完整的对比实验
 
 ```bash
-# Model A: SRDD引导AQN
+# Model A: RIN-targeted
 python train_ppo.py \
     --model_path /data/.../Qwen2.5-1.5B-Instruct \
     --deadzone_enabled true \
@@ -530,9 +530,9 @@ python train_ppo.py \
 
 ### 7.2 实验结论
 
-- [ ] SRDD引导AQN的OOD准确率 > 全局AQN的OOD准确率
+- [ ] RIN的OOD准确率 > 全局AQN的OOD准确率
 - [ ] 量化改进幅度 (预期: +1~3%)
-- [ ] 计算效率提升 (预期: -50%+ AQN开销)
+- [ ] 计算效率提升 (预期: -50%+ 计算开销)
 
 ---
 
@@ -569,8 +569,8 @@ deadzone:
 
 aqn:
   enabled: true
-  target_layers: [15]  # SRDD引导
-  # target_layers: "all"  # 全局
+  target_layers: [15]  # RIN (SRDD-guided)
+  # target_layers: "all"  # 全局AQN
   sigma: 0.05
   schedule: "epoch_aware"
 ```
@@ -625,15 +625,15 @@ TEST 3: AQN + Deadzone Interaction
 
 ### D.4 训练对比结果 (3 epochs, 100 samples)
 
-| 模型 | AQN策略 | Eval Loss | 训练速度 |
+| 模型 | 噪声策略 | Eval Loss | 训练速度 |
 |-----|--------|-----------|---------|
-| Model A | 针对性 (L15) | 8.0510 | 8.9 it/s |
-| Model B | 全局 (28层) | 8.0427 | 5.2 it/s |
-| Model C | 无AQN | 8.0104 | 11.5 it/s |
+| Model A | RIN-targeted (L15) | 8.0510 | 8.9 it/s |
+| Model B | 全局AQN (28层) | 8.0427 | 5.2 it/s |
+| Model C | 无噪声 | 8.0104 | 11.5 it/s |
 
 **关键发现**:
 1. **SRDD检测**: 100%准确
-2. **速度优势**: 针对性AQN比全局AQN快**71%** (8.9/5.2)
+2. **速度优势**: RIN-targeted比全局AQN快**71%** (8.9/5.2)
 3. **Loss差异**: 三种方法loss相近 (~8.0)
 
 ### D.5 分析与结论
@@ -647,7 +647,7 @@ TEST 3: AQN + Deadzone Interaction
 **PoC验证的内容**:
 - ✅ SRDD准确检测MXFP4死区
 - ✅ 死区注入在inference和training中工作
-- ✅ 针对性AQN显著降低计算开销
+- ✅ RIN-targeted显著降低计算开销
 - ⏳ 需要完整RL训练验证效果差异
 
 ### D.6 verl集成已完成 (2026-01-07)

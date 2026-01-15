@@ -18,7 +18,7 @@ This document consolidates findings from two parallel research tracks on using *
 
 | Scenario | AQN Effective? | Best Config | Notes |
 |----------|----------------|-------------|-------|
-| HW Error (5% matmul) | **Yes (+2.42%)** | Epoch-Aware, σ=0.05→0.0005 | Targeted AQN (SRDD-guided) +1.06% better |
+| HW Error (5% matmul) | **Yes (+2.42%)** | Epoch-Aware, σ=0.05→0.0005 | RIN-targeted +1.06% better |
 | MXFP4 Quant (21% error) | **Yes (+0.60%)** | DAPO + RMSNorm AQN | DAPO critical for stability |
 | NVFP4 Quant (1% error) | **Minimal (+0.08%)** | Optional | Low error doesn't need AQN |
 | LoRA + NVFP4 | **Yes (+2.27%)** | RMSNorm AQN | Matches QeRL findings |
@@ -40,8 +40,8 @@ Simulate hardware heterogeneity (GPU vs NPU, different chip batches) via operato
 | E5a | 5% matmul | Global Decay | 0.05→0.0005 | 68.76% | -8.12% |
 | **E5b** | 5% matmul | **Epoch-Aware** | 0.05→0.0005 | **70.58%** | **-6.30%** |
 | E5c | 5% matmul | Epoch-Aware | 0.01→0.00001 | 67.48% | -9.40% |
-| **E9a** | 5% matmul | **SRDD-Targeted** | 0.01→0.00001 | **68.54%** | -8.34% |
-| E9b | 5% matmul | SRDD-Variable | 0.01→0.00001 | Running... | TBD |
+| **E9a** | 5% matmul | **RIN-targeted** | 0.01→0.00001 | **68.54%** | -8.34% |
+| E9b | 5% matmul | RIN-variable | 0.01→0.00001 | Running... | TBD |
 
 ### 1.3 Key Findings - HW Error
 
@@ -51,20 +51,20 @@ Simulate hardware heterogeneity (GPU vs NPU, different chip batches) via operato
    - Global Decay: σ approaches 0 in epoch 2, ineffective
    - Epoch-Aware: σ resets each epoch, maintains noise exposure
 
-3. **SRDD-guided targeting outperforms uniform lower sigma**:
+3. **RIN targeting outperforms uniform lower sigma**:
    - E5c (uniform σ=0.01→0.00001): 67.48%
-   - E9a (targeted layers 14-17 only): **68.54%** (+1.06%)
+   - E9a (RIN-targeted layers 14-17 only): **68.54%** (+1.06%)
    - Targeting high-error layers identified by SRDD is more effective
 
 4. **Optimal sigma depends on use case**:
    - High sigma (0.05→0.0005): Better for general HW error simulation
    - Lower sigma (0.01→0.00001): Better with layer targeting
 
-### 1.4 SRDD-Guided AQN Innovation
+### 1.4 RIN (Resilient-Improving Noise) Innovation
 
 **Problem**: Uniform AQN applies same noise to all layers, but quantization error varies by layer.
 
-**Solution**: Use SRDD (Static Relative Deadzone Detection) to identify high-error layers and apply targeted/variable noise.
+**Solution**: Use SRDD (Static Relative Deadzone Detection) to identify high-error layers and apply RIN-targeted/RIN-variable noise.
 
 **Implementation**:
 ```python
@@ -78,7 +78,7 @@ layer_sigma_config = {
 }
 ```
 
-**Result**: E9a with targeted AQN (4 layers) achieved 68.54%, outperforming E5c with uniform AQN (all layers) at 67.48%.
+**Result**: E9a with RIN-targeted (4 layers) achieved 68.54%, outperforming E5c with uniform AQN (all layers) at 67.48%.
 
 ---
 
@@ -155,14 +155,14 @@ Train models with fake quantization to prepare for low-precision deployment. Two
 
 ### 3.3 Layer Targeting Strategy (Expert-Revised)
 
-**Key Finding (Updated with E9b)**: SRDD-variable sigma **outperforms** uniform high sigma!
+**Key Finding (Updated with E9b)**: RIN-variable sigma **outperforms** uniform high sigma!
 - E5b (high σ=0.05, all layers): 70.58%
-- E9a (low σ=0.01, targeted): 68.54% (-2.04%)
-- **E9b (variable σ, SRDD-weighted): 71.19% (+0.61% vs E5b!)**
+- E9a (low σ=0.01, RIN-targeted): 68.54% (-2.04%)
+- **E9b (RIN-variable, SRDD-weighted): 71.19% (+0.61% vs E5b!)**
 
 **Recommended Hierarchy (Revised)**:
 
-1. **Production (Tier 1)**: SRDD-Variable sigma (Best)
+1. **Production (Tier 1)**: RIN-variable (Best)
    - Apply SRDD-weighted multipliers (1.5x high-error, 1.2x medium)
    - **Best accuracy: E9b = 71.19%**
 
@@ -177,7 +177,7 @@ Train models with fake quantization to prepare for low-precision deployment. Two
    - Use when compute budget constrained
    - 71% faster than all-layer AQN
 
-3. **Research (Tier 3)**: SRDD-Guided Targeting
+3. **Research (Tier 3)**: RIN-targeted
    - Only when heterogeneous hardware errors
    - Requires SRDD profiling overhead
 
@@ -250,7 +250,7 @@ Evidence: "DAPO is critical for stable training: Without DAPO, reward hacking ca
 - Need 3-5 replications for publication-level confidence
 
 #### RL Expert's Key Recommendations:
-1. **SRDD-guided targeting (E9a) is a novel contribution** - publishable if validated
+1. **RIN targeting (E9a) is a novel contribution** - publishable if validated
 2. **Report +2.42% as "~+2%" with error bars** if possible
 3. **Run 3-5 replications** of key experiments for statistical rigor
 
@@ -338,15 +338,15 @@ Backward: ∂L/∂x ← W_frozen^T (quantized!) ← ∂L/∂y
 | 2026-01-11 | E5b-LoRA | NVFP4 + LoRA + AQN | **66.11%** |
 | 2026-01-11 | E7a | BF16 + LoRA (baseline) | 71.27% |
 | 2026-01-12 | E5c | Lower AQN (σ=0.01→0.00001) | 67.48% |
-| 2026-01-12 | E9a | SRDD-Targeted AQN (low σ) | **68.54%** |
-| 2026-01-12 | **E9b** | **SRDD-Variable sigma** | **71.19%** |
-| 2026-01-12 | **E12** | **MXFP4 + LoRA + high-σ AQN** | **72.48%** (EXCEEDS BF16!) |
+| 2026-01-12 | E9a | RIN-targeted (low σ) | **68.54%** |
+| 2026-01-12 | **E9b** | **RIN-variable** | **71.19%** |
+| 2026-01-12 | **E12** | **MXFP4 + LoRA + high-σ RIN** | **72.48%** (EXCEEDS BF16!) |
 
 ### 5.2 Running Experiments
 
 | Date | ID | Description | Status |
 |------|-----|-------------|--------|
-| 2026-01-12 | E9a-high-σ | SRDD-Targeted + high σ | Queued |
+| 2026-01-12 | E9a-high-σ | RIN-targeted + high σ | Queued |
 
 ---
 
@@ -365,12 +365,12 @@ Backward: ∂L/∂x ← W_frozen^T (quantized!) ← ∂L/∂y
 | ID | Experiment | Purpose | Priority | Status |
 |----|------------|---------|----------|--------|
 | **E12** | MXFP4 LoRA AQN | Confirm LoRA benefit transfers to NPU target | P0 | ✅ **DONE: 72.48%** |
-| **E9a-high-σ** | SRDD-Targeted + high σ | Isolate layer targeting effect | P0 | Queued |
+| **E9a-high-σ** | RIN-targeted + high σ | Isolate layer targeting effect | P0 | Queued |
 | **E11** | NVFP4 LoRA AQN, 10 epochs | Test long-term AQN benefit saturation | P0 | - |
 | **E10c** | NVFP4 LoRA AQN, rank ablation (16/32/64/128) | Validate gradient bottleneck hypothesis | P0 | - |
 | **Replication** | 3-5 runs of E5, E5b, E9a | Statistical validation | P0 | - |
 | **E10a** | NVFP4 Full FT, remove KL penalty | Test exploration hypothesis | P1 | - |
-| **E13** | SRDD-guided on NPU hardware | Validate GPU findings transfer | P1 | - |
+| **E13** | RIN-guided on NPU hardware | Validate GPU findings transfer | P1 | - |
 
 ---
 
