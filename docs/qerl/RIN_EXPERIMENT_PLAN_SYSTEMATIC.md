@@ -1,22 +1,24 @@
-# AQN (Adaptive Quantization Noise) Experiment Plan: Systematic Study
+# RIN (Resilient-Improving Noise) Experiment Plan: Systematic Study
 
 **Date**: 2026-01-15 (Updated: 2026-01-16)
-**Terminology**: AQN (not RIN) - matches QeRL and standard literature
-**Goal**: Study correlation between SRDD quantization error analysis and AQN configuration for MXFP4 W4A4
+**Terminology**:
+- **AQN (Adaptive Quantization Noise)**: Global uniform noise (what QeRL uses)
+- **RIN (Resilient-Improving Noise)**: SRDD-guided AQN with layer-specific sigma
+**Goal**: Study correlation between SRDD quantization error analysis and RIN configuration for MXFP4 W4A4
 **Baseline**: E13h MXFP4 W4A4 + STE = **71.42%** (step 29 final)
 **Context**: MXFP4 W4A4 now OUTPERFORMS NVFP4 W4A4 (70.89%) by +0.53%
-**Target**: Explore if AQN can improve beyond 71.42% baseline toward BF16 Full FT (74.75%)
+**Target**: First validate basic AQN works, then explore if RIN can improve beyond 71.42% baseline
 
 ---
 
 ## ⚠️ CRITICAL FINDING: E13i-baseline FAILED (2026-01-16)
 
-**Experiment**: E13i-baseline (Global AQN, σ=0.05→0.0005)
+**Experiment**: E13i-baseline (Global AQN, σ=0.05→0.0005, uniform across layers)
 **Result**: ❌ **FAILED at step 3** - Generation quality collapse
 **Error**: `num_gen_batches=5 >= max_num_gen_batches=5` (filter rejection loop)
 
 **Root Cause Analysis** (UPDATED - Implementation Bugs Identified):
-- Global AQN activated at step 3 with σ=0.05
+- Global AQN (uniform noise) activated at step 3 with σ=0.05
 - ~~Compounded precision loss causing quality degradation~~ **WRONG HYPOTHESIS**
 - **ACTUAL CAUSE**: Two implementation bugs (see Bug Investigation section below)
   1. verl's filter_groups mechanism incompatible with noise injection
@@ -29,12 +31,12 @@
 
 **Evidence**:
 - Steps 0-2: Training normal (σ=0.0)
-- Step 3: AQN activated → immediate collapse
+- Step 3: Global AQN activated → immediate collapse
 - Log archived: `e13i_baseline_global_aqn_FAILED_step3_sigma0.05.log`
 
 ---
 
-## ⚠️ CRITICAL CONCERN: SRDD-AQN Correlation Validity (2026-01-16)
+## ⚠️ CRITICAL CONCERN: SRDD-RIN Correlation Validity (2026-01-16)
 
 ### The Fundamental Problem
 
@@ -105,7 +107,7 @@ SRDD provides spatial error distribution but cannot capture:
 
 ### E13i-v2 Result: FAILED at Step 4 (σ=0.01)
 
-**Experiment**: E13i-v2 with σ=0.01 global RIN (5x lower than E13i-baseline)
+**Experiment**: E13i-v2 with σ=0.01 global AQN (5x lower than E13i-baseline, still uniform)
 **Result**: ❌ **FAILED at step 4** - Filter rejection loop, generation quality collapse
 
 **Progression**:
@@ -136,9 +138,9 @@ SRDD provides spatial error distribution but cannot capture:
 
 ---
 
-## ⚠️ CRITICAL CONCLUSION: W4A4 + RIN Fundamental Incompatibility?
+## ⚠️ CRITICAL CONCLUSION: W4A4 + AQN Fundamental Incompatibility? (INVALIDATED)
 
-### The Paradox
+### The Paradox (Original Hypothesis - WRONG)
 
 **Observation**: Even minimal training noise (σ=0.01) fails within 3-4 steps for W4A4.
 
@@ -176,24 +178,24 @@ SRDD provides spatial error distribution but cannot capture:
 - **Cons**: If fails at step 5-6, confirms asymptotic behavior
 - **Cost**: ~90 minutes, another failed experiment
 
-**Option B: Pivot away from RIN for W4A4**
+**Option B: Pivot away from AQN for W4A4**
 - **Accept**: W4A4 too constrained for robust training methods
 - **Focus**: Better quantization formats (NF4, GPTQ, AWQ) or W4A8
 - **Value**: Document negative result for community
 
-**Option C: Test targeted RIN (layers 10-19, σ=0.005)**
+**Option C: Test RIN (SRDD-guided targeted, layers 10-19, σ=0.005)**
 - **Rationale**: Fewer layers = less aggregate noise
 - **Test**: SRDD "WHERE" hypothesis with ultra-conservative sigma
 - **Risk**: Still likely to fail if issue is fundamental
 
 ### Recommendation
 
-**Try ONE more experiment** (E13i-v3: σ=0.005 global) as scientific due diligence:
-- If **passes step 10**: Validates Goldilocks hypothesis → continue tuning
-- If **fails by step 6-7**: Confirms asymptotic behavior → **PIVOT AWAY**
+**Try ONE more experiment** (E13j: σ=0.05 global AQN with bug fixes) as scientific due diligence:
+- If **completes 29 steps**: Validates bug fixes → can proceed to RIN experiments
+- If **still fails**: Confirms deeper issues → investigate further or pivot
 
 **Then regardless of result**:
-1. ✅ **Document W4A4 RIN limitations** thoroughly
+1. ✅ **Document W4A4 AQN/RIN limitations** thoroughly
 
 ---
 
@@ -331,16 +333,23 @@ enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
 **E13j: Global AQN with Bug Fixes (NEXT)**
 - ✅ Disable filter_groups (set enable=False, max_num_gen_batches=0)
 - ✅ Target RMSNorm layers (match QeRL proven approach)
-- ✅ Test with σ=0.05 (original baseline sigma)
+- ✅ Test with σ=0.05→0.0005 (uniform across all layers - basic AQN)
 - **Expected**: Training completes without filter rejection
-- **Purpose**: Validate bug fixes work, establish if W4A4 + AQN is viable
+- **Purpose**: Validate bug fixes work, establish if W4A4 + AQN baseline works
 
-**Terminology Note**: Switching from "RIN" to **AQN (Adaptive Quantization Noise)** to match QeRL and standard terminology.
+**Terminology Clarification**:
+- **AQN**: Global uniform noise (what E13j tests)
+- **RIN**: SRDD-guided layer-specific sigma (future experiments)
 
 **E13k: Iterative Debugging** (if E13j still fails)
 - Try ONLY Fix #1 (disable filter, keep Linear targeting)
 - Try ONLY Fix #2 (keep filter, use RMSNorm targeting)
 - Isolate which bug is primary vs secondary
+
+**E13l+: RIN Experiments** (if E13j succeeds)
+- E13l: Targeted RIN (layers 10-19 only, SRDD-guided)
+- E13m: Variable RIN (layer-specific sigma multipliers)
+- Tests SRDD-RIN correlation with spatial targeting
 
 **E14: W4A16 MXFP4 + AQN Validation** (user's suggested backup)
 - Verify our implementation works for W4A16
@@ -354,17 +363,18 @@ enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
 ### Configuration
 
 **Experiment ID**: E13j
+**Type**: Global AQN (uniform noise, not SRDD-guided)
 **Description**: Global AQN with bug fixes - QeRL approach replication
 
 **Key Changes from E13i-baseline/v2**:
 1. ✅ **filter_groups.enable=False** (no rejection loop)
 2. ✅ **layer_types=["rmsnorm"]** (match QeRL, not Linear)
-3. ✅ **σ=0.05→0.0005** (original baseline sigma)
+3. ✅ **σ=0.05→0.0005, uniform** (global AQN, not layer-specific)
 
 **Training Setup**:
 - Quantization: MXFP4 W4A4 (both weights and activations)
 - LoRA: rank=32, alpha=16
-- AQN: Global RMSNorm targeting, all layers
+- Noise: Global AQN (uniform σ across all RMSNorm layers)
 - Epochs: 1 (29 steps)
 - Filter: **DISABLED** (critical fix)
 
@@ -379,8 +389,8 @@ enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
 
 **If E13j Succeeds**:
 - Confirms bug fixes work
-- W4A4 + AQN is viable (QeRL was right!)
-- Can proceed to SRDD-guided experiments (targeted, variable sigma)
+- W4A4 + global AQN baseline is viable (QeRL was right!)
+- **Can proceed to RIN experiments** (SRDD-guided layer-specific sigma)
 
 **If E13j Still Fails**:
 - Investigate if RMSNorm targeting alone is insufficient
