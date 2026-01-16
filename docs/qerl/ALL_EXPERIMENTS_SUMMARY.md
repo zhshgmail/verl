@@ -79,9 +79,9 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
 | **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + RIN |
 | **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_60.88` | **60.88%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
-| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_incomplete` | **56.41%*** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | ❌ **HUNG at step 27 - MUST RE-RUN** |
+| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 
-**Note**: *E13h reported 56.41% at step 20, but training hung at step 27 due to 2280 zombie processes. Never completed or ran final validation. Needs re-run with container restart.
+**Note**: E13h completed successfully with validation results: Step 0: 7.96% → Step 20: 60.73% → Step 29: 71.42%. Process hung during post-training cleanup (not during validation). All experiment data captured. Results show MXFP4 W4A4 significantly outperforms NVFP4 W4A4 (71.42% vs 60.88% = +10.54%).
 
 ---
 
