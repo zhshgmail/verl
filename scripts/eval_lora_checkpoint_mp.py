@@ -94,6 +94,10 @@ def worker_process(gpu_id, base_model_path, lora_adapter_path, samples, result_q
 
 
 def main():
+    # CRITICAL: Set spawn method for CUDA compatibility with multiprocessing
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', force=True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model_path", type=str, required=True)
     parser.add_argument("--lora_adapter_path", type=str, required=True)
