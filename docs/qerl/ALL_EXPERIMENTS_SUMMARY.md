@@ -78,10 +78,13 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA |
 | **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
 | **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + RIN |
-| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_60.88` | **60.88%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ |
+| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 | **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 
-**Note**: E13h completed successfully with validation results: Step 0: 7.96% → Step 20: 60.73% → Step 29: 71.42%. Process hung during post-training cleanup (not during validation). All experiment data captured. Results show MXFP4 W4A4 significantly outperforms NVFP4 W4A4 (71.42% vs 60.88% = +10.54%).
+**Note**: Both E13g and E13h completed successfully with final validation results:
+- **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
+- **E13h (MXFP4 W4A4)**: Step 0: 7.96% → Step 20: 60.73% → Step 29: **71.42%**
+- **MXFP4 slightly outperforms NVFP4** by +0.53% (71.42% vs 70.89%). Both processes hung during post-training cleanup but all validation data was captured.
 
 ---
 
