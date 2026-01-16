@@ -257,24 +257,65 @@ git remote -v
 # team     https://github.com/EdisonAILab/verl.git (team fork)
 ```
 
-### 2.2 Push Workflow
+### 2.2 Network Proxy Setup (CRITICAL)
+
+**⚠️ MANDATORY**: The A100 container requires proxy setup for ALL network operations (git, pip, wget, etc.)
+
+**Proxy Script**: `/home/z00637938/setup_proxy.sh`
+
+**Rule**: ALWAYS source the proxy script before ANY network command:
+
+```bash
+# CORRECT - Source proxy first
+source /home/z00637938/setup_proxy.sh && git fetch personal
+source /home/z00637938/setup_proxy.sh && git push personal feature/branch
+source /home/z00637938/setup_proxy.sh && pip install package
+
+# WRONG - Will timeout/fail
+git fetch personal  # ❌ No proxy - will fail
+git push personal feature/branch  # ❌ Will hang
+```
+
+**Common Failures Without Proxy**:
+- `fatal: unable to access 'https://github.com/...' Failed to connect to 90.255.4.119 port 8890`
+- `Connection timed out after 130249 ms`
+- Git operations hanging indefinitely
+
+**Symptoms**: If git fetch/push takes >10 seconds, you forgot the proxy!
+
+### 2.3 Push Workflow
 
 **IMPORTANT**: Always push to `personal` and `team` remotes, NOT `origin` (upstream is read-only).
 
 ```bash
-# Push to both personal and team remotes
-git push personal <branch-name>
-git push team <branch-name>
+# CORRECT: Push with proxy (from inside container)
+source /home/z00637938/setup_proxy.sh && git push personal <branch-name>
+source /home/z00637938/setup_proxy.sh && git push team <branch-name>
 
 # Example: Push feature branch
-git push personal feature/npu-aqn-test
-git push team feature/npu-aqn-test
+source /home/z00637938/setup_proxy.sh && git push personal feature/npu-aqn-test
+source /home/z00637938/setup_proxy.sh && git push team feature/npu-aqn-test
 
-# Push multiple remotes at once
-git push personal <branch> && git push team <branch>
+# Push multiple remotes
+source /home/z00637938/setup_proxy.sh && git push personal <branch> && git push team <branch>
 ```
 
-### 2.3 Common Git Operations
+### 2.4 Fetch/Pull Workflow
+
+```bash
+# Fetch latest changes (from inside container)
+source /home/z00637938/setup_proxy.sh && git fetch personal
+source /home/z00637938/setup_proxy.sh && git fetch --all
+
+# Pull and reset to latest
+source /home/z00637938/setup_proxy.sh && git fetch personal && git reset --hard personal/feature/branch
+
+# Example: Update to latest branch state
+source /home/z00637938/setup_proxy.sh && cd /home/z00637938/workspace/verl && \
+  git fetch personal && git reset --hard personal/feature/npu-aqn-test
+```
+
+### 2.5 Common Git Operations
 
 ```bash
 # Ensure you're on the feature branch
