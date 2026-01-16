@@ -69,15 +69,15 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E9b** | HW | `HW_5pct_RIN-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | RIN | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
 | **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | **74.75%** | 1 | No | - | No | No | BF16 | - | DAPO Full FT baseline |
 | **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | 73.77% | 1 | No | - | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
-| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
-| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | - | No | No | NVFP4 | W4A16 | ⚠️ STE bug - needs rerun |
-| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | W4A16 | ⚠️ STE bug - needs rerun |
-| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | - | No | Yes | BF16 | - | BF16 LoRA baseline |
-| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | - | No | Yes | NVFP4 | W4A16 | NVFP4 + LoRA |
-| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | NVFP4 + LoRA + AQN |
-| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA |
-| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | MXFP4 + LoRA + AQN |
-| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | High σ + RIN |
+| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | - | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | - | No | Yes | BF16 | - | BF16 LoRA baseline (7B model log found, 1.5B needs verification) |
+| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | - | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
 | **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 | **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 
@@ -85,6 +85,13 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
 - **E13h (MXFP4 W4A4)**: Step 0: 7.96% → Step 20: 60.73% → Step 29: **71.42%**
 - **MXFP4 slightly outperforms NVFP4** by +0.53% (71.42% vs 70.89%). Both processes hung during post-training cleanup but all validation data was captured.
+
+**⚠️ Log Loss Issue (2026-01-16)**:
+- **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories
+- **Lost logs**: E3b, E4a, E4b, E5a/b-LoRA, E6a/b, E12 (7 experiments total)
+- **Impact**: Cannot verify if reported scores are from step 20 or step 29 final validation
+- **Prevention**: See Rule 4 in `A100_CONTAINER_AND_DEV_WORKFLOW.md` - always use unique experiment IDs
+- **Reproduction plan**: Low priority - re-run these experiments with proper IDs if needed for verification
 
 ---
 
