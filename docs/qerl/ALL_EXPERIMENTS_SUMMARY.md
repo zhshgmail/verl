@@ -80,11 +80,26 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
 | **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 | **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
+| **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) - filter rejection |
+| **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
 - **E13h (MXFP4 W4A4)**: Step 0: 7.96% → Step 20: 60.73% → Step 29: **71.42%**
 - **MXFP4 slightly outperforms NVFP4** by +0.53% (71.42% vs 70.89%). Both processes hung during post-training cleanup but all validation data was captured.
+
+**⚠️ E13i RIN Experiments FAILED (2026-01-16)**:
+- **E13i-baseline**: Global RIN (σ=0.05→0.0005) failed at step 3 - filter rejection loop
+- **E13i-v2**: Lower sigma (σ=0.01→0.0001) failed at step 4 - filter rejection loop
+- **Root Cause Identified**: TWO implementation bugs (see `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md`):
+  1. **PRIMARY BUG**: verl's `filter_groups` mechanism (max_num_gen_batches=5) is incompatible with noise injection
+     - Noise degrades all trajectories uniformly → variance=0 → all prompts rejected → training halts
+     - QeRL has NO such filter → training continues with low scores (NORMAL behavior)
+  2. **SECONDARY BUG**: E13i scripts target Linear layers, QeRL targets RMSNorm layers
+     - Linear: Core weight matrices, much larger impact
+     - RMSNorm: Normalization layers, localized effect
+- **Next Step**: E13i-v3 with both fixes applied (disable filter + target RMSNorm)
+- **Context**: QeRL proves W4A4 + AQN works! Our failures are bugs, not fundamental incompatibility
 
 **⚠️ Log Loss Issue (2026-01-16)**:
 - **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories

@@ -197,6 +197,157 @@ SRDD provides spatial error distribution but cannot capture:
 
 **Then regardless of result**:
 1. ✅ **Document W4A4 RIN limitations** thoroughly
+
+---
+
+## 🔍 BREAKTHROUGH: Root Cause Identified - Implementation Bugs (2026-01-16)
+
+### Critical Context: QeRL Proves W4A4 + AQN Works!
+
+**User insight**: "before we give up RIN, you should know that the QeRL (../QeRL) has already proved W4A4 works with AQN"
+
+This changes everything! If QeRL succeeds with W4A4 + noise injection, our failures suggest **implementation bugs**, not fundamental incompatibility.
+
+### Bug Investigation: Comparing QeRL vs verl
+
+#### Bug #1: Incompatible Filter Mechanism (PRIMARY BUG)
+
+**The Problem**: verl's `filter_groups` mechanism is **fundamentally incompatible** with aggressive noise injection.
+
+**How filter_groups Works** (dapo_ray_trainer.py:230-285):
+```python
+# Step 1: Filter prompts by trajectory variance
+prompt_uid2metric_std[uid] = np.std(trajectory_rewards)
+kept_prompts = [uid for uid, std in ... if std > 0 or len(trajectories) == 1]
+
+# Step 2: If not enough prompts, keep generating
+if num_prompt_in_batch < train_batch_size:
+    if num_gen_batches < max_num_gen_batches:  # max=5
+        continue  # Generate more batches
+    else:
+        raise ValueError("Generated too many batches")  # ❌ HALT!
+```
+
+**Normal Training (no noise)**:
+- Some trajectories good (reward=1.0), some bad (reward=0.0)
+- Variance exists → prompts kept
+- Training proceeds
+
+**With Aggressive Noise (σ=0.05 or 0.01)**:
+- ALL trajectories uniformly degraded
+- ALL rewards → 0.0 (generation gibberish)
+- Variance ≈ 0 → **ALL prompts rejected!**
+- System keeps regenerating → hits max_num_gen_batches=5 → **TRAINING HALTS**
+
+**Why QeRL Doesn't Have This Problem**:
+- QeRL has **NO such filter mechanism**
+- Bad noise → low scores, but training continues
+- Model learns from low-quality samples (still contains signal)
+- This is **NORMAL and EXPECTED** per user's insight:
+  > "How's a gating can fail the whole testing? Normally it just lead to long response, large entropy and lower score."
+
+**Evidence in Our Code**:
+```bash
+# All our experiments have this filter enabled:
+$ grep filter_groups scripts/test_mxfp4_w4a4_e13*.sh
+enable_filter_groups=True
+filter_groups_metric=acc
+max_num_gen_batches=5
+```
+
+#### Bug #2: Wrong Target Layers (SECONDARY BUG)
+
+**QeRL Implementation** (QeRL/trl_trainer/noise_scheduler.py:24-25):
+```python
+# Targets RMSNorm layers ONLY
+if isinstance(module, Qwen2RMSNorm) or isinstance(module, LlamaRMSNorm):
+    weight_tensor = module.weight
+    noise = torch.normal(mean=0, std=sigma, ...)
+    module.weight.add_(noise)
+```
+
+**Our Implementation** (verl/utils/noise_injection.py:175-176):
+```python
+# Default: RMSNorm (QeRL compatible)
+if layer_types is None:
+    layer_types = ['rmsnorm']
+```
+
+**But Our E13i Scripts Override**:
+```bash
+# E13i-baseline and E13i-v2
+'++trainer.noise_injection.layer_types=["linear"]'  # ❌ WRONG!
+```
+
+**Impact**:
+- **RMSNorm**: Normalization layers, fewer parameters, less critical for generation
+- **Linear**: Weight matrices (attention, MLP), core computation, MUCH larger impact
+- Targeting Linear → **more aggressive perturbation** → faster quality degradation
+
+### Complete Bug Summary
+
+| Aspect | QeRL (Working) | verl E13i (Failing) |
+|--------|----------------|---------------------|
+| **Filter mechanism** | ❌ No filter | ✅ filter_groups with max=5 |
+| **Failure behavior** | Low scores, training continues | Training HALTS (rejection loop) |
+| **Target layers** | RMSNorm only | Linear layers |
+| **Noise impact** | Localized (norm layers) | Global (weight matrices) |
+| **Result** | ✅ W4A4 works | ❌ Training crashes |
+
+### Proposed Fixes
+
+#### Fix #1: Disable filter_groups for RIN Experiments (REQUIRED)
+
+**Change**:
+```bash
+# Current (E13i-baseline/v2)
+enable_filter_groups=True
+max_num_gen_batches=5
+
+# Fixed (E13i-v3)
+enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
+```
+
+**Rationale**:
+- Filter was designed for data quality control, NOT for handling training noise
+- RIN/AQN expects some bad samples during training (part of the method)
+- Rejecting bad samples defeats the purpose of robustness training
+
+#### Fix #2: Target RMSNorm Layers (Match QeRL)
+
+**Change**:
+```bash
+# Current (E13i-baseline/v2)
+'++trainer.noise_injection.layer_types=["linear"]'
+
+# Fixed (E13i-v3)
+'++trainer.noise_injection.layer_types=["rmsnorm"]'  # Match QeRL
+```
+
+**Rationale**:
+- QeRL's proven approach targets RMSNorm
+- Less aggressive than perturbing Linear weight matrices
+- May allow higher sigma values while maintaining stability
+
+### Validation Plan
+
+**E13i-v3: Bug Fixes Applied**
+- ✅ Disable filter_groups (or set max_num_gen_batches=0)
+- ✅ Target RMSNorm layers (match QeRL)
+- ✅ Test with σ=0.05 (original baseline sigma)
+- **Expected**: Training proceeds past step 4, possibly to completion
+
+**E13i-v4: Iterative Debugging** (if E13i-v3 still fails)
+- Try ONLY Fix #1 (disable filter, keep Linear targeting)
+- Try ONLY Fix #2 (keep filter, use RMSNorm targeting)
+- Isolate which bug is primary vs secondary
+
+**E14: W4A16 MXFP4 + RIN Validation** (user's suggested backup)
+- Verify our implementation works for W4A16
+- If W4A16 also fails → confirms recent STE changes broke something
+- If W4A16 succeeds → isolates issue to W4A4 specifics
+
+---
 2. ✅ **Establish sigma tolerance boundaries** empirically
 3. ✅ **Guide future quantization research** (what doesn't work matters)
 4. Consider **alternative robustness methods** for W4A4 (e.g., distillation, better initialization)
