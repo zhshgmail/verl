@@ -166,7 +166,7 @@ python3 -m recipe.dapo.main_dapo \
     '++trainer.noise_injection.exclude_patterns=["lm_head", "embed_tokens"]' \
     '++trainer.noise_injection.layer_sigma_config.enabled=True' \
     '++trainer.noise_injection.layer_sigma_config.default_multiplier=1.0' \
-    '++trainer.noise_injection.layer_sigma_config.layer_multipliers={"0": 0.83, "1": 0.89, "2": 0.93, "3": 0.93, "4": 0.93, "5": 0.98, "6": 0.99, "7": 1.01, "8": 1.00, "9": 1.02, "10": 1.06, "11": 1.10, "12": 1.12, "13": 1.11, "14": 1.15, "15": 1.17, "16": 1.15, "17": 1.12, "18": 1.09, "19": 1.07, "20": 1.02, "21": 0.99, "22": 0.96, "23": 0.94, "24": 0.91, "25": 0.90, "26": 0.79, "27": 0.88}' \
+    ++trainer.noise_injection.layer_sigma_config.layer_multipliers='{0: 0.83, 1: 0.89, 2: 0.93, 3: 0.93, 4: 0.93, 5: 0.98, 6: 0.99, 7: 1.01, 8: 1.00, 9: 1.02, 10: 1.06, 11: 1.10, 12: 1.12, 13: 1.11, 14: 1.15, 15: 1.17, 16: 1.15, 17: 1.12, 18: 1.09, 19: 1.07, 20: 1.02, 21: 0.99, 22: 0.96, 23: 0.94, 24: 0.91, 25: 0.90, 26: 0.79, 27: 0.88}' \
     trainer.default_local_dir=${OUTPUT_DIR}/checkpoints \
     trainer.project_name=w4a4_e13l_variable_rin \
     trainer.experiment_name=mxfp4_w4a4_variable_rin_depth_1ep \
