@@ -82,7 +82,7 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
 | **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) - filter rejection |
 | **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
-| **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_TBD` | 🔄 **EVAL** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Bug fixes applied ✓ Training complete, eval in progress |
+| **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_73.31` | **73.31%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ✅ **SUCCESS** - Bug fixes applied, AQN working (+1.89% vs E13h) |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
@@ -102,8 +102,9 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 - **✅ E13j - Bug Fixes Applied & Training Successful!**:
   - Configuration: Global AQN (σ=0.05→0.0005), disable filter_groups, target RMSNorm
   - All 28 training steps completed successfully (no filter rejection!)
-  - Step 0: 8.04% → Step 20: **68.84%** → Step 29: *Evaluation in progress*
+  - Step 0: 8.04% → Step 20: **68.84%** → Step 29: **73.31%** (967/1319 on GSM8K test)
   - Checkpoint saved: `/tmp/mxfp4_w4a4_e13j_global_aqn/checkpoints/global_step_29/`
+  - **Result**: +1.89% improvement over E13h baseline (71.42%) → AQN working as expected!
   - **Context**: QeRL proves W4A4 + AQN works! Bug fixes validated.
 
 **⚠️ Log Loss Issue (2026-01-16)**:
