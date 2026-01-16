@@ -131,16 +131,98 @@ bash scripts/test_e5a_v2_nvfp4_2ep.sh  # Creates /tmp/e5a_v2_nvfp4_2ep/
   - `E5a` → `E5a_lora_1ep` (LoRA variant)
   - `E5a` → `E5a_lora_2ep_v2` (2-epoch LoRA)
 
-**Archive Logs Immediately**:
-```bash
-# After experiment completes, archive the log with final score in filename
-cp /tmp/experiment_dir/training.log \
-   logs/experiment_category/expID_config_SCORE.log
+### Rule 5: ALWAYS Archive Logs After Experiment
 
-# Example:
-cp /tmp/e13h_mxfp4_w4a4/training.log \
-   logs/w4a4_experiments/e13h_mxfp4_w4a4_71.42.log
+**MANDATORY**: After every experiment completes (or fails), immediately archive the logs to the local `logs/` folder.
+
+**Why Archive**:
+- `/tmp` directories can be overwritten by new experiments
+- Container restarts may clear `/tmp` data
+- Need historical records for comparison and verification
+- Git ignores `logs/` folder - safe for large files
+
+**Log Archive Location**:
 ```
+./logs/                           # Root logs directory (git-ignored)
+  ├── w4a4_experiments_aqn/       # W4A4 + AQN experiments
+  ├── w4a4_experiments/           # W4A4 baseline experiments
+  ├── rin_experiments/            # RIN-based experiments
+  ├── srdd_experiments/           # SRDD-guided experiments
+  └── [category]/                 # Other experiment categories
+```
+
+**Naming Convention**:
+```
+{expID}_{config}_{finalScore}.log
+```
+
+**Components**:
+- `expID`: Experiment ID (e.g., e13j, e13k)
+- `config`: Key configuration (e.g., sigma0.05, aqn_global)
+- `finalScore`: Final accuracy percentage (e.g., 73.31)
+
+**Examples**:
+```bash
+# Training log
+logs/w4a4_experiments_aqn/e13j_training.log
+logs/w4a4_experiments_aqn/e13j_aqn_sigma0.05_73.31.log  # With score
+
+# Evaluation logs (multi-GPU)
+logs/w4a4_experiments_aqn/e13j_eval_gpu0.log
+logs/w4a4_experiments_aqn/e13j_eval_gpu1.log
+...
+logs/w4a4_experiments_aqn/e13j_eval_gpu7.log
+logs/w4a4_experiments_aqn/e13j_eval_summary.txt
+
+# Failed experiments (still archive!)
+logs/w4a4_experiments_aqn/e13i_FAILED_step3.log
+```
+
+**Archive Procedure**:
+```bash
+# From local machine after experiment completes
+mkdir -p logs/{experiment_category}
+
+# Copy training log from A100
+scp root@90.90.102.18:/tmp/verl-r3-test/tmp/{exp_dir}/training.log \
+    logs/{category}/{expID}_training.log
+
+# Or via docker cp (if needed)
+ssh root@90.90.102.18 "docker cp verl-r3-test:/tmp/{exp_dir}/training.log /tmp/{expID}_training.log"
+scp root@90.90.102.18:/tmp/{expID}_training.log logs/{category}/
+
+# For evaluation logs (parallel GPU runs)
+for i in {0..7}; do
+  ssh root@90.90.102.18 "docker cp verl-r3-test:/tmp/{exp_dir}/eval_gpu${i}.log /tmp/{expID}_eval_gpu${i}.log"
+done
+scp root@90.90.102.18:/tmp/{expID}_eval_gpu*.log logs/{category}/
+
+# Create summary file
+cat > logs/{category}/{expID}_eval_summary.txt << EOF
+{Experiment ID} Final Results
+=============================
+Experiment: {full name}
+Checkpoint: {checkpoint path}
+Date: {YYYY-MM-DD}
+
+Configuration:
+- {key config parameters}
+
+GSM8K Test Set Evaluation:
+- Final Accuracy: {X.XX}% ({correct}/{total})
+- GPU breakdowns...
+
+Comparison to Baseline:
+- {comparison notes}
+EOF
+```
+
+**Checklist After Experiment**:
+- [ ] Training log archived to `logs/{category}/{expID}_training.log`
+- [ ] Evaluation logs archived (if separate eval run)
+- [ ] Summary file created with final accuracy
+- [ ] File names follow convention
+- [ ] ALL_EXPERIMENTS_SUMMARY.md updated with results
 
 **Historical Loss**: We lost logs for E5a/b-LoRA, E6a/b, E12 (1-epoch W4A16 experiments) because 2-epoch experiments reused the same IDs and overwrote `/tmp` directories.
 
