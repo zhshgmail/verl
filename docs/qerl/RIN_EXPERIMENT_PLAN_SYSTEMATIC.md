@@ -1,43 +1,40 @@
-# RIN (Resilient-Improving Noise) Experiment Plan: Systematic Study
+# AQN (Adaptive Quantization Noise) Experiment Plan: Systematic Study
 
 **Date**: 2026-01-15 (Updated: 2026-01-16)
-**Goal**: Study correlation between SRDD quantization error analysis and RIN configuration for MXFP4 W4A4
+**Terminology**: AQN (not RIN) - matches QeRL and standard literature
+**Goal**: Study correlation between SRDD quantization error analysis and AQN configuration for MXFP4 W4A4
 **Baseline**: E13h MXFP4 W4A4 + STE = **71.42%** (step 29 final)
 **Context**: MXFP4 W4A4 now OUTPERFORMS NVFP4 W4A4 (70.89%) by +0.53%
-**Target**: Explore if RIN can improve beyond 71.42% baseline toward BF16 Full FT (74.75%)
+**Target**: Explore if AQN can improve beyond 71.42% baseline toward BF16 Full FT (74.75%)
 
 ---
 
 ## ⚠️ CRITICAL FINDING: E13i-baseline FAILED (2026-01-16)
 
-**Experiment**: E13i-baseline (Global RIN, σ=0.05→0.0005)
+**Experiment**: E13i-baseline (Global AQN, σ=0.05→0.0005)
 **Result**: ❌ **FAILED at step 3** - Generation quality collapse
 **Error**: `num_gen_batches=5 >= max_num_gen_batches=5` (filter rejection loop)
 
-**Root Cause Analysis**:
-- Global RIN activated at step 3 with σ=0.05
-- **Compounded precision loss**: W4A4 (4-bit weights + 4-bit activations) + σ=0.05 noise
-- Generation quality degraded so severely that filter system rejected all batches
-- Attempted 5 regenerations, never got enough quality samples to proceed
+**Root Cause Analysis** (UPDATED - Implementation Bugs Identified):
+- Global AQN activated at step 3 with σ=0.05
+- ~~Compounded precision loss causing quality degradation~~ **WRONG HYPOTHESIS**
+- **ACTUAL CAUSE**: Two implementation bugs (see Bug Investigation section below)
+  1. verl's filter_groups mechanism incompatible with noise injection
+  2. Wrong target layers (Linear instead of RMSNorm)
 
-**Critical Insight**:
-> **σ_start=0.05 that works for W4A16 is TOO AGGRESSIVE for W4A4!**
+**Original Hypothesis** (INVALIDATED):
+> ~~σ_start=0.05 that works for W4A16 is TOO AGGRESSIVE for W4A4~~
 >
-> W4A16 has 16-bit activations providing precision buffer. W4A4 has NO buffer - activations already degraded to 4-bit. Adding σ=0.05 noise on top of 4-bit activations crosses the "usability threshold" where model output becomes gibberish.
-
-**Revised Strategy**:
-1. **Lower sigma dramatically**: Try σ_start=0.01 or 0.005 (10x lower)
-2. **Start with targeted RIN**: Fewer layers = less aggregate noise impact
-3. **Consider adaptive sigma**: Scale down further for W4A4 vs W4A16
+> **CORRECTION**: QeRL proves W4A4 + AQN works! Our failures are implementation bugs, not fundamental incompatibility.
 
 **Evidence**:
 - Steps 0-2: Training normal (σ=0.0)
-- Step 3: RIN activated → immediate collapse
-- Log archived: `e13i_baseline_global_rin_FAILED_step3_sigma0.05.log`
+- Step 3: AQN activated → immediate collapse
+- Log archived: `e13i_baseline_global_aqn_FAILED_step3_sigma0.05.log`
 
 ---
 
-## ⚠️ CRITICAL CONCERN: SRDD-RIN Correlation Validity (2026-01-16)
+## ⚠️ CRITICAL CONCERN: SRDD-AQN Correlation Validity (2026-01-16)
 
 ### The Fundamental Problem
 
@@ -331,21 +328,64 @@ enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
 
 ### Validation Plan
 
-**E13i-v3: Bug Fixes Applied**
-- ✅ Disable filter_groups (or set max_num_gen_batches=0)
-- ✅ Target RMSNorm layers (match QeRL)
+**E13j: Global AQN with Bug Fixes (NEXT)**
+- ✅ Disable filter_groups (set enable=False, max_num_gen_batches=0)
+- ✅ Target RMSNorm layers (match QeRL proven approach)
 - ✅ Test with σ=0.05 (original baseline sigma)
-- **Expected**: Training proceeds past step 4, possibly to completion
+- **Expected**: Training completes without filter rejection
+- **Purpose**: Validate bug fixes work, establish if W4A4 + AQN is viable
 
-**E13i-v4: Iterative Debugging** (if E13i-v3 still fails)
+**Terminology Note**: Switching from "RIN" to **AQN (Adaptive Quantization Noise)** to match QeRL and standard terminology.
+
+**E13k: Iterative Debugging** (if E13j still fails)
 - Try ONLY Fix #1 (disable filter, keep Linear targeting)
 - Try ONLY Fix #2 (keep filter, use RMSNorm targeting)
 - Isolate which bug is primary vs secondary
 
-**E14: W4A16 MXFP4 + RIN Validation** (user's suggested backup)
+**E14: W4A16 MXFP4 + AQN Validation** (user's suggested backup)
 - Verify our implementation works for W4A16
 - If W4A16 also fails → confirms recent STE changes broke something
 - If W4A16 succeeds → isolates issue to W4A4 specifics
+
+---
+
+## E13j Experiment Plan (2026-01-16)
+
+### Configuration
+
+**Experiment ID**: E13j
+**Description**: Global AQN with bug fixes - QeRL approach replication
+
+**Key Changes from E13i-baseline/v2**:
+1. ✅ **filter_groups.enable=False** (no rejection loop)
+2. ✅ **layer_types=["rmsnorm"]** (match QeRL, not Linear)
+3. ✅ **σ=0.05→0.0005** (original baseline sigma)
+
+**Training Setup**:
+- Quantization: MXFP4 W4A4 (both weights and activations)
+- LoRA: rank=32, alpha=16
+- AQN: Global RMSNorm targeting, all layers
+- Epochs: 1 (29 steps)
+- Filter: **DISABLED** (critical fix)
+
+**Expected Behavior**:
+- ✅ Training should proceed past step 4 without filter rejection
+- ⚠️ Scores may dip during aggressive noise phases (NORMAL for AQN)
+- ✅ Should complete 29 steps if bug fixes are correct
+
+**Success Criteria**:
+- Primary: Training completes without crashing (validates bug fixes)
+- Secondary: Final score competitive with E13h baseline (71.42%)
+
+**If E13j Succeeds**:
+- Confirms bug fixes work
+- W4A4 + AQN is viable (QeRL was right!)
+- Can proceed to SRDD-guided experiments (targeted, variable sigma)
+
+**If E13j Still Fails**:
+- Investigate if RMSNorm targeting alone is insufficient
+- Try E13k with isolated fixes (one at a time)
+- Consider W4A16 validation experiment (E14)
 
 ---
 2. ✅ **Establish sigma tolerance boundaries** empirically
