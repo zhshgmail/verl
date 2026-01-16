@@ -84,6 +84,7 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
 | **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_73.31` | **73.31%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ✅ **SUCCESS** - σ=0.05→0.0005, bug fixes (+1.89% vs E13h) |
 | **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_65.96` | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ❌ σ=0.01→0.0001 WORSE than baseline (-5.46%), E13j's σ=0.05 is optimal |
+| **E13l** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_SRDD_1ep_53.22` | **53.22%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ FAILED SEVERELY (-20.09% vs E13j) - SRDD-guided variable RIN with high-error → MORE noise hypothesis failed |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
@@ -121,6 +122,33 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
     - QeRL's σ=0.01 may be optimized for larger models or different datasets
   - **Conclusion**: E13j (σ=0.05) is the best static AQN configuration
     - Future SRDD-guided RIN must beat 73.31% to prove dynamic scheduling benefit
+
+- **❌ E13l - Variable RIN with SRDD: SEVERE REGRESSION (2026-01-17)**:
+  - Configuration: Variable RIN with SRDD-guided layer-specific multipliers
+    - Base sigma: σ_start=0.05, σ_end=0.0005 (same as E13j)
+    - Target: RMSNorm layers
+    - SRDD-based multipliers applied per layer:
+      - High-error layers (10-19, ~40% error): 1.06-1.17x multipliers (MORE noise)
+      - Low-error layers (0-9, 20-27, ~32% error): 0.79-1.02x multipliers (LESS noise)
+      - Layer 15 (worst 42.65% error): 1.17x multiplier
+      - Layer 26 (best 28.61% error): 0.79x multiplier
+  - All 29 training steps completed successfully
+  - **Result**: **53.22%** (702/1319 on GSM8K test) - **CATASTROPHIC FAILURE**
+  - Checkpoint saved: `/tmp/mxfp4_w4a4_e13l_variable_rin/checkpoints/global_step_29/`
+  - **Comparison**:
+    - vs E13j (uniform AQN): -20.09% (73.31% → 53.22%)
+    - vs E13h (no AQN): -18.20% (71.42% → 53.22%)
+    - vs E13k (bad sigma): -12.74% (65.96% → 53.22%)
+  - **Key Finding**: **Hypothesis A (high error → MORE noise) FAILED completely**
+    - Variable RIN performed worse than ALL baselines including E13k's suboptimal σ=0.01
+    - Adding MORE noise to already high-error layers causes severe degradation
+    - High quantization error + increased noise = catastrophic training instability
+  - **Hypothesis**: The variable RIN approach may have overwhelmed high-error layers
+    - Middle layers (10-19) already struggle with 40% quantization error
+    - Adding 6-17% MORE noise on top of existing error pushed them past recovery threshold
+    - Model couldn't learn effectively when critical layers were excessively noisy
+  - **Next Steps**: Consider inverse hypothesis (E13m: high error → LESS noise)
+    - Or abandon Variable RIN entirely and stick with uniform Global AQN (E13j: 73.31%)
 
 **⚠️ Log Loss Issue (2026-01-16)**:
 - **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories
