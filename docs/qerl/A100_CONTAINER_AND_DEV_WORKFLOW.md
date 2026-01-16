@@ -257,63 +257,59 @@ git remote -v
 # team     https://github.com/EdisonAILab/verl.git (team fork)
 ```
 
-### 2.2 Network Proxy Setup (CRITICAL)
+### 2.2 Development Workflow (Local → Container)
 
-**⚠️ MANDATORY**: The A100 container requires proxy setup for ALL network operations (git, pip, wget, etc.)
+**Key Principle**: Development happens LOCALLY, container only PULLS updates.
 
-**Proxy Script**: `/home/z00637938/setup_proxy.sh`
+```
+Local Machine                    GitHub                Container (A100)
+     │                              │                        │
+     │  1. Edit, commit             │                        │
+     │─────────────────────────────>│                        │
+     │  2. Push (no proxy)          │                        │
+     │                              │  3. Pull (WITH proxy)  │
+     │                              │<───────────────────────│
+```
 
-**Rule**: ALWAYS source the proxy script before ANY network command:
+**Steps**:
+1. **Local**: Make changes, commit
+2. **Local**: Push to GitHub (NO proxy needed)
+3. **Container**: Pull from GitHub (NEEDS proxy)
+
+### 2.3 Push Workflow (LOCAL machine)
+
+**Location**: Run on your LOCAL machine, NOT in container
 
 ```bash
-# CORRECT - Source proxy first
+# Work locally
+cd /home/zheng/workspace/verl
+git add <files>
+git commit -m "message"
+
+# Push directly (NO proxy needed - local machine has internet)
+git push                    # Push to default remote
+git push personal <branch>  # Push to personal fork
+```
+
+### 2.4 Pull Workflow (CONTAINER only)
+
+**Location**: Run INSIDE the container on A100
+
+**⚠️ MANDATORY**: Container needs proxy for git fetch/pull
+
+```bash
+# Inside container - NEEDS proxy
 source /home/z00637938/setup_proxy.sh && git fetch personal
-source /home/z00637938/setup_proxy.sh && git push personal feature/branch
-source /home/z00637938/setup_proxy.sh && pip install package
+source /home/z00637938/setup_proxy.sh && git reset --hard personal/<branch>
 
-# WRONG - Will timeout/fail
-git fetch personal  # ❌ No proxy - will fail
-git push personal feature/branch  # ❌ Will hang
+# Example: Update container to latest code
+ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'source /home/z00637938/setup_proxy.sh && cd /home/z00637938/workspace/verl && git fetch personal && git reset --hard personal/feature/npu-aqn-test'"
 ```
 
-**Common Failures Without Proxy**:
-- `fatal: unable to access 'https://github.com/...' Failed to connect to 90.255.4.119 port 8890`
-- `Connection timed out after 130249 ms`
-- Git operations hanging indefinitely
-
-**Symptoms**: If git fetch/push takes >10 seconds, you forgot the proxy!
-
-### 2.3 Push Workflow
-
-**IMPORTANT**: Always push to `personal` and `team` remotes, NOT `origin` (upstream is read-only).
-
-```bash
-# CORRECT: Push with proxy (from inside container)
-source /home/z00637938/setup_proxy.sh && git push personal <branch-name>
-source /home/z00637938/setup_proxy.sh && git push team <branch-name>
-
-# Example: Push feature branch
-source /home/z00637938/setup_proxy.sh && git push personal feature/npu-aqn-test
-source /home/z00637938/setup_proxy.sh && git push team feature/npu-aqn-test
-
-# Push multiple remotes
-source /home/z00637938/setup_proxy.sh && git push personal <branch> && git push team <branch>
-```
-
-### 2.4 Fetch/Pull Workflow
-
-```bash
-# Fetch latest changes (from inside container)
-source /home/z00637938/setup_proxy.sh && git fetch personal
-source /home/z00637938/setup_proxy.sh && git fetch --all
-
-# Pull and reset to latest
-source /home/z00637938/setup_proxy.sh && git fetch personal && git reset --hard personal/feature/branch
-
-# Example: Update to latest branch state
-source /home/z00637938/setup_proxy.sh && cd /home/z00637938/workspace/verl && \
-  git fetch personal && git reset --hard personal/feature/npu-aqn-test
-```
+**Common Mistakes**:
+- ❌ Trying to push from container (develop locally instead!)
+- ❌ Forgetting proxy when pulling in container (will timeout)
+- ❌ Using proxy on local machine (not needed)
 
 ### 2.5 Common Git Operations
 
