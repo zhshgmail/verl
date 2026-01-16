@@ -4,6 +4,14 @@
 **Terminology**:
 - **AQN (Adaptive Quantization Noise)**: Global uniform noise (what QeRL uses)
 - **RIN (Resilient-Improving Noise)**: SRDD-guided AQN with layer-specific sigma
+
+**Three Noise Strategies**:
+1. **Global AQN**: All layers, same sigma (e.g., all get σ=0.05)
+2. **Targeted RIN**: Only certain layers (e.g., 10-19), same sigma for those
+3. **Variable RIN**: All layers, different sigma per layer based on SRDD error
+   - High-error layers: Higher sigma (e.g., σ=0.08)
+   - Low-error layers: Lower sigma (e.g., σ=0.025)
+
 **Goal**: Study correlation between SRDD quantization error analysis and RIN configuration for MXFP4 W4A4
 **Baseline**: E13h MXFP4 W4A4 + STE = **71.42%** (step 29 final)
 **Context**: MXFP4 W4A4 now OUTPERFORMS NVFP4 W4A4 (70.89%) by +0.53%
@@ -347,8 +355,10 @@ enable_filter_groups=False  # Or set max_num_gen_batches=0 for unlimited
 - Isolate which bug is primary vs secondary
 
 **E13l+: RIN Experiments** (if E13j succeeds)
-- E13l: Targeted RIN (layers 10-19 only, SRDD-guided)
-- E13m: Variable RIN (layer-specific sigma multipliers)
+- E13l: Targeted RIN (layers 10-19 only, same σ=0.05 for those layers)
+- E13m: Variable RIN (all layers, different sigma per layer)
+  - Example: High-error layers 10-19 get σ=0.08, others get σ=0.03
+- E13n: Ablation studies (compare targeted vs variable)
 - Tests SRDD-RIN correlation with spatial targeting
 
 **E14: W4A16 MXFP4 + AQN Validation** (user's suggested backup)
