@@ -26,7 +26,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_batch_size=1319 \
     data.max_prompt_length=1024 \
     data.max_response_length=1024 \
-    +data.truncation="error" \
+    ++data.truncation="error" \
     actor_rollout_ref.model.path=${MODEL_PATH} \
     actor_rollout_ref.actor.optim.lr=1e-5 \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
