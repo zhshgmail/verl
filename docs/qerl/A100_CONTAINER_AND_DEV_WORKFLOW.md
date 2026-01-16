@@ -89,6 +89,61 @@ grep "Training Progress:" /tmp/your_experiment/training.log | tail -1
 grep -i "error\|exception\|failed" /tmp/your_experiment/training.log | tail -20
 ```
 
+### Rule 4: ALWAYS Use Unique Experiment IDs
+
+**MANDATORY**: Every experiment with different settings MUST have a unique experiment ID, even if it's a variation of a previous experiment.
+
+**Why**: Reusing experiment IDs causes:
+- Original logs overwritten in `/tmp` (data loss)
+- Cannot verify historical results later
+- Confusion about which results belong to which configuration
+- Loss of reproducibility
+
+**Bad Example** (DON'T DO THIS):
+```bash
+# Run 1-epoch experiment
+bash scripts/test_e5_nvfp4.sh  # Creates /tmp/e5_nvfp4/
+# Result: 68.23% at step 29
+
+# Later: Run 2-epoch experiment with same ID
+bash scripts/test_e5_nvfp4_2ep.sh  # OVERWRITES /tmp/e5_nvfp4/
+# Result: 70.58% at step 58
+# ❌ Original 1-epoch logs are LOST!
+```
+
+**Good Example** (DO THIS):
+```bash
+# 1-epoch experiment
+bash scripts/test_e5a_nvfp4_1ep.sh  # Creates /tmp/e5a_nvfp4_1ep/
+# Result: 68.23% at step 29
+
+# 2-epoch experiment - DIFFERENT ID
+bash scripts/test_e5a_v2_nvfp4_2ep.sh  # Creates /tmp/e5a_v2_nvfp4_2ep/
+# Result: 70.58% at step 58
+# ✓ Both logs preserved!
+```
+
+**Naming Convention**:
+- Use suffixes for variations: `_1ep`, `_2ep`, `_v2`, `_retry`, `_fixed`, etc.
+- Examples:
+  - `E13h` → `E13h_1ep` (original)
+  - `E13h` → `E13h_2ep` (2-epoch extension)
+  - `E5a` → `E5a_lora_1ep` (LoRA variant)
+  - `E5a` → `E5a_lora_2ep_v2` (2-epoch LoRA)
+
+**Archive Logs Immediately**:
+```bash
+# After experiment completes, archive the log with final score in filename
+cp /tmp/experiment_dir/training.log \
+   logs/experiment_category/expID_config_SCORE.log
+
+# Example:
+cp /tmp/e13h_mxfp4_w4a4/training.log \
+   logs/w4a4_experiments/e13h_mxfp4_w4a4_71.42.log
+```
+
+**Historical Loss**: We lost logs for E5a/b-LoRA, E6a/b, E12 (1-epoch W4A16 experiments) because 2-epoch experiments reused the same IDs and overwrote `/tmp` directories.
+
 ---
 
 ## 1. Connection
