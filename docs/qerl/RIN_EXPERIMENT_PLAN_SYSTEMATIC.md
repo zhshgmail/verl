@@ -37,6 +37,83 @@
 
 ---
 
+## ⚠️ CRITICAL CONCERN: SRDD-RIN Correlation Validity (2026-01-16)
+
+### The Fundamental Problem
+
+**Observation**: W4A16 tolerates σ=0.05, but W4A4 requires σ=0.01 (5x lower). Yet SRDD scans would show **identical results** for both configurations if we only scan activation quantization error.
+
+**The Gap**:
+- ✅ **SRDD measures**: Static quantization error at activation level
+- ❌ **SRDD cannot predict**: Training dynamics, sigma tolerance, stability boundaries
+
+### What SRDD Misses
+
+SRDD provides spatial error distribution but cannot capture:
+
+1. **Weight precision impact**: W4 vs W16 for weights (not measured by activation scan)
+2. **Compounded noise tolerance**: How model handles quantization error + training noise
+3. **Gradient flow quality**: Dynamic behavior through noisy activations during training
+4. **Training stability boundaries**: Empirical thresholds where model collapses
+
+**Critical Insight**:
+> SRDD tells us **WHERE** layers have high error (spatial), but not **HOW MUCH** additional noise they can tolerate (dynamic).
+
+### Scope Reassessment
+
+**What SRDD CAN Still Guide**:
+1. ✅ **Layer targeting**: Which layers need noise injection?
+   - All layers similar error → Global RIN
+   - Specific layers much worse → Targeted RIN (layers 10-19)
+2. ✅ **Relative scaling**: Layer-specific sigma multipliers
+   - High-error layers: 1.5x multiplier
+   - Low-error layers: 0.5x multiplier
+3. ✅ **Spatial patterns**: First/middle/last layer error distribution
+
+**What SRDD CANNOT Predict**:
+1. ❌ **Absolute sigma values**: Need empirical search per quantization mode
+2. ❌ **Quantization mode tolerance**: W4A16 vs W4A4 sigma difference unpredictable
+3. ❌ **Training stability**: When generation quality collapses
+
+### Implications for This Study
+
+**If SRDD only guides layer selection**, then:
+- **Targeted RIN** (SRDD picks layers) has value over blind uniform noise
+- **Variable RIN** (SRDD-weighted multipliers) may have value
+- **Sigma tuning** requires per-mode empirical search anyway
+
+**Alternative to pure SRDD-RIN correlation**:
+1. Use SRDD for **layer targeting only** (WHERE question)
+2. Build **sigma lookup table** per quantization mode (HOW MUCH question):
+   - W4A16: σ ∈ {0.01, 0.03, 0.05, 0.08}
+   - W4A4: σ ∈ {0.002, 0.005, 0.01, 0.02}
+3. Combine: SRDD-targeted layers + empirically-tuned sigma per mode
+
+### Decision Criteria: When to Stop
+
+**Continue SRDD-RIN work if**:
+- Targeted RIN (SRDD-selected layers) outperforms global RIN
+- Variable RIN (SRDD-weighted multipliers) outperforms uniform scaling
+- Can establish **relative correlation** (high-error layers need different sigma than low-error)
+
+**Pivot away from SRDD-RIN if**:
+- Targeted RIN shows no benefit vs global RIN
+- Variable RIN shows no benefit vs uniform scaling
+- Simple AQN (uniform noise, no SRDD) achieves similar results
+
+**Scientific value even if SRDD-RIN fails**:
+- ✅ Document what **doesn't work** (helps community avoid dead ends)
+- ✅ Establish **sigma tuning guidelines** per quantization mode
+- ✅ Show **training dynamics matter** beyond static error analysis
+
+### Current Experiment (E13i-v2)
+
+**Purpose**: Test if σ=0.01 global RIN survives W4A4 training (vs E13i-baseline σ=0.05 failure)
+**Next**: If E13i-v2 succeeds, test targeted RIN (layers 10-19 only, σ=0.01) to address "WHERE" hypothesis
+**Decision point**: Compare targeted vs global vs no-RIN to assess SRDD layer-selection value
+
+---
+
 ## Scientific Methodology
 
 This document follows a systematic approach:
