@@ -106,11 +106,100 @@ SRDD provides spatial error distribution but cannot capture:
 - ✅ Establish **sigma tuning guidelines** per quantization mode
 - ✅ Show **training dynamics matter** beyond static error analysis
 
-### Current Experiment (E13i-v2)
+### E13i-v2 Result: FAILED at Step 4 (σ=0.01)
 
-**Purpose**: Test if σ=0.01 global RIN survives W4A4 training (vs E13i-baseline σ=0.05 failure)
-**Next**: If E13i-v2 succeeds, test targeted RIN (layers 10-19 only, σ=0.01) to address "WHERE" hypothesis
-**Decision point**: Compare targeted vs global vs no-RIN to assess SRDD layer-selection value
+**Experiment**: E13i-v2 with σ=0.01 global RIN (5x lower than E13i-baseline)
+**Result**: ❌ **FAILED at step 4** - Filter rejection loop, generation quality collapse
+
+**Progression**:
+- Steps 0-2: Normal (σ=0.0, no noise)
+- Step 3: ✅ **Passed** (σ=0.01 activated, training continued)
+- Step 4: ❌ **Failed** (5 regeneration attempts, all rejected)
+
+**Comparison**:
+
+| Experiment | Sigma | Failure Point | Survival |
+|------------|-------|---------------|----------|
+| E13i-baseline | σ=0.05 | Step 3 | 2 steps |
+| E13i-v2 | σ=0.01 | Step 4 | 3 steps |
+
+**Critical Finding**:
+> **5x sigma reduction only delayed failure by 1 step.**
+>
+> Even σ=0.01 causes progressive generation quality degradation. The compounded precision loss (W4A4 quantization + training noise) accumulates over steps, eventually crossing the "usability threshold" where filter rejects all output.
+
+**Root Cause - Progressive Degradation**:
+1. W4A4 baseline: 4-bit weights + 4-bit activations (high intrinsic error)
+2. Training noise: σ=0.01 added on top (even "small" noise compounds)
+3. Accumulation: Quality degrades progressively over training steps
+4. Threshold crossed: By step 4, output quality below filter acceptance
+5. Rejection loop: All 5 regeneration batches rejected → training halted
+
+**Evidence archived**: `e13i_v2_lower_sigma_FAILED_step4_sigma0.01.log`
+
+---
+
+## ⚠️ CRITICAL CONCLUSION: W4A4 + RIN Fundamental Incompatibility?
+
+### The Paradox
+
+**Observation**: Even minimal training noise (σ=0.01) fails within 3-4 steps for W4A4.
+
+**Two interpretations**:
+
+#### 1. Sigma Too High (Optimistic)
+- σ=0.01 still too aggressive
+- Try even lower: σ ∈ {0.005, 0.002, 0.001}
+- Hypothesis: There exists a "Goldilocks sigma" for W4A4
+
+#### 2. Fundamental Incompatibility (Realistic)
+- **W4A4 has NO precision buffer** (unlike W4A16's 16-bit activations)
+- **ANY additional noise** compounds with already-high quantization error
+- **Training dynamics require quality generation** - can't learn from gibberish
+- Hypothesis: W4A4 + training noise = fundamentally broken
+
+### Evidence for Incompatibility
+
+1. **Rapid failure progression**: σ=0.05→step 3, σ=0.01→step 4
+   - 5x reduction bought only 1 step
+   - Extrapolate: σ=0.002 might reach step 5-6 before failing
+
+2. **No precision buffer**: W4A16 works because 16-bit acts absorb noise
+   - W4A4 acts already degraded to 4-bit
+   - No room for additional perturbation
+
+3. **Progressive degradation**: Not immediate collapse, but accumulation
+   - Suggests approaching an asymptote, not finding sweet spot
+   - Like trying to add noise to already-noisy signal
+
+### Decision Point: Continue or Pivot?
+
+**Option A: Try σ=0.005 (ultra-low)**
+- **Pros**: Might work, validates "Goldilocks" hypothesis
+- **Cons**: If fails at step 5-6, confirms asymptotic behavior
+- **Cost**: ~90 minutes, another failed experiment
+
+**Option B: Pivot away from RIN for W4A4**
+- **Accept**: W4A4 too constrained for robust training methods
+- **Focus**: Better quantization formats (NF4, GPTQ, AWQ) or W4A8
+- **Value**: Document negative result for community
+
+**Option C: Test targeted RIN (layers 10-19, σ=0.005)**
+- **Rationale**: Fewer layers = less aggregate noise
+- **Test**: SRDD "WHERE" hypothesis with ultra-conservative sigma
+- **Risk**: Still likely to fail if issue is fundamental
+
+### Recommendation
+
+**Try ONE more experiment** (E13i-v3: σ=0.005 global) as scientific due diligence:
+- If **passes step 10**: Validates Goldilocks hypothesis → continue tuning
+- If **fails by step 6-7**: Confirms asymptotic behavior → **PIVOT AWAY**
+
+**Then regardless of result**:
+1. ✅ **Document W4A4 RIN limitations** thoroughly
+2. ✅ **Establish sigma tolerance boundaries** empirically
+3. ✅ **Guide future quantization research** (what doesn't work matters)
+4. Consider **alternative robustness methods** for W4A4 (e.g., distillation, better initialization)
 
 ---
 
