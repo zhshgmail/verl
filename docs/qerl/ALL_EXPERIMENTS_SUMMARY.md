@@ -83,7 +83,7 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) - filter rejection |
 | **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
 | **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_73.31` | **73.31%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ✅ **SUCCESS** - σ=0.05→0.0005, bug fixes (+1.89% vs E13h) |
-| **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_TBD` | 🔄 **PLANNED** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Match QeRL's sigma: 0.01→0.0001 (vs E13j's 0.05) |
+| **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_65.96` | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ❌ σ=0.01→0.0001 WORSE than baseline (-5.46%), E13j's σ=0.05 is optimal |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
@@ -107,10 +107,20 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
   - Checkpoint saved: `/tmp/mxfp4_w4a4_e13j_global_aqn/checkpoints/global_step_29/`
   - **Result**: +1.89% improvement over E13h baseline (71.42%) → AQN working as expected!
   - **Context**: QeRL proves W4A4 + AQN works! Bug fixes validated.
-  - **⚠️ IMPORTANT**: QeRL's actual training scripts use σ_start=0.01 (1e-2), not 0.05!
+
+- **❌ E13k - QeRL Sigma Test: Lower Sigma Performs Worse**:
+  - Configuration: Global AQN (σ_start=0.01, σ_end=0.0001), same as QeRL training scripts
+  - All 29 training steps completed successfully
+  - Step 0: ~13% → Step 20: 57.52% → Step 29: **65.96%** (870/1319 on GSM8K test)
+  - Checkpoint saved: `/tmp/mxfp4_w4a4_e13k_aqn_qerl_sigma/checkpoints/global_step_29/`
+  - **Result**: -5.46% WORSE than baseline (71.42%), -7.35% worse than E13j!
+  - **Key Finding**: Higher sigma (0.05) is significantly better than lower sigma (0.01)
     - QeRL code defaults: σ_start=0.05, σ_end=0.0005 (configs.py)
     - QeRL training scripts: σ_start=0.01, σ_end=0.0001 (dapo_qwen*.sh)
-    - E13j used σ_start=0.05 → Need E13k with σ_start=0.01 to match QeRL's actual experiments
+    - **For our 1.5B model + GSM8K: σ=0.05 is optimal (E13j: 73.31%)**
+    - QeRL's σ=0.01 may be optimized for larger models or different datasets
+  - **Conclusion**: E13j (σ=0.05) is the best static AQN configuration
+    - Future SRDD-guided RIN must beat 73.31% to prove dynamic scheduling benefit
 
 **⚠️ Log Loss Issue (2026-01-16)**:
 - **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories
