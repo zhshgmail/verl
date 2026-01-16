@@ -2,8 +2,9 @@
 
 **Date**: 2026-01-15
 **Goal**: Study correlation between SRDD quantization error analysis and RIN configuration for MXFP4 W4A4
-**Baseline**: E13h MXFP4 W4A4 + STE = 56.41% (step 20)
-**Target**: Approach E13g NVFP4 W4A4 = 60.88% (close the 4.47% gap)
+**Baseline**: E13h MXFP4 W4A4 + STE = **71.42%** (step 29 final)
+**Context**: MXFP4 W4A4 now OUTPERFORMS NVFP4 W4A4 (60.88%) by +10.54% - RIN may push even higher
+**Revised Target**: Explore if RIN can improve beyond 71.42% baseline
 
 ---
 
