@@ -88,10 +88,17 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13m** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_SRDD_1ep_69.37` | **69.37%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Inverse RIN (high→LESS noise) works but underperforms (-3.94% vs E13j) - exceeded σ ceiling |
 | **E13n** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_SRDD_1ep_69.07` | **69.07%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Ceiling RIN (max=0.05) WORSE than E13m (-0.30%), **Variable RIN ABANDONED** |
 
-**Note**: Both E13g and E13h completed successfully with final validation results:
+**Note**: W4A4 baseline experiments completed with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
 - **E13h (MXFP4 W4A4)**: Step 0: 7.96% → Step 20: 60.73% → Step 29: **71.42%**
 - **MXFP4 slightly outperforms NVFP4** by +0.53% (71.42% vs 70.89%). Both processes hung during post-training cleanup but all validation data was captured.
+
+**W4A4 + AQN/RIN validation results (test_freq=20)**:
+- **E13j (Uniform Global AQN)**: Step 0: 8.19% → Step 20: **73.31%** (BEST, +1.89% vs E13h)
+- **E13k (QeRL σ=0.01)**: Step 0: 7.96% → Step 20: **65.96%** (too low, -5.46% vs E13j)
+- **E13l (Variable RIN, high→MORE)**: Step 0: 8.04% → Step 20: **53.22%** (catastrophic, -20.09% vs E13j)
+- **E13m (Inverse RIN, high→LESS)**: Step 0: 7.96% → Step 20: **69.37%** (underperforms, -3.94% vs E13j)
+- **E13n (Ceiling RIN)**: Step 0: 8.19% → Step 20: **69.07%** (WORSE than E13m, -4.24% vs E13j)
 
 **⚠️ E13i RIN Experiments FAILED → ✅ E13j SUCCESS (2026-01-16)**:
 - **E13i-baseline**: Global AQN (σ=0.05→0.0005) failed at step 3 - filter rejection loop
