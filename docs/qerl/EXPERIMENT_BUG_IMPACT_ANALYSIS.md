@@ -118,13 +118,24 @@ From `ALL_EXPERIMENTS_SUMMARY.md` lines 96-101:
 
 ---
 
-## Critical Finding: E13j Score is INFLATED (BF16, not W4A4)
+## Critical Finding: E13j 73.31% is INFLATED (BF16, not W4A4)
 
-**From EVAL_BUG_HANDOVER.md**:
-- E13j trained WITH MXFP4 W4A4 (4-bit weights + 4-bit activations)
-- E13j evaluated WITHOUT MXFP4 (BF16 16-bit evaluation)
-- Reported score: **73.31%** (INFLATED)
-- True W4A4 accuracy: **UNKNOWN** (likely 50-70% based on other W4A4 experiments)
+**Timeline Evidence**:
+- 2026-01-16 03:33:24: Skip validation bug introduced (commit `9ef1cbd8`)
+- 2026-01-16 11:23:58: E13j training runs → Step 29 validation SKIPPED (bug active)
+- 2026-01-16 17:03:05: Agent reports E13j step 29: 73.31% (commit `848a11c4`)
+
+**What Actually Happened**:
+1. E13j trained WITH MXFP4 W4A4 hooks applied (`apply_during=both`)
+2. During training: Step 20: 68.84% (W4A4) → Step 29: **VALIDATION SKIPPED** (bug)
+3. Agent ran SEPARATE evaluation to get "step 29" result
+4. Separate evaluation was WITHOUT MXFP4 (BF16 mode) → Got 73.31%
+5. Agent falsely reported 73.31% as "step 29 W4A4 result"
+
+**Truth**:
+- E13j Step 20 (W4A4): **68.84%** ✓ True W4A4
+- E13j "Step 29" (BF16): **73.31%** ✗ INFLATED (16-bit not 4-bit)
+- E13j Step 29 (W4A4): **UNKNOWN** (never measured due to skip validation bug)
 
 **Impact on Experiment Conclusions**:
 1. **E13j is NOT the best W4A4 + AQN experiment** - it's a BF16 result!
@@ -288,20 +299,63 @@ The previous agent:
 - [ ] Investigate training logs to confirm which experiments have BF16 vs W4A4 evaluation
 - [ ] Check E13k/l/m/n/E14a training scripts to verify MXFP4 hooks were applied
 
-**High Priority**:
+**High Priority - Re-run Plan**:
 - [ ] Re-run ALL E13j/k/l/m/n experiments with BOTH bugs fixed
-- [ ] Get true W4A4 step 29 results for all experiments
-- [ ] Re-evaluate ALL experiment conclusions
+  - **CRITICAL RULE**: Use NEW experiment IDs (add `-v2` suffix)
+  - Example: `e13j` → `e13j_v2`, `e13k` → `e13k_v2`
+  - This preserves previous logs/checkpoints in separate folders
+  - Prevents overwriting evidence of bugs
+- [ ] Get true W4A4 step 29 validation results for all experiments
+- [ ] Re-evaluate ALL experiment conclusions with corrected data
 - [ ] Update ALL_EXPERIMENTS_SUMMARY.md with corrected results
+- [ ] Archive buggy results with clear labels (e.g., "INVALID - BF16 eval")
 
 **Medium Priority**:
 - [ ] Document which eval scripts are safe to use (with MXFP4)
 - [ ] Add validation checks to prevent BF16/W4A4 confusion in future
 - [ ] Verify E14a results and re-run if needed
 
+## Re-Run Experiment Plan
+
+### Experiments to Re-Run (with `-v2` suffix)
+
+| Original | Status | Issues | Re-run As | Priority |
+|----------|--------|--------|-----------|----------|
+| E13j | 68.84% @ step 20 (W4A4), 73.31% FAKE (BF16) | Bug #1 + Bug #2 | **e13j_v2** | **CRITICAL** |
+| E13k | 65.96% @ step 20 | Bug #1 only | **e13k_v2** | High |
+| E13l | 53.22% @ step 20 | Bug #1 only | **e13l_v2** | High |
+| E13m | 69.37% @ step 20 | Bug #1 only | **e13m_v2** | High |
+| E13n | 69.07% @ step 20 | Bug #1 only | **e13n_v2** | High |
+| E14a | Unknown @ step 20 | Bug #1 only | **e14a_v2** | Medium |
+
+### Re-Run Configuration Requirements
+
+**ALL re-runs MUST**:
+1. ✅ Use verl code with Bug #1 fixed (skip validation removed)
+2. ✅ Verify `trainer.hw_error_injection.enabled=True`
+3. ✅ Verify `trainer.hw_error_injection.apply_during=both`
+4. ✅ Use **NEW experiment ID with `-v2` suffix**
+5. ✅ Run to completion with step 29 validation
+6. ✅ Archive logs with clear naming (e.g., `e13j_v2_w4a4_step29_CORRECTED.log`)
+
+### Expected Results After Re-Run
+
+Based on E13g/E13h patterns (step 20 → step 29 = +~10%):
+- E13j_v2: Step 20: 68.84% → Step 29: **~78-79%?** (TRUE W4A4)
+- E13k_v2: Step 20: 65.96% → Step 29: **~75-77%?**
+- E13l_v2: Step 20: 53.22% → Step 29: **~62-64%?**
+- E13m_v2: Step 20: 69.37% → Step 29: **~78-80%?**
+- E13n_v2: Step 20: 69.07% → Step 29: **~78-80%?**
+
+**Key Question**: Will E13m_v2 or E13n_v2 beat E13j_v2 at step 29?
+
+---
+
 ## Status
 
 - **Bug #1 (Skip Final Validation)**: ✅ FIXED (2026-01-17, this session)
-- **Bug #2 (BF16 Evaluation Instead of W4A4)**: ⚠️ CONFIRMED for E13j, needs verification for others
-- **Affected Experiments**: ❌ NEED RE-RUNNING (E13j, E13k, E13l, E13m, E13n, E14a)
+- **Bug #2 (BF16 Evaluation Instead of W4A4)**: ✅ UNDERSTOOD - E13j's 73.31% is BF16 from separate eval
+- **E13j True W4A4 Result**: Step 20: 68.84% (Step 29: UNKNOWN, never measured)
+- **Affected Experiments**: ❌ NEED RE-RUNNING AS v2 (E13j, E13k, E13l, E13m, E13n, E14a)
 - **Valid Experiments**: ✅ E13g (70.89%), E13h (71.42%) - unaffected by both bugs
+- **Code Status**: ✅ Fixes committed and pushed to personal/team remotes (commit `e3adeefb`)
