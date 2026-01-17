@@ -25,7 +25,7 @@ from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
 @ray.remote(num_gpus=1)
 class ModelWorker:
-    def __init__(self, base_model_path, lora_adapter_path, worker_id, mxfp4=False, mxfp4_injection_point="both"):
+    def __init__(self, base_model_path, lora_adapter_path, worker_id, mxfp4=False, mxfp4_injection_point="both", mxfp4_exclude_modules=None):
         self.worker_id = worker_id
         self.mxfp4 = mxfp4
         print(f"[Worker {worker_id}] Loading tokenizer...")
@@ -49,13 +49,15 @@ class ModelWorker:
         # Apply MXFP4 fake quantization if requested
         self.injector = None
         if mxfp4:
-            print(f"[Worker {worker_id}] Applying MXFP4 fake quantization (injection_point={mxfp4_injection_point})...")
+            if mxfp4_exclude_modules is None:
+                mxfp4_exclude_modules = ["lm_head", "embed_tokens", "layers.0", "layers.27"]
+            print(f"[Worker {worker_id}] Applying MXFP4 fake quantization (injection_point={mxfp4_injection_point}, exclude={mxfp4_exclude_modules})...")
             config = HWErrorConfig(
                 enabled=True,
                 error_type="mxfp4",
                 injection_point=mxfp4_injection_point,
                 target_modules=["linear"],
-                exclude_modules=["lm_head", "embed_tokens"],
+                exclude_modules=mxfp4_exclude_modules,
                 use_ste=False,
             )
             self.injector = HWErrorInjector(config)
@@ -112,6 +114,9 @@ def main():
     parser.add_argument("--mxfp4_injection_point", type=str, default="both",
                        choices=["weight", "input", "both"],
                        help="MXFP4 injection point: weight (W4A16), input (W16A4), both (W4A4)")
+    parser.add_argument("--mxfp4_exclude_modules", type=str, nargs="+",
+                       default=["lm_head", "embed_tokens", "layers.0", "layers.27"],
+                       help="Modules to exclude from MXFP4 quantization")
     args = parser.parse_args()
 
     # Initialize Ray
@@ -127,7 +132,7 @@ def main():
     quant_str = " (with MXFP4 W4A4)" if args.mxfp4 else " (BF16, no quantization)"
     print(f"Initializing {args.num_workers} GPU workers{quant_str}...")
     workers = [
-        ModelWorker.remote(args.base_model_path, args.lora_adapter_path, i, args.mxfp4, args.mxfp4_injection_point)
+        ModelWorker.remote(args.base_model_path, args.lora_adapter_path, i, args.mxfp4, args.mxfp4_injection_point, args.mxfp4_exclude_modules)
         for i in range(args.num_workers)
     ]
 
