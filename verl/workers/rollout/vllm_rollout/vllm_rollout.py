@@ -187,16 +187,31 @@ class vLLMAsyncRollout(BaseRollout):
         if config is None:
             return None
 
-        # Convert OmegaConf to dict if needed
-        if hasattr(config, 'items'):
-            config = dict(config)
+        # Convert OmegaConf to dict if needed (recursive for nested configs)
+        def _to_dict(obj):
+            if hasattr(obj, 'items'):
+                return {k: _to_dict(v) for k, v in dict(obj).items()}
+            elif isinstance(obj, list):
+                return [_to_dict(item) for item in obj]
+            return obj
+
+        config = _to_dict(config)
 
         if not isinstance(config, dict):
             return None
 
         # Ensure layer_multipliers is a regular dict with string keys
-        if 'layer_multipliers' in config and hasattr(config['layer_multipliers'], 'items'):
-            config['layer_multipliers'] = {str(k): v for k, v in dict(config['layer_multipliers']).items()}
+        if 'layer_multipliers' in config and isinstance(config['layer_multipliers'], dict):
+            config['layer_multipliers'] = {str(k): v for k, v in config['layer_multipliers'].items()}
+
+        # Parse zone_schedule if present (E14a)
+        if 'zone_schedule' in config and isinstance(config['zone_schedule'], dict):
+            zone_config = config['zone_schedule']
+            # Ensure edge_layers and middle_layers are lists of ints
+            if 'edge_layers' in zone_config:
+                zone_config['edge_layers'] = [int(x) for x in zone_config['edge_layers']]
+            if 'middle_layers' in zone_config:
+                zone_config['middle_layers'] = [int(x) for x in zone_config['middle_layers']]
 
         return config
 

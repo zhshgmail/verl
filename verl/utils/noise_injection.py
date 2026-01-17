@@ -98,6 +98,12 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
         - Allows different noise levels based on SRDD error analysis
         - High-error layers get higher sigma, low-error layers get lower
 
+    Zone-Based Scheduling (E14a):
+        - Use zone_schedule config for temporal phase-based multipliers
+        - Edge layers (0-5, 23-27): Always full noise (resilient)
+        - Middle layers (6-22): Full noise early, reduced late (protect vulnerable)
+        - Maintains gradient consistency during rapid learning phase
+
     Args:
         model: The model to inject noise into (typically vLLM inference model)
         step: Current training step
@@ -115,6 +121,14 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
                 "layer_multipliers": {
                     "14": 1.5, "15": 1.5, "16": 1.5, "17": 1.5,  # High error
                     "10": 1.2, "11": 1.2, ...  # Medium error
+                },
+                "zone_schedule": {  # E14a zone-based scheduling (optional)
+                    "enabled": True,
+                    "edge_layers": [0, 1, 2, 3, 4, 5, 23, 24, 25, 26, 27],
+                    "middle_layers": [6, 7, 8, ..., 22],
+                    "phase_boundary_ratio": 0.5,  # Switch phase at 50% of training
+                    "early_middle_mult": 1.0,  # Full noise early
+                    "late_middle_mult": 0.5,  # Half noise late
                 }
             }
 
@@ -155,9 +169,28 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
     use_layer_sigma = layer_sigma_config is not None and layer_sigma_config.get("enabled", False)
     default_multiplier = 1.0
     layer_multipliers = {}
+
+    # Zone-based scheduling support (E14a)
+    use_zone_schedule = False
+    edge_layers = set()
+    middle_layers = set()
+    phase_boundary_ratio = 0.5
+    early_middle_mult = 1.0
+    late_middle_mult = 0.5
+
     if use_layer_sigma:
         default_multiplier = layer_sigma_config.get("default_multiplier", 1.0)
         layer_multipliers = layer_sigma_config.get("layer_multipliers", {})
+
+        # Check for zone-based scheduling (E14a style)
+        zone_config = layer_sigma_config.get("zone_schedule", None)
+        if zone_config is not None and zone_config.get("enabled", False):
+            use_zone_schedule = True
+            edge_layers = set(zone_config.get("edge_layers", [0, 1, 2, 3, 4, 5, 23, 24, 25, 26, 27]))
+            middle_layers = set(zone_config.get("middle_layers", list(range(6, 23))))
+            phase_boundary_ratio = zone_config.get("phase_boundary_ratio", 0.5)
+            early_middle_mult = zone_config.get("early_middle_mult", 1.0)
+            late_middle_mult = zone_config.get("late_middle_mult", 0.5)
 
     if verbose and torch.distributed.is_initialized():
         if torch.distributed.get_rank() == 0:
@@ -165,8 +198,16 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
             target_desc = target_modules if target_modules else "ALL"
             layer_type_desc = layer_types if layer_types else ["rmsnorm"]
             srdd_desc = f", SRDD-guided={len(layer_multipliers)} layers" if use_layer_sigma else ""
+            # Zone-based scheduling info
+            if use_zone_schedule:
+                phase_boundary_step = int(total_step * phase_boundary_ratio)
+                is_late_phase = step >= phase_boundary_step
+                phase_name = "LATE" if is_late_phase else "EARLY"
+                zone_desc = f", Zone={phase_name}(mid_mult={late_middle_mult if is_late_phase else early_middle_mult})"
+            else:
+                zone_desc = ""
             # Use print() to ensure visibility regardless of logging level
-            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, LayerTypes: {layer_type_desc}, Target: {target_desc}{srdd_desc}")
+            print(f"[AQN] Noise injection ({model_type}) - Step: {step}/{total_step}, Sigma ID: {sigma_id}, Sigma: {sigma:.6f}, LayerTypes: {layer_type_desc}, Target: {target_desc}{srdd_desc}{zone_desc}")
 
     if sigma == 0:
         return
@@ -205,6 +246,27 @@ def generate_expert_gaussian_noise(model, step, total_step, sigma_trend, target_
             return base_sigma
 
         layer_idx = _extract_layer_idx(name)
+
+        # Zone-based scheduling (E14a): different multipliers based on training phase
+        if use_zone_schedule and layer_idx is not None:
+            # Determine current phase based on step
+            phase_boundary_step = int(total_step * phase_boundary_ratio)
+            is_late_phase = step >= phase_boundary_step
+
+            # Edge layers always get full noise (multiplier 1.0)
+            if layer_idx in edge_layers:
+                return base_sigma * 1.0
+            # Middle layers: full noise in early phase, reduced in late phase
+            elif layer_idx in middle_layers:
+                if is_late_phase:
+                    return base_sigma * late_middle_mult
+                else:
+                    return base_sigma * early_middle_mult
+            else:
+                # Unlisted layers get default multiplier
+                return base_sigma * default_multiplier
+
+        # Static layer multipliers (E13l/m/n style)
         if layer_idx is not None:
             # Try to find multiplier by layer index (both string and int keys for Hydra compat)
             layer_key = str(layer_idx)
