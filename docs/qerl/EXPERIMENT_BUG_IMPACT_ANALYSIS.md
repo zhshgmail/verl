@@ -252,7 +252,10 @@ The previous agent:
 
 **Severity**: **CRITICAL** - All affected experiments need re-running
 
-**Impact**: Wasted ~6 experiments × ~80 minutes × 8 A100 GPUs = **~64 GPU-hours** on invalid results
+**Impact**:
+- Wasted **~3 days of human work** (planning, monitoring, analysis, documentation)
+- Wasted **8 × A100 GPUs** on invalid experiments
+- Wasted research momentum - wrong conclusions guided subsequent experiments
 
 ---
 
@@ -288,9 +291,11 @@ The previous agent:
 - ✅ E13h: 71.42% (MXFP4 W4A4, step 29, ran before bugs)
 
 **Wasted Resources**:
-- ~6 experiments × ~80 minutes × 8 A100 GPUs = **~64 GPU-hours**
+- **~3 days of human work** - experiment planning, monitoring, analysis
+- **8 × A100 GPUs** running invalid experiments
 - All experiment conclusions and comparisons are INVALID
-- Entire RIN hypothesis testing (E13k/l/m/n) needs re-running
+- Entire RIN hypothesis testing (E13k/l/m/n) needs re-running from scratch
+- Lost research momentum - wrong conclusions guided subsequent experiments
 
 ### What Needs to Happen Now
 
