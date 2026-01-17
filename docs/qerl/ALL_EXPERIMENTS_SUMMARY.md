@@ -86,7 +86,7 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_65.96` | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ❌ σ=0.01→0.0001 WORSE than baseline (-5.46%), E13j's σ=0.05 is optimal |
 | **E13l** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_SRDD_1ep_53.22` | **53.22%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ FAILED SEVERELY (-20.09% vs E13j) - SRDD-guided variable RIN with high-error → MORE noise hypothesis failed |
 | **E13m** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_SRDD_1ep_69.37` | **69.37%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Inverse RIN (high→LESS noise) works but underperforms (-3.94% vs E13j) - exceeded σ ceiling |
-| **E13n** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_SRDD_1ep_TBD` | **TBD** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Testing ceiling-constrained Variable RIN (normalized to respect σ=0.05 max) |
+| **E13n** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_SRDD_1ep_69.07` | **69.07%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Ceiling RIN (max=0.05) WORSE than E13m (-0.30%), **Variable RIN ABANDONED** |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
@@ -180,7 +180,7 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
     - Exceeding proven ceiling may have hurt performance
   - **Next Step**: E13n - Normalize multipliers to respect σ=0.05 ceiling
 
-- **🔬 E13n - Ceiling-Constrained Variable RIN: Testing (2026-01-17)**:
+- **❌ E13n - Ceiling-Constrained Variable RIN: CEILING HYPOTHESIS REJECTED (2026-01-17)**:
   - Configuration: Ceiling-constrained Inverse Variable RIN
     - Base sigma: σ_start=0.05, σ_end=0.0005 (same as E13j/E13m)
     - Target: RMSNorm layers
@@ -192,9 +192,28 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
       - Layer 26 (best 28.61% error): 1.00x (at ceiling, σ_max=0.05)
       - Layer 0: 0.97x
       - Layer 15 (worst 42.65% error): 0.69x (much less noise)
-  - **Hypothesis**: Respecting the σ=0.05 ceiling will close -3.94% gap with E13j
-  - **Expected**: Variable RIN with proper ceiling constraint should match or beat uniform AQN
-  - Status: Preparing to launch
+  - **Results**: Step 0: 8.19% → Step 20: **69.07%** (FINAL)
+  - **Hypothesis REJECTED**: Ceiling constraint made things WORSE
+    - vs E13m (unconstrained, max=0.0605): **-0.30%** (69.37% → 69.07%)
+    - vs E13j (uniform Global AQN): **-4.24%** (73.31% → 69.07%)
+    - E13m slightly outperformed E13n despite exceeding ceiling
+  - **Root Cause Analysis - Variable RIN is Fundamentally Flawed**:
+    - **Layer-specific noise disrupts training dynamics**
+      - Different layers see different noise schedules
+      - Creates gradient inconsistencies across network depth
+      - Breaks the stable regularization that uniform noise provides
+    - **Evidence**:
+      - E13l (high error→MORE noise): 53.22% (catastrophic)
+      - E13m (high error→LESS noise): 69.37% (better but still underperforms)
+      - E13n (ceiling-constrained): 69.07% (ceiling constraint doesn't help)
+      - E13j (uniform Global AQN): **73.31%** (BEST by +4.24%)
+    - **Conclusion**: Variable RIN adds complexity without benefit
+      - Uniform Global AQN provides consistent, stable regularization
+      - All layers adapt together, maintaining training stability
+      - **SRDD-guided layer-specific noise is ABANDONED**
+  - **Status**: Variable RIN research TERMINATED
+    - E13j (uniform Global AQN) established as best practice
+    - Future work: Focus on optimizing Global AQN parameters (sigma schedule, stages, etc.)
 
 **⚠️ Log Loss Issue (2026-01-16)**:
 - **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories
