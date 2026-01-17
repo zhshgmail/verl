@@ -2025,6 +2025,18 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
             await self.rollout.update_noise_injection_step(current_step)
         return True
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def sync_weights_to_vllm(self):
+        """Force sync FSDP weights to vLLM rollout engine.
+
+        This is needed in val_only mode where checkpoint weights are loaded into
+        FSDP but never synced to vLLM before validation starts.
+        """
+        if self._is_actor:
+            await self.rollout_mode()
+            await self.trainer_mode()
+        return True
+
     # ============================ SGLang related ============================
 
     @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
