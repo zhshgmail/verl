@@ -85,6 +85,8 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_73.31` | **73.31%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ✅ **SUCCESS** - σ=0.05→0.0005, bug fixes (+1.89% vs E13h) |
 | **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_65.96` | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ❌ σ=0.01→0.0001 WORSE than baseline (-5.46%), E13j's σ=0.05 is optimal |
 | **E13l** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_SRDD_1ep_53.22` | **53.22%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ FAILED SEVERELY (-20.09% vs E13j) - SRDD-guided variable RIN with high-error → MORE noise hypothesis failed |
+| **E13m** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_SRDD_1ep_69.37` | **69.37%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Inverse RIN (high→LESS noise) works but underperforms (-3.94% vs E13j) - exceeded σ ceiling |
+| **E13n** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_SRDD_1ep_TBD` | **TBD** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Testing ceiling-constrained Variable RIN (normalized to respect σ=0.05 max) |
 
 **Note**: Both E13g and E13h completed successfully with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
@@ -149,6 +151,50 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
     - Model couldn't learn effectively when critical layers were excessively noisy
   - **Next Steps**: Consider inverse hypothesis (E13m: high error → LESS noise)
     - Or abandon Variable RIN entirely and stick with uniform Global AQN (E13j: 73.31%)
+
+- **❌ E13m - Inverse Variable RIN: Works But Underperforms (2026-01-17)**:
+  - Configuration: Inverse Variable RIN (opposite of E13l)
+    - Base sigma: σ_start=0.05, σ_end=0.0005 (same as E13j)
+    - Target: RMSNorm layers
+    - SRDD-based multipliers INVERTED from E13l:
+      - High-error layers (10-19, ~40% error): 0.83-0.94x multipliers (LESS noise - don't overwhelm)
+      - Low-error layers (0-9, 20-27, ~32% error): 0.98-1.21x multipliers (MORE noise - explore more)
+      - Layer 15 (worst 42.65% error): 0.83x multiplier (LEAST noise)
+      - Layer 26 (best 28.61% error): 1.21x multiplier (MOST noise)
+  - All 29 training steps completed successfully
+  - **Result**: **69.37%** (915/1319 on GSM8K test)
+  - Checkpoint saved: `/tmp/mxfp4_w4a4_e13m_inverse_rin/checkpoints/global_step_29/`
+  - **Comparison**:
+    - vs E13l (forward hypothesis): +16.15% (53.22% → 69.37%) - **HUGE IMPROVEMENT**
+    - vs E13j (uniform AQN): -3.94% (73.31% → 69.37%) - **Still underperforms**
+    - vs E13h (no AQN): -2.05% (71.42% → 69.37%)
+  - **Key Finding**: **Hypothesis B (high error → LESS noise) VALIDATED but NOT SUPERIOR**
+    - Inverse RIN avoids catastrophic failure of E13l
+    - But still underperforms uniform Global AQN by -3.94%
+    - Variable RIN adds complexity without benefit
+  - **Root Cause Analysis - Ceiling Violation**:
+    - E13j found σ=0.05 as optimal ceiling (E13k with σ=0.01 failed: 65.96%)
+    - E13m multipliers exceeded this ceiling:
+      - Layer 26: 1.21x × 0.05 = **0.0605** (21% over ceiling!)
+      - Layer 0: 1.17x × 0.05 = **0.0585** (17% over ceiling!)
+    - Exceeding proven ceiling may have hurt performance
+  - **Next Step**: E13n - Normalize multipliers to respect σ=0.05 ceiling
+
+- **🔬 E13n - Ceiling-Constrained Variable RIN: Testing (2026-01-17)**:
+  - Configuration: Ceiling-constrained Inverse Variable RIN
+    - Base sigma: σ_start=0.05, σ_end=0.0005 (same as E13j/E13m)
+    - Target: RMSNorm layers
+    - **KEY CHANGE**: Normalize ALL multipliers by max (1.21) to respect ceiling
+      - Layer multipliers divided by 1.21 (max from E13m)
+      - Preserves relative differences (~1.46x ratio between max/min)
+      - Ensures NO layer exceeds σ=0.05 ceiling
+    - Normalized multipliers:
+      - Layer 26 (best 28.61% error): 1.00x (at ceiling, σ_max=0.05)
+      - Layer 0: 0.97x
+      - Layer 15 (worst 42.65% error): 0.69x (much less noise)
+  - **Hypothesis**: Respecting the σ=0.05 ceiling will close -3.94% gap with E13j
+  - **Expected**: Variable RIN with proper ceiling constraint should match or beat uniform AQN
+  - Status: Preparing to launch
 
 **⚠️ Log Loss Issue (2026-01-16)**:
 - **Root cause**: 2-epoch experiments reused same IDs as 1-epoch experiments, overwriting `/tmp` directories
