@@ -53,6 +53,7 @@ python3 -m recipe.dapo.main_dapo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=1 \
+    actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.temperature=0.0 \
     actor_rollout_ref.rollout.top_p=1.0 \

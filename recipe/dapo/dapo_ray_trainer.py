@@ -98,30 +98,6 @@ class RayDAPOTrainer(RayPPOTrainer):
         # load checkpoint before doing anything
         self._load_checkpoint()
 
-        # FIX: Sync checkpoint weights to vLLM before validation in val_only mode
-        # Without this, vLLM still has base model weights after checkpoint loading
-        # We trigger a dummy generation to force the rollout_mode()/trainer_mode() cycle
-        if self.config.trainer.get("val_only", False):
-            from verl import DataProto
-            import torch
-            import numpy as np
-            # Create minimal dummy batch for weight sync - must be divisible by n_gpus
-            n_gpus = self.config.trainer.n_gpus_per_node
-            dummy_dict = {
-                'input_ids': np.array([[1, 2, 3]] * n_gpus),  # Replicate for each GPU
-                'attention_mask': np.array([[1, 1, 1]] * n_gpus),
-            }
-            dummy_batch = DataProto.from_single_dict(dummy_dict)
-            dummy_batch.meta_info = {
-                'eos_token_id': self.tokenizer.eos_token_id,
-                'pad_token_id': self.tokenizer.pad_token_id,
-                'recompute_log_prob': False,
-                'do_sample': False,
-            }
-            # Trigger weight sync by calling generate_sequences
-            _ = self.actor_rollout_wg.generate_sequences(dummy_batch)
-            print("Weight sync completed via dummy generation")
-
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
