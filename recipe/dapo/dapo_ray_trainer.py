@@ -18,6 +18,7 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import os
 import uuid
+from asyncio import get_event_loop
 from collections import defaultdict
 from copy import deepcopy
 from pprint import pprint
@@ -97,6 +98,13 @@ class RayDAPOTrainer(RayPPOTrainer):
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+
+        # FIX: Sync checkpoint weights to vLLM before validation in val_only mode
+        # Without this, vLLM still has base model weights after checkpoint loading
+        if self.config.trainer.get("val_only", False):
+            loop = get_event_loop()
+            loop.run_until_complete(self.actor_rollout_wg.rollout_mode())
+            loop.run_until_complete(self.actor_rollout_wg.trainer_mode())
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
