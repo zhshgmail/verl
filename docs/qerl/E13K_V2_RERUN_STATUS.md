@@ -7,10 +7,11 @@
 
 ---
 
-## Current Status (Last Update: 2026-01-17 10:27 server time)
+## Current Status (Last Update: 2026-01-17 10:37 server time)
 
-**Progress**: ⏳ **RUNNING** (Step 0 initialization)
-**Status**: Experiment started, waiting for initial validation
+**Progress**: ⏳ **RUNNING** (1/29 steps)
+**Step 0**: ✅ **VALIDATED** - 7.73%
+**Status**: Baseline validated, training in progress
 
 ---
 
@@ -34,9 +35,9 @@
 
 | Step | Result | Type | Notes |
 |------|--------|------|-------|
-| 0 | ⏳ Pending | Baseline | Waiting for initial validation |
-| 20 | ⏳ Pending | Validation | ~80 minutes from start |
-| 29 | ⏳ Pending | FINAL VALIDATION | ~3 hours from start |
+| 0 | 7.73% | Baseline | ✅ Confirmed (vs E13j_v2: 7.96%) |
+| 20 | ⏳ Pending | Validation | Expected ~11:50 |
+| 29 | ⏳ Pending | FINAL VALIDATION | Expected ~13:30 |
 
 ---
 
@@ -104,9 +105,10 @@ ssh root@90.90.102.18 "docker exec verl-r3-test bash -c 'grep \"step:29\" /tmp/m
 
 ---
 
-## Status: WAITING FOR INITIAL VALIDATION (Step 0)
+## Status: TRAINING IN PROGRESS
 
-**Started**: 10:26 (server time)
-**Expected step 0 completion**: 10:35 (~10 minutes)
-**Expected step 20 completion**: 11:50 (~85 minutes)
-**Expected step 29 completion**: 13:30 (~3 hours)
+**Step 0 completed**: 10:37 (server time) - 7.73% baseline ✅
+**Next checkpoint**: Step 20 @ ~11:50
+**Final validation**: Step 29 @ ~13:30 (CRITICAL)
+
+**DO NOT ASSUME SUCCESS UNTIL STEP 29 SCORE IS CONFIRMED IN LOG!**
