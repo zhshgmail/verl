@@ -7,12 +7,16 @@
 
 ---
 
-## Current Status (Last Update: 2026-01-18 02:36 server time)
+## Current Status (Last Update: 2026-01-18 02:52 server time)
 
-**Progress**: ❌ **FAILED - HUNG AFTER STEP 1**
-**Step 0**: ✅ **VALIDATED** - 7.73%
-**Step 1**: Training HUNG at 10:35 on 2026-01-17
-**Status**: **EXPERIMENT FAILED - 16 hours of 8-GPU time wasted**
+**ATTEMPT 2 - IN PROGRESS**:
+**Progress**: ⏳ **RUNNING** (1/29 steps)
+**Step 0**: ✅ **VALIDATED** - 8.34%
+**Status**: Baseline validated, training progressing
+
+**ATTEMPT 1 - FAILED**:
+**Step 0**: ✅ 7.73% (validated)
+**Step 1**: ❌ HUNG at 10:35 on 2026-01-17 (16 hours wasted)
 
 ---
 
@@ -136,13 +140,28 @@ In this case, it hung BEFORE any useful validation results, making it a complete
 
 ---
 
-## RETRY PLAN
+## ATTEMPT 2 - CURRENT RUN
 
-**Next Steps**:
-1. Kill hung process (PID 1103)
-2. Restart container (CRITICAL RULE #1) - clear any lingering state
-3. Check for zombie accumulation
-4. **RE-RUN E13k_v2 with fresh environment**
-5. Monitor MORE closely - check every 30 minutes for progress
+**Started**: 2026-01-18 02:39 (server time)
+**Actions Taken**:
+1. ✅ Killed hung process from attempt 1
+2. ✅ Restarted container
+3. ✅ Preserved failed logs → `/tmp/mxfp4_w4a4_e13k_v2_aqn_qerl_sigma_FAILED_ATTEMPT1/`
+4. ✅ Re-launched experiment with fresh environment
+5. ✅ Step 0 validated: 8.34% @ 02:52
+
+**Results So Far (Attempt 2)**:
+| Step | Result | Time | Notes |
+|------|--------|------|-------|
+| 0 | 8.34% | 02:52 | ✅ Confirmed (vs E13j_v2: 7.96%, attempt 1: 7.73%) |
+| 20 | ⏳ Pending | ~04:15 | Expected ~85 minutes from start |
+| 29 | ⏳ Pending | ~05:45 | **CRITICAL** - final validation |
+
+**Monitoring Schedule**:
+- ✅ Step 0: Validated @ 02:52
+- [ ] Check @ 03:30: Verify step 5-10 progress
+- [ ] Check @ 04:15: **CRITICAL** - Verify step 20 validation logged
+- [ ] Check @ 05:00: Verify step 25+ progress
+- [ ] Check @ 05:45: **CRITICAL** - Extract step 29 final score
 
 **DO NOT ASSUME SUCCESS UNTIL STEP 29 SCORE IS CONFIRMED IN LOG!**
