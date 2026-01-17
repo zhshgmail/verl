@@ -79,13 +79,35 @@ bash scripts/eval_checkpoint_verl.sh /tmp/mxfp4_w4a4_e13j_global_aqn/checkpoints
 - Base model: `/data/z00637938/hub/models--Qwen--Qwen2.5-1.5B-Instruct/snapshots/989aa7980e4cf806f80c7fef2b1adb7bc71aa306`
 - Test data: `/data/z00637938/gsm8k/test.parquet`
 
-## Next Steps
-1. Apply the fix to `dapo_ray_trainer.py`
-2. Commit and push to GitHub
-3. Pull on A100 server container
-4. Test val_only mode with E13j checkpoint
-5. Verify accuracy is now ~50-70% (not 8.49%)
-6. If working, evaluate all E13 checkpoints (E13j, E13k, E13l, E13m, E13n) with MXFP4
+## Update: val_only Mode Fix Status (2026-01-17)
+
+After extensive investigation, val_only mode has a **fundamental limitation** with Ray's async architecture:
+- Attempting to trigger weight sync via `generate_sequences()` causes nested event loop errors
+- `RuntimeError: this event loop is already running` when calling `loop.run_until_complete()` in Ray context
+- Multiple approaches attempted (direct method calls, dummy generation, update_actor) all hit async/event loop conflicts
+
+### Recommended Workaround
+**DO NOT use val_only mode for checkpoint evaluation.**
+
+Instead, use the alternative evaluation approach:
+1. Use `scripts/eval_checkpoint_verl_no_mxfp4.sh` (evaluates with BF16, no MXFP4)
+2. Modify it to enable MXFP4 hooks during evaluation
+3. Or use a regular training run with `test_freq=1` and `total_epochs=1` to trigger validation
+
+### Alternative: Use test_freq-Based Evaluation
+Create a minimal training config that:
+- Sets `test_freq=1` (validate every step)
+- Sets `total_epochs=1` with minimal training data
+- Loads checkpoint via `resume_from_path`
+- Runs for just 1 training step, which triggers validation with proper weight sync
+
+## Original Next Steps (val_only approach - NOT RECOMMENDED)
+1. ~~Apply the fix to `dapo_ray_trainer.py`~~ - Event loop conflicts prevent this approach
+2. ~~Commit and push to GitHub~~ - Fix incomplete due to Ray async limitations
+3. ~~Pull on A100 server container~~
+4. ~~Test val_only mode with E13j checkpoint~~
+5. ~~Verify accuracy is now ~50-70% (not 8.49%)~~
+6. Instead: Use test_freq-based evaluation or BF16 baseline testing
 
 ## Git Workflow
 ```bash
