@@ -2,6 +2,8 @@
 """
 Evaluate a LoRA checkpoint on GSM8K test set.
 This script loads a base model + LoRA adapter and evaluates on GSM8K.
+
+Supports MXFP4 fake quantization for consistent evaluation with W4A4 training.
 """
 
 import argparse
@@ -17,6 +19,7 @@ from peft import PeftModel
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from verl.utils.reward_score import default_compute_score
+from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
 
 def evaluate_gsm8k(model, tokenizer, data_path, n_samples=None, max_tokens=512):
@@ -90,6 +93,12 @@ def main():
                        help="Number of samples to evaluate (default: all)")
     parser.add_argument("--max_tokens", type=int, default=512,
                        help="Max tokens to generate per sample")
+    # MXFP4 fake quantization options
+    parser.add_argument("--mxfp4", action="store_true",
+                       help="Apply MXFP4 W4A4 fake quantization during evaluation")
+    parser.add_argument("--mxfp4_injection_point", type=str, default="both",
+                       choices=["weight", "input", "both"],
+                       help="MXFP4 injection point: weight (W4A16), input (W16A4), both (W4A4)")
     args = parser.parse_args()
 
     print(f"Loading base model from {args.base_model_path}...")
@@ -107,12 +116,33 @@ def main():
     print("Merging LoRA adapter with base model...")
     model = model.merge_and_unload()
 
+    # Apply MXFP4 fake quantization if requested
+    injector = None
+    if args.mxfp4:
+        print(f"Applying MXFP4 fake quantization (injection_point={args.mxfp4_injection_point})...")
+        config = HWErrorConfig(
+            enabled=True,
+            error_type="mxfp4",
+            injection_point=args.mxfp4_injection_point,
+            target_modules=["linear"],
+            exclude_modules=["lm_head", "embed_tokens"],
+            use_ste=False,  # No STE needed for inference-only
+        )
+        injector = HWErrorInjector(config)
+        num_hooks = injector.register_hooks(model, verbose=True)
+        print(f"Registered {num_hooks} MXFP4 quantization hooks")
+
     n_samples_str = f"{args.n_samples} samples" if args.n_samples else "all samples"
-    print(f"Evaluating on {n_samples_str}...")
+    quant_str = " (with MXFP4 W4A4)" if args.mxfp4 else " (BF16, no quantization)"
+    print(f"Evaluating on {n_samples_str}{quant_str}...")
     results = evaluate_gsm8k(model, tokenizer, args.data_path, args.n_samples, args.max_tokens)
 
+    # Clean up hooks
+    if injector:
+        injector.remove_hooks()
+
     print(f"\n{'='*50}")
-    print(f"Results:")
+    print(f"Results{quant_str}:")
     print(f"  Accuracy: {results['accuracy']*100:.2f}%")
     print(f"  Correct: {results['correct']}/{results['total']}")
     print(f"{'='*50}")

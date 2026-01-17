@@ -2,6 +2,8 @@
 """
 Evaluate a LoRA checkpoint on GSM8K test set using Ray for parallel inference across multiple GPUs.
 This is much faster than sequential evaluation.
+
+Supports MXFP4 fake quantization for consistent evaluation with W4A4 training.
 """
 
 import argparse
@@ -18,12 +20,14 @@ from peft import PeftModel
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from verl.utils.reward_score import default_compute_score
+from verl.utils.hw_error_injection import HWErrorConfig, HWErrorInjector
 
 
 @ray.remote(num_gpus=1)
 class ModelWorker:
-    def __init__(self, base_model_path, lora_adapter_path, worker_id):
+    def __init__(self, base_model_path, lora_adapter_path, worker_id, mxfp4=False, mxfp4_injection_point="both"):
         self.worker_id = worker_id
+        self.mxfp4 = mxfp4
         print(f"[Worker {worker_id}] Loading tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
 
@@ -42,7 +46,24 @@ class ModelWorker:
         self.model = model.merge_and_unload()
         self.model.eval()
 
-        print(f"[Worker {worker_id}] Ready!")
+        # Apply MXFP4 fake quantization if requested
+        self.injector = None
+        if mxfp4:
+            print(f"[Worker {worker_id}] Applying MXFP4 fake quantization (injection_point={mxfp4_injection_point})...")
+            config = HWErrorConfig(
+                enabled=True,
+                error_type="mxfp4",
+                injection_point=mxfp4_injection_point,
+                target_modules=["linear"],
+                exclude_modules=["lm_head", "embed_tokens"],
+                use_ste=False,
+            )
+            self.injector = HWErrorInjector(config)
+            num_hooks = self.injector.register_hooks(self.model, verbose=True)
+            print(f"[Worker {worker_id}] Registered {num_hooks} MXFP4 quantization hooks")
+
+        quant_str = " (MXFP4 W4A4)" if mxfp4 else " (BF16)"
+        print(f"[Worker {worker_id}] Ready!{quant_str}")
 
     def evaluate_sample(self, prompt, ground_truth, max_tokens=512):
         # Handle prompt format
@@ -85,6 +106,12 @@ def main():
     parser.add_argument("--n_samples", type=int, default=None)
     parser.add_argument("--max_tokens", type=int, default=512)
     parser.add_argument("--num_workers", type=int, default=8, help="Number of GPU workers")
+    # MXFP4 fake quantization options
+    parser.add_argument("--mxfp4", action="store_true",
+                       help="Apply MXFP4 W4A4 fake quantization during evaluation")
+    parser.add_argument("--mxfp4_injection_point", type=str, default="both",
+                       choices=["weight", "input", "both"],
+                       help="MXFP4 injection point: weight (W4A16), input (W16A4), both (W4A4)")
     args = parser.parse_args()
 
     # Initialize Ray
@@ -97,9 +124,10 @@ def main():
     if args.n_samples and args.n_samples > 0:
         df = df.head(args.n_samples)
 
-    print(f"Initializing {args.num_workers} GPU workers...")
+    quant_str = " (with MXFP4 W4A4)" if args.mxfp4 else " (BF16, no quantization)"
+    print(f"Initializing {args.num_workers} GPU workers{quant_str}...")
     workers = [
-        ModelWorker.remote(args.base_model_path, args.lora_adapter_path, i)
+        ModelWorker.remote(args.base_model_path, args.lora_adapter_path, i, args.mxfp4, args.mxfp4_injection_point)
         for i in range(args.num_workers)
     ]
 
@@ -141,7 +169,7 @@ def main():
     accuracy = correct / total if total > 0 else 0
 
     print(f"\n{'='*50}")
-    print(f"Results:")
+    print(f"Results{quant_str}:")
     print(f"  Accuracy: {accuracy*100:.2f}%")
     print(f"  Correct: {correct}/{total}")
     print(f"{'='*50}")
