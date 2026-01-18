@@ -78,29 +78,86 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 | **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
 | **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
 | **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
-| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | **W4A4 + STE fix** ✓ Baseline complete |
+| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** @ 29 | 1 | No | - | No | Yes | NVFP4 | **W4A4** | Baseline: 60.88%@20 → 70.89%@29 (+10.01%) |
+| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** @ 29 | 1 | No | - | No | Yes | MXFP4 | **W4A4** | Baseline: 60.73%@20 → 71.42%@29 (+10.69%) |
 | **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) - filter rejection |
 | **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
-| **E13j** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_1ep_73.31` | **73.31%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ✅ **SUCCESS** - σ=0.05→0.0005, bug fixes (+1.89% vs E13h) |
-| **E13k** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_1ep_65.96` | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ❌ σ=0.01→0.0001 WORSE than baseline (-5.46%), E13j's σ=0.05 is optimal |
-| **E13l** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_SRDD_1ep_53.22` | **53.22%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ FAILED SEVERELY (-20.09% vs E13j) - SRDD-guided variable RIN with high-error → MORE noise hypothesis failed |
-| **E13m** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_SRDD_1ep_69.37` | **69.37%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Inverse RIN (high→LESS noise) works but underperforms (-3.94% vs E13j) - exceeded σ ceiling |
-| **E13n** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_SRDD_1ep_69.07` | **69.07%** | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | ❌ Ceiling RIN (max=0.05) WORSE than E13m (-0.30%), **Variable RIN ABANDONED** |
+| **E13j_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_v2` | **65.96%** @ 29 | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ 70.20%@20 → 65.96%@29 (**-4.24%** DEGRADATION!) |
+| **E13k_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_v2` | **67.55%** @ 29 | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ 69.45%@20 → 67.55%@29 (**-1.90%** DEGRADATION!) |
+| **E13l_v2** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_v2` | ⏳ Running | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
+| **E13m_v2** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_v2` | ⏸️ Queued | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
+| **E13n_v2** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_v2` | ⏸️ Queued | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
+| **E14a_v2** | LoRA | `LoRA_MXFP4_W4A4_Zone_schedule_v2` | ⏸️ Queued | 1 | RIN | ✅ Zone | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
 
 **Note**: W4A4 baseline experiments completed with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
 - **E13h (MXFP4 W4A4)**: Step 0: 7.96% → Step 20: 60.73% → Step 29: **71.42%**
 - **MXFP4 slightly outperforms NVFP4** by +0.53% (71.42% vs 70.89%). Both processes hung during post-training cleanup but all validation data was captured.
 
-**W4A4 + AQN/RIN validation results (test_freq=20)**:
-- **E13j (Uniform Global AQN)**: Step 0: 8.19% → Step 20: **73.31%** (BEST, +1.89% vs E13h)
-- **E13k (QeRL σ=0.01)**: Step 0: 7.96% → Step 20: **65.96%** (too low, -5.46% vs E13j)
-- **E13l (Variable RIN, high→MORE)**: Step 0: 8.04% → Step 20: **53.22%** (catastrophic, -20.09% vs E13j)
-- **E13m (Inverse RIN, high→LESS)**: Step 0: 7.96% → Step 20: **69.37%** (underperforms, -3.94% vs E13j)
-- **E13n (Ceiling RIN)**: Step 0: 8.19% → Step 20: **69.07%** (WORSE than E13m, -4.24% vs E13j)
+---
 
-**⚠️ E13i RIN Experiments FAILED → ✅ E13j SUCCESS (2026-01-16)**:
+## W4A4 + AQN/RIN Experiments - v2 Re-Runs (Bug Fixed)
+
+**Bug Context**: Original E13j/k/l/m/n/E14a had TWO BUGS:
+1. **Skip validation bug**: Final step validation was intentionally skipped, only step 20 results reported
+2. **BF16 eval bug**: Separate eval scripts didn't apply MXFP4, giving inflated BF16 scores
+
+**v2 Re-runs Goal**: Get TRUE step 29 W4A4 validation results with bug fixes applied
+
+### Comprehensive W4A4 + AQN/RIN Results Table
+
+| Exp ID | Config | σ Start→End | Step 0 | Step 20 | Step 29 (FINAL) | Training Time | Status | Degradation? |
+|--------|--------|-------------|--------|---------|-----------------|---------------|--------|--------------|
+| **E13h** | Baseline (no AQN) | - | 7.96% | 60.73% | **71.42%** | ~2h 20min | ✅ Complete | ✅ Step 29 > Step 20 (+10.69%) |
+| **E13j_v2** | Global AQN | 0.05→0.0005 | 7.96% | **70.20%** | **65.96%** | ~2h 22min | ✅ Complete | ⚠️ **WORSE** Step 29 < Step 20 (-4.24%) |
+| **E13k_v2** | Global AQN (QeRL σ) | 0.01→0.0001 | 8.34% | **69.45%** | **67.55%** | ~2h 23min | ✅ Complete | ⚠️ **WORSE** Step 29 < Step 20 (-1.90%) |
+| **E13l_v2** | Variable RIN (high→MORE) | 0.05→0.0005 | - | - | - | ⏳ Running | 🏃 In Progress | - |
+| **E13m_v2** | Inverse RIN (high→LESS) | 0.05→0.0005 | - | - | - | - | ⏸️ Queued | - |
+| **E13n_v2** | Ceiling RIN | 0.05→0.0005 | - | - | - | - | ⏸️ Queued | - |
+| **E14a_v2** | Zone-based schedule | 0.05→0.0005 | - | - | - | - | ⏸️ Queued | - |
+
+**Legend**:
+- ✅ Step 29 > Step 20: Normal training progression (performance improves)
+- ⚠️ **WORSE** Step 29 < Step 20: **PERFORMANCE DEGRADATION** (overfitting or instability)
+
+### Critical Finding: AQN Causes Performance Degradation After Step 20
+
+**Both completed AQN experiments show step 29 WORSE than step 20:**
+
+| Metric | E13h (no AQN) | E13j_v2 (σ=0.05) | E13k_v2 (σ=0.01) |
+|--------|---------------|------------------|------------------|
+| **Step 20** | 60.73% | **70.20%** | **69.45%** |
+| **Step 29** | **71.42%** | **65.96%** | **67.55%** |
+| **Change** | ✅ **+10.69%** | ⚠️ **-4.24%** | ⚠️ **-1.90%** |
+| **vs Baseline @ 29** | - | **-5.46%** | **-3.87%** |
+
+**Key Observations**:
+1. **Baseline (E13h) improves +10.69% from step 20 to step 29** - normal training
+2. **E13j_v2 DEGRADES -4.24%** from step 20 to step 29 with AQN
+3. **E13k_v2 DEGRADES -1.90%** from step 20 to step 29 with lower sigma
+4. **Lower sigma (0.01) reduces degradation** but doesn't eliminate it
+5. **Both AQN experiments are WORSE than no-AQN baseline at step 29**
+
+**Hypotheses for Degradation**:
+- **Overfitting**: Model overfits to training data after step 20
+- **AQN noise accumulation**: Accumulated noise causes instability in later stages
+- **Sigma decay effects**: As sigma decays to near-zero, model behavior becomes unpredictable
+- **Validation variance**: Different trajectory sampling at different checkpoints
+
+**Recommendation**: Need to investigate WHY AQN causes degradation before continuing with remaining experiments (E13l/m/n/E14a).
+
+**⚠️ OBSOLETE DATA BELOW - ORIGINAL E13j/k/l/m/n HAD BUGS**:
+
+The following notes are from the ORIGINAL buggy runs. Only step 20 results are shown because step 29 validation was skipped. These results are INVALID and superseded by v2 re-runs above.
+
+~~**W4A4 + AQN/RIN validation results (test_freq=20)** [INVALID - BUGS]:~~
+- ~~**E13j (Uniform Global AQN)**: Step 0: 8.19% → Step 20: **73.31%** (INVALID - BF16 eval, not W4A4!)~~
+- ~~**E13k (QeRL σ=0.01)**: Step 0: 7.96% → Step 20: **65.96%** (INVALID - only step 20, step 29 skipped)~~
+- ~~**E13l (Variable RIN, high→MORE)**: Step 0: 8.04% → Step 20: **53.22%** (INVALID - only step 20, step 29 skipped)~~
+- ~~**E13m (Inverse RIN, high→LESS)**: Step 0: 7.96% → Step 20: **69.37%** (INVALID - only step 20, step 29 skipped)~~
+- ~~**E13n (Ceiling RIN)**: Step 0: 8.19% → Step 20: **69.07%** (INVALID - only step 20, step 29 skipped)~~
+
+**⚠️ E13i RIN Experiments FAILED → ~~E13j SUCCESS~~ → E13j_v2 RE-RUN (2026-01-16 ~ 2026-01-17)**:
 - **E13i-baseline**: Global AQN (σ=0.05→0.0005) failed at step 3 - filter rejection loop
 - **E13i-v2**: Lower sigma (σ=0.01→0.0001) failed at step 4 - filter rejection loop
 - **Root Cause Identified**: TWO implementation bugs (see `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md`):
@@ -110,27 +167,14 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
   2. **SECONDARY BUG**: E13i scripts target Linear layers, QeRL targets RMSNorm layers
      - Linear: Core weight matrices, much larger impact
      - RMSNorm: Normalization layers, localized effect
-- **✅ E13j - Bug Fixes Applied & Training Successful!**:
-  - Configuration: Global AQN (σ_start=0.05, σ_end=0.0005), disable filter_groups, target RMSNorm
-  - All 28 training steps completed successfully (no filter rejection!)
-  - Step 0: 8.04% → Step 20: **68.84%** → Step 29: **73.31%** (967/1319 on GSM8K test)
-  - Checkpoint saved: `/tmp/mxfp4_w4a4_e13j_global_aqn/checkpoints/global_step_29/`
-  - **Result**: +1.89% improvement over E13h baseline (71.42%) → AQN working as expected!
-  - **Context**: QeRL proves W4A4 + AQN works! Bug fixes validated.
+- ~~**E13j - Bug Fixes Applied & Training Successful!** [INVALID - BUGS]~~:
+  - ⚠️ **BUG**: Step 29 validation was SKIPPED, only step 20 (68.84%) reported
+  - ⚠️ **BUG**: Separate eval gave **73.31%** but this was BF16, NOT W4A4!
+  - ❌ **SUPERSEDED by E13j_v2**: TRUE step 29 W4A4 result is **65.96%**, not 73.31%
 
-- **❌ E13k - QeRL Sigma Test: Lower Sigma Performs Worse**:
-  - Configuration: Global AQN (σ_start=0.01, σ_end=0.0001), same as QeRL training scripts
-  - All 29 training steps completed successfully
-  - Step 0: ~13% → Step 20: 57.52% → Step 29: **65.96%** (870/1319 on GSM8K test)
-  - Checkpoint saved: `/tmp/mxfp4_w4a4_e13k_aqn_qerl_sigma/checkpoints/global_step_29/`
-  - **Result**: -5.46% WORSE than baseline (71.42%), -7.35% worse than E13j!
-  - **Key Finding**: Higher sigma (0.05) is significantly better than lower sigma (0.01)
-    - QeRL code defaults: σ_start=0.05, σ_end=0.0005 (configs.py)
-    - QeRL training scripts: σ_start=0.01, σ_end=0.0001 (dapo_qwen*.sh)
-    - **For our 1.5B model + GSM8K: σ=0.05 is optimal (E13j: 73.31%)**
-    - QeRL's σ=0.01 may be optimized for larger models or different datasets
-  - **Conclusion**: E13j (σ=0.05) is the best static AQN configuration
-    - Future SRDD-guided RIN must beat 73.31% to prove dynamic scheduling benefit
+- ~~**E13k - QeRL Sigma Test: Lower Sigma Performs Worse** [INVALID - BUGS]~~:
+  - ⚠️ **BUG**: Step 29 validation was SKIPPED, only step 20 (65.96%) reported
+  - ❌ **SUPERSEDED by E13k_v2**: TRUE step 29 W4A4 result is **67.55%**
 
 - **❌ E13l - Variable RIN with SRDD: SEVERE REGRESSION (2026-01-17)**:
   - Configuration: Variable RIN with SRDD-guided layer-specific multipliers
