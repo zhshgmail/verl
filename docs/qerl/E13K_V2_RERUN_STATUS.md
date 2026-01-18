@@ -7,12 +7,14 @@
 
 ---
 
-## Current Status (Last Update: 2026-01-18 02:52 server time)
+## Current Status (Last Update: 2026-01-18 05:00 server time)
 
-**ATTEMPT 2 - IN PROGRESS**:
-**Progress**: ⏳ **RUNNING** (1/29 steps)
-**Step 0**: ✅ **VALIDATED** - 8.34%
-**Status**: Baseline validated, training progressing
+**ATTEMPT 2 - ✅ COMPLETE**:
+**Progress**: ✅ **SUCCESS** (29/29 steps)
+**Step 0**: 8.34% (baseline)
+**Step 20**: **69.45%**
+**Step 29**: **67.55%** ⚠️ LOWER than step 20 (-1.90%)
+**Status**: **EXPERIMENT COMPLETE** - checkpoint saved
 
 **ATTEMPT 1 - FAILED**:
 **Step 0**: ✅ 7.73% (validated)
@@ -28,21 +30,46 @@
 
 **Purpose**: Test QeRL's actual sigma values from their training scripts (dapo_qwen*.sh). Lower sigma (0.01 vs 0.05) may provide more stable training with less aggressive noise.
 
-**Expected Behavior**:
-- Original E13h (no AQN): 71.42%
-- Original E13j (sigma=0.05): step 20: 68.84%, step 29: SKIPPED
-- E13j_v2 (sigma=0.05): step 20: 70.20%, step 29: 65.96%
-- E13k_v2 (sigma=0.01): TBD
-
 ---
 
-## Results So Far
+## FINAL RESULTS - ATTEMPT 2
 
 | Step | Result | Type | Notes |
 |------|--------|------|-------|
-| 0 | 7.73% | Baseline | ✅ Confirmed (vs E13j_v2: 7.96%) |
-| 20 | ⏳ Pending | Validation | Expected ~11:50 |
-| 29 | ⏳ Pending | FINAL VALIDATION | Expected ~13:30 |
+| 0 | 8.34% | Baseline | ✅ Confirmed |
+| 20 | **69.45%** | Validation | ✅ Logged @ ~04:15 |
+| 29 | **67.55%** | **FINAL** | ✅ **COMPLETE** @ ~04:58 ⚠️ LOWER than step 20! |
+
+**Performance Degradation**: Step 29 is **1.90% LOWER** than step 20 (67.55% vs 69.45%)
+
+---
+
+## CRITICAL FINDING: Consistent Step 29 < Step 20 Pattern
+
+**Both E13j_v2 and E13k_v2 show performance DEGRADATION from step 20 to step 29:**
+
+| Experiment | Sigma | Step 20 | Step 29 | Degradation |
+|------------|-------|---------|---------|-------------|
+| E13j_v2 | 0.05 | 70.20% | 65.96% | **-4.24%** |
+| E13k_v2 | 0.01 | 69.45% | 67.55% | **-1.90%** |
+
+**Key Observations**:
+1. **Lower sigma (0.01) reduces degradation**: E13k_v2 degradation (-1.90%) is less severe than E13j_v2 (-4.24%)
+2. **But degradation still occurs**: Even with lower sigma, step 29 < step 20
+3. **Contradicts E13g/E13h pattern**: Previous experiments showed ~10% improvement from step 20 to step 29
+
+**Possible Explanations**:
+1. **Overfitting**: Model overfits to training data after step 20
+2. **AQN noise accumulation**: Global AQN noise causes instability in later training
+3. **Sigma decay effects**: As sigma decays, model behavior changes unpredictably
+4. **Validation variance**: Different trajectory sampling at different steps
+
+**Comparison with Baseline**:
+- Original E13h (no AQN): 71.42% @ step 29
+- E13j_v2 (sigma=0.05): 65.96% @ step 29 → **-5.46% vs baseline**
+- E13k_v2 (sigma=0.01): 67.55% @ step 29 → **-3.87% vs baseline**
+
+**Conclusion**: Lower sigma (0.01) performs better than higher sigma (0.05), but BOTH are WORSE than no-AQN baseline at step 29!
 
 ---
 
