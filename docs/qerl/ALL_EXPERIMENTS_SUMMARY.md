@@ -58,36 +58,36 @@ See `RIN_EXPERIMENT_PLAN_SYSTEMATIC.md` for full details.
 
 ## Complete Experiment Table
 
-| Exp ID | Type | TensorBoard Name | Score | Epochs | AQN/RIN | Epoch-Aware | RIN Mode | LoRA | dtype | Quant Mode | Notes |
-|--------|------|------------------|-------|--------|---------|-------------|----------|------|-------|-----------|-------|
-| **Baseline** | HW | `HW_BF16_GRPO_2ep_76.88_BASELINE` | **76.88%** | 2 | No | - | No | No | BF16 | - | GRPO, 2 epochs |
-| **E5** | HW | `HW_5pct_noise_only_68.92` | 68.92% | 2 | No | - | No | No | BF16 | - | 5% noise, no AQN |
-| **E5b** | HW | `HW_5pct_AQN_epoch-aware_sigma0.01_70.58` | 70.58% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Epoch-aware AQN, σ=0.05→0.0005 |
-| **E5c** | HW | `HW_5pct_AQN_lower_sigma0.005_70.27` | 70.27% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Lower sigma, σ=0.01→0.00001 |
-| **E9a** | HW | `HW_5pct_RIN-targeted_sigma0.01_70.58` | 70.58% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | RIN on specific layers only |
-| **E9a-high-σ** | HW | `HW_5pct_RIN-targeted_high-sigma0.05_70.81` | 70.81% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | High σ=0.05 start |
-| **E9b** | HW | `HW_5pct_RIN-variable_sigma0.01_71.19_BEST` | **71.19%** | 2 | RIN | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
-| **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | **74.75%** | 1 | No | - | No | No | BF16 | - | DAPO Full FT baseline |
-| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | 73.77% | 1 | No | - | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
-| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | 72.10% | 1 | No | - | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | **71.27%** | 1 | No | - | No | Yes | BF16 | - | BF16 LoRA baseline (7B model log found, 1.5B needs verification) |
-| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | 68.23% | 1 | No | - | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
-| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **70.89%** @ 29 | 1 | No | - | No | Yes | NVFP4 | **W4A4** | Baseline: 60.88%@20 → 70.89%@29 (+10.01%) |
-| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **71.42%** @ 29 | 1 | No | - | No | Yes | MXFP4 | **W4A4** | Baseline: 60.73%@20 → 71.42%@29 (+10.69%) |
-| **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) - filter rejection |
-| **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) - filter rejection |
-| **E13j_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_v2` | **65.96%** @ 29 | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ 70.20%@20 → 65.96%@29 (**-4.24%** DEGRADATION!) |
-| **E13k_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_v2` | **67.55%** @ 29 | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ 69.45%@20 → 67.55%@29 (**-1.90%** DEGRADATION!) |
-| **E13l_v2** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_v2` | ⏳ Running | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
-| **E13m_v2** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_v2` | ⏸️ Queued | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
-| **E13n_v2** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_v2` | ⏸️ Queued | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
-| **E14a_v2** | LoRA | `LoRA_MXFP4_W4A4_Zone_schedule_v2` | ⏸️ Queued | 1 | RIN | ✅ Zone | Yes | Yes | MXFP4 | **W4A4** | Step 29 pending |
+| Exp ID | Type | TensorBoard Name | Step 20 | Step 29/Final | Epochs | AQN/RIN | Epoch-Aware | RIN Mode | LoRA | dtype | Quant Mode | Notes |
+|--------|------|------------------|---------|---------------|--------|---------|-------------|----------|------|-------|-----------|-------|
+| **Baseline** | HW | `HW_BF16_GRPO_2ep_76.88_BASELINE` | - | **76.88%** | 2 | No | - | No | No | BF16 | - | GRPO, 2 epochs |
+| **E5** | HW | `HW_5pct_noise_only_68.92` | - | 68.92% | 2 | No | - | No | No | BF16 | - | 5% noise, no AQN |
+| **E5b** | HW | `HW_5pct_AQN_epoch-aware_sigma0.01_70.58` | - | 70.58% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Epoch-aware AQN, σ=0.05→0.0005 |
+| **E5c** | HW | `HW_5pct_AQN_lower_sigma0.005_70.27` | - | 70.27% | 2 | Yes | ✅ Yes | No | No | BF16 | - | Lower sigma, σ=0.01→0.00001 |
+| **E9a** | HW | `HW_5pct_RIN-targeted_sigma0.01_70.58` | - | 70.58% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | RIN on specific layers only |
+| **E9a-high-σ** | HW | `HW_5pct_RIN-targeted_high-sigma0.05_70.81` | - | 70.81% | 2 | RIN | ✅ Yes | targeted | No | BF16 | - | High σ=0.05 start |
+| **E9b** | HW | `HW_5pct_RIN-variable_sigma0.01_71.19_BEST` | - | **71.19%** | 2 | RIN | ✅ Yes | variable | No | BF16 | - | **BEST HW** - per-layer multipliers |
+| **E8a** | Quant | `Q_BF16_DAPO_fullFT_1ep_74.75` | - | **74.75%** | 1 | No | - | No | No | BF16 | - | DAPO Full FT baseline |
+| **E3a** | Quant | `Q_MXFP4_DAPO_fullFT_1ep_73.77` | - | 73.77% | 1 | No | - | No | No | MXFP4 | W4A16 | ⚠️ STE bug - needs rerun |
+| **E3b** | Quant | `Q_MXFP4_DAPO_fullFT_AQN_1ep_74.37` | - | 74.37% | 1 | Yes | ❌ No | No | No | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E4a** | Quant | `Q_NVFP4_DAPO_fullFT_72.10` | - | 72.10% | 1 | No | - | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E4b** | Quant | `Q_NVFP4_DAPO_fullFT_AQN_73.24` | - | 73.24% | 1 | Yes | ❌ No | No | No | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified (2-ep overwrote) |
+| **E7a** | LoRA | `LoRA_BF16_DAPO_1ep_71.27` | - | **71.27%** | 1 | No | - | No | Yes | BF16 | - | BF16 LoRA baseline |
+| **E5a-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_68.23` | - | 68.23% | 1 | No | - | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified |
+| **E5b-LoRA** | LoRA | `LoRA_NVFP4_DAPO_1ep_AQN_70.58` | - | 70.58% | 1 | Yes | ❌ No | No | Yes | NVFP4 | W4A16 | ⚠️ **Log lost** - unverified |
+| **E6a** | LoRA | `LoRA_MXFP4_DAPO_1ep_65.88` | - | 65.88% | 1 | No | - | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified |
+| **E6b** | LoRA | `LoRA_MXFP4_DAPO_1ep_AQN_67.48` | - | 67.48% | 1 | Yes | ❌ No | No | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified |
+| **E12** | LoRA | `LoRA_MXFP4_DAPO_1ep_RIN-high_72.48` | - | 72.48% | 1 | RIN | ✅ Yes | variable | Yes | MXFP4 | W4A16 | ⚠️ **Log lost** - unverified |
+| **E13g** | LoRA | `LoRA_NVFP4_W4A4_STE_1ep_70.89` | **60.88%** | **70.89%** | 1 | No | - | No | Yes | NVFP4 | **W4A4** | ✅ +10.01% improvement @20→@29 |
+| **E13h** | LoRA | `LoRA_MXFP4_W4A4_STE_1ep_71.42` | **60.73%** | **71.42%** | 1 | No | - | No | Yes | MXFP4 | **W4A4** | ✅ +10.69% improvement @20→@29 |
+| **E13i-baseline** | LoRA | `LoRA_MXFP4_W4A4_RIN_global_FAILED` | - | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 3 (σ=0.05) |
+| **E13i-v2** | LoRA | `LoRA_MXFP4_W4A4_RIN_lower_sigma_FAILED` | - | ❌ FAILED | - | RIN | ✅ Global | No | Yes | MXFP4 | **W4A4** | Failed step 4 (σ=0.01) |
+| **E13j_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_global_v2` | **70.20%** | **65.96%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ **-4.24%** DEGRADATION @20→@29 |
+| **E13k_v2** | LoRA | `LoRA_MXFP4_W4A4_AQN_QeRL_sigma_v2` | **69.45%** | **67.55%** | 1 | AQN | ✅ Global | No | Yes | MXFP4 | **W4A4** | ⚠️ **-1.90%** DEGRADATION @20→@29 |
+| **E13l_v2** | LoRA | `LoRA_MXFP4_W4A4_Variable_RIN_v2` | ⏳ Pending | ⏳ Pending | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Running - step 29 pending |
+| **E13m_v2** | LoRA | `LoRA_MXFP4_W4A4_Inverse_RIN_v2` | - | - | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Queued |
+| **E13n_v2** | LoRA | `LoRA_MXFP4_W4A4_Ceiling_RIN_v2` | - | - | 1 | RIN | ✅ Variable | Yes | Yes | MXFP4 | **W4A4** | Queued |
+| **E14a_v2** | LoRA | `LoRA_MXFP4_W4A4_Zone_schedule_v2` | - | - | 1 | RIN | ✅ Zone | Yes | Yes | MXFP4 | **W4A4** | Queued |
 
 **Note**: W4A4 baseline experiments completed with final validation results:
 - **E13g (NVFP4 W4A4)**: Step 0: 8.11% → Step 20: 60.88% → Step 29: **70.89%**
