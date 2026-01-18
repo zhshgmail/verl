@@ -140,6 +140,22 @@ class vLLMAsyncRollout(BaseRollout):
         # Convert epoch_ranges from list of lists to list of tuples
         epoch_ranges = [tuple(r) for r in epoch_ranges_raw] if epoch_ranges_raw else []
 
+        # AQN Fix: Cache for clean RMSNorm weights to restore before applying fresh noise each step.
+        #
+        # Problem: With LoRA, base weights are frozen so verl only syncs LoRA weights after step 0.
+        # But AQN modifies RMSNorm weights in-place (module.weight.add_(noise)), and these changes
+        # persist because base weights are never re-synced. This causes noise from step 0 to stay
+        # permanently, breaking the sigma decay schedule.
+        #
+        # Solution: Cache clean RMSNorm weights at step 0, restore before applying fresh noise.
+        # Memory cost is minimal (~0.2-1MB for RMSNorm weights only).
+        #
+        # Future optimization (Option 2): Use forward hooks instead of weight modification.
+        # This would add noise to outputs during forward pass without polluting weights,
+        # similar to hw_error_injection.py approach. This eliminates the need for caching entirely.
+        self._aqn_clean_weights_cache = {}  # {module_name: clean_weight_tensor}
+        self._aqn_weights_cached = False
+
         self.noise_injection_config = {
             'enabled': getattr(config, 'noise_injection_enabled', False),
             'sigma_trend': list(getattr(config, 'noise_injection_sigma_trend', [])),
@@ -214,6 +230,129 @@ class vLLMAsyncRollout(BaseRollout):
                 zone_config['middle_layers'] = [int(x) for x in zone_config['middle_layers']]
 
         return config
+
+    def _aqn_cache_clean_weights(self, model):
+        """Cache clean RMSNorm weights before applying AQN noise.
+
+        This is called once during the first full weight sync (step 0).
+        The cached weights are used to restore clean state before applying
+        fresh noise in subsequent steps (when only LoRA weights are synced).
+
+        Memory cost: ~0.2-1MB for typical models (RMSNorm weights only).
+        """
+        if self._aqn_weights_cached:
+            return  # Already cached
+
+        layer_types = self.noise_injection_config.get('layer_types') or ['rmsnorm']
+        cached_count = 0
+
+        for name, module in model.named_modules():
+            # Check if this is a target layer type for AQN
+            class_name = module.__class__.__name__.lower()
+            is_target = False
+
+            if 'rmsnorm' in layer_types and 'rmsnorm' in class_name:
+                is_target = True
+            if 'linear' in layer_types and 'linear' in class_name.lower():
+                # Only cache Linear if explicitly targeted (unusual for AQN)
+                is_target = True
+
+            if is_target and hasattr(module, 'weight') and isinstance(module.weight, torch.Tensor):
+                # Clone and store on same device (no CPU transfer to avoid latency)
+                self._aqn_clean_weights_cache[name] = module.weight.data.clone()
+                cached_count += 1
+
+        self._aqn_weights_cached = True
+        cache_size_bytes = sum(t.numel() * t.element_size() for t in self._aqn_clean_weights_cache.values())
+        print(f"[AQN] Cached {cached_count} clean layer weights ({cache_size_bytes / 1024:.1f} KB) for restore-before-noise")
+
+    def _aqn_restore_clean_weights(self, model):
+        """Restore RMSNorm weights to clean state before applying fresh noise.
+
+        This ensures each step gets fresh noise at the current sigma level,
+        rather than accumulating noise from previous steps.
+        """
+        if not self._aqn_weights_cached:
+            logger.warning("[AQN] Cannot restore - no clean weights cached")
+            return
+
+        restored_count = 0
+        for name, module in model.named_modules():
+            if name in self._aqn_clean_weights_cache:
+                module.weight.data.copy_(self._aqn_clean_weights_cache[name])
+                restored_count += 1
+
+        if restored_count > 0:
+            current_step = self.noise_injection_config.get('current_step', 0)
+            print(f"[AQN-Fix] Restored {restored_count} layers to clean weights (step {current_step}, LoRA-only sync)")
+
+    def _aqn_apply_noise(self, model):
+        """Apply AQN noise to model with current sigma from decay schedule.
+
+        This is the common noise application logic used by both:
+        - Full weight sync path (after caching clean weights)
+        - LoRA-only sync path (after restoring clean weights)
+        """
+        if not self.noise_injection_config.get('enabled', False):
+            return
+
+        is_validation = self.noise_injection_config.get('is_validation', False)
+        if is_validation:
+            print(f"[AQN] Skipping noise injection during validation (QeRL behavior)")
+            return
+
+        current_step = self.noise_injection_config.get('current_step', 0)
+        total_steps = self.noise_injection_config.get('total_steps', 1000)
+        epoch_aware = self.noise_injection_config.get('epoch_aware', False)
+
+        if epoch_aware:
+            # Epoch-aware mode: sigma decays within each epoch
+            from verl.utils.noise_injection import get_sigma_by_step_epoch_aware
+            epoch_ranges = self.noise_injection_config.get('epoch_ranges', [])
+            stages_per_epoch = self.noise_injection_config.get('stages_per_epoch', 5)
+            steps_per_epoch = self.noise_injection_config.get('steps_per_epoch', 1)
+
+            if epoch_ranges and steps_per_epoch > 0:
+                sigma_id, sigma = get_sigma_by_step_epoch_aware(
+                    current_step, steps_per_epoch, epoch_ranges, stages_per_epoch
+                )
+                current_epoch = current_step // steps_per_epoch
+                step_in_epoch = current_step % steps_per_epoch
+                print(f"[AQN-EpochAware] step={current_step} (epoch {current_epoch+1}, step {step_in_epoch}), "
+                      f"sigma_id={sigma_id}, sigma={sigma:.6f}")
+
+                if sigma > 0:
+                    from verl.utils.noise_injection import generate_expert_gaussian_noise
+                    generate_expert_gaussian_noise(
+                        model=model,
+                        step=0,
+                        total_step=1,
+                        sigma_trend=[sigma],
+                        target_modules=self.noise_injection_config.get('target_modules'),
+                        exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                        layer_types=self.noise_injection_config.get('layer_types'),
+                        layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
+                        verbose=True
+                    )
+        else:
+            # Original mode: sigma decays globally across all steps
+            from verl.utils.noise_injection import generate_expert_gaussian_noise, get_sigma_by_step
+            sigma_trend = self.noise_injection_config.get('sigma_trend', [])
+
+            if sigma_trend and total_steps > 0:
+                sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
+                print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
+                generate_expert_gaussian_noise(
+                    model=model,
+                    step=current_step,
+                    total_step=total_steps,
+                    sigma_trend=sigma_trend,
+                    target_modules=self.noise_injection_config.get('target_modules'),
+                    exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
+                    layer_types=self.noise_injection_config.get('layer_types'),
+                    layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
+                    verbose=True
+                )
 
     def _init_zeromq(self) -> str:
         tensor_parallel_size = self.config.tensor_model_parallel_size
@@ -332,6 +471,14 @@ class vLLMAsyncRollout(BaseRollout):
             )
             self.inference_engine.worker.add_lora(lora_request)
             logger.info(f"vLLM load weights, loaded_params: {len(weights)}")
+
+            # AQN Fix: For LoRA-only sync, restore clean weights and apply fresh noise.
+            # Without this fix, noise from step 0 would persist permanently because
+            # base weights are never re-synced in LoRA mode.
+            if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
+                model = self.inference_engine.worker.model_runner.model
+                self._aqn_restore_clean_weights(model)
+                self._aqn_apply_noise(model)
         else:
             from verl.utils.vllm.patch import patch_vllm_moe_model_weight_loader
 
@@ -350,61 +497,15 @@ class vLLMAsyncRollout(BaseRollout):
                 logger.info("Loading standard weights (non-FP8, async)")
                 model.load_weights(weights)
 
-            # NOISE INJECTION (AQN): Apply to RMSNorm layers after weight sync
+            # AQN (Adaptive Quantization Noise): Cache clean weights, then apply noise.
+            # For full weight sync (step 0 or non-LoRA), we cache clean weights first,
+            # then apply noise. This cache is used by LoRA-only syncs to restore clean
+            # weights before applying fresh noise at the current sigma level.
             if hasattr(self, 'noise_injection_config') and self.noise_injection_config.get('enabled', False):
                 current_step = self.noise_injection_config.get('current_step', 0)
-                total_steps = self.noise_injection_config.get('total_steps', 1000)
-                epoch_aware = self.noise_injection_config.get('epoch_aware', False)
-
-                if epoch_aware:
-                    # Epoch-aware mode (Option C): sigma decays within each epoch
-                    from verl.utils.noise_injection import get_sigma_by_step_epoch_aware
-                    epoch_ranges = self.noise_injection_config.get('epoch_ranges', [])
-                    stages_per_epoch = self.noise_injection_config.get('stages_per_epoch', 5)
-                    steps_per_epoch = self.noise_injection_config.get('steps_per_epoch', 1)
-
-                    if epoch_ranges and steps_per_epoch > 0:
-                        sigma_id, sigma = get_sigma_by_step_epoch_aware(
-                            current_step, steps_per_epoch, epoch_ranges, stages_per_epoch
-                        )
-                        current_epoch = current_step // steps_per_epoch
-                        step_in_epoch = current_step % steps_per_epoch
-                        print(f"[AQN-EpochAware] step={current_step} (epoch {current_epoch+1}, step {step_in_epoch}), "
-                              f"sigma_id={sigma_id}, sigma={sigma:.6f}")
-
-                        if sigma > 0:
-                            from verl.utils.noise_injection import generate_expert_gaussian_noise
-                            # Create a dummy sigma_trend for the generate function (it uses sigma directly)
-                            generate_expert_gaussian_noise(
-                                model=model,
-                                step=0,  # Not used when sigma_trend has single value
-                                total_step=1,
-                                sigma_trend=[sigma],  # Single value = use this sigma directly
-                                target_modules=self.noise_injection_config.get('target_modules'),
-                                exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
-                                layer_types=self.noise_injection_config.get('layer_types'),
-                                layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
-                                verbose=True
-                            )
-                else:
-                    # Original mode: sigma decays globally across all steps
-                    from verl.utils.noise_injection import generate_expert_gaussian_noise, get_sigma_by_step
-                    sigma_trend = self.noise_injection_config.get('sigma_trend', [])
-
-                    if sigma_trend and total_steps > 0:
-                        sigma_id, sigma = get_sigma_by_step(current_step, total_steps, sigma_trend)
-                        print(f"[AQN] Applying noise injection: step={current_step}/{total_steps}, sigma_id={sigma_id}, sigma={sigma:.6f}")
-                        generate_expert_gaussian_noise(
-                            model=model,
-                            step=current_step,
-                            total_step=total_steps,
-                            sigma_trend=sigma_trend,
-                            target_modules=self.noise_injection_config.get('target_modules'),
-                            exclude_patterns=self.noise_injection_config.get('exclude_patterns'),
-                            layer_types=self.noise_injection_config.get('layer_types'),
-                            layer_sigma_config=self.noise_injection_config.get('layer_sigma_config'),
-                            verbose=True
-                        )
+                print(f"[AQN-Fix] Full weight sync path (step {current_step}) - caching clean weights")
+                self._aqn_cache_clean_weights(model)
+                self._aqn_apply_noise(model)
 
             # HW ERROR INJECTION: Register hooks on model for simulating GPU/NPU errors
             # Supports deadzone injection for MXFP4 simulation (SRDD-guided AQN)
@@ -444,11 +545,18 @@ class vLLMAsyncRollout(BaseRollout):
                 num_hooks = self.hw_error_injector.register_hooks(model, verbose=True)
                 print(f"[HW Error] Registered {num_hooks} hooks on vLLM model after weight sync: {hw_config}")
 
-    async def update_noise_injection_step(self, current_step: int):
-        """Update current training step for noise injection schedule."""
+    async def update_noise_injection_step(self, current_step: int, is_validation: bool = False):
+        """Update current training step for noise injection schedule.
+
+        Args:
+            current_step: Current training step
+            is_validation: If True, noise injection will be skipped during next weight sync
+                          (QeRL only applies noise during training, not validation)
+        """
         if hasattr(self, 'noise_injection_config'):
             self.noise_injection_config['current_step'] = current_step
-            logger.debug(f"Updated noise injection step to {current_step}")
+            self.noise_injection_config['is_validation'] = is_validation
+            logger.debug(f"Updated noise injection step to {current_step}, is_validation={is_validation}")
 
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         """Batch generate sequences in sync mode."""
